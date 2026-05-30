@@ -39,3 +39,28 @@ uv run dbt parse --profiles-dir tests/ci_profiles --no-version-check --no-partia
 
 For integration behavior, use the opt-in integration tests and keep Snowflake
 access through approved company tooling.
+
+Integration tests are intentionally skipped unless
+`DBT_SNOWFLAKE_ICEBERG_SYNC_RUN_INTEGRATION=1` is set. Supply BigQuery, GCS, and
+Snowflake fixture/resource settings through environment variables only; do not
+commit company project IDs, account names, schemas, stages, fixture table names,
+or credential values. See `README.md` and `tests/integration/README.md` for the
+complete environment variable list.
+
+The integration suite should cover more than a happy path. Keep coverage for:
+
+- non-partitioned BigQuery extract
+- time-partitioned extract through partition decorators
+- integer range-partitioned extract through partition decorators
+- query execution export through a BigQuery staging table
+- incremental `delete+copy`, including a repeated incremental run
+
+Run the opt-in suite with:
+
+```bash
+uv run pytest -m integration tests/integration
+```
+
+The tests may create temporary Snowflake procedures, views, Iceberg tables, run
+logs, BigQuery extract jobs, and GCS files under generated prefixes. They should
+not create or delete caller-provided BigQuery fixture tables.
