@@ -26,9 +26,8 @@ mise install --locked
 - Run workflow linting with ghalint, pinact, and disable-checkout-persist-credentials.
 - Use Securefix for automated workflow security fixes when configured.
 - Do not provide hidden defaults for required repository variables in workflows; fail clearly when required configuration is missing.
-- Keep live integration CI manual and guarded by the `integration-tests` GitHub
-  Environment. That environment must require reviewer approval before secrets
-  are released to the job.
+- Keep live integration CI approval-only. Do not pass Snowflake, BigQuery, GCS,
+  fixture values, or credentials through GitHub Actions secrets.
 
 ## Verification
 
@@ -68,7 +67,7 @@ The tests may create temporary Snowflake procedures, views, Iceberg tables, run
 logs, BigQuery extract jobs, and GCS files under generated prefixes. They should
 not create or delete caller-provided BigQuery fixture tables.
 
-The GitHub Actions integration workflow is intentionally `workflow_dispatch`
-only. Store all Snowflake, BigQuery, GCS, and fixture values as environment
-secrets on the `integration-tests` environment, then approve the environment
-deployment only after reviewing the target ref.
+The GitHub Actions integration workflow checks only PR approval state. It should
+pass when the current PR head has a fresh approval from an `OWNER`, `MEMBER`, or
+`COLLABORATOR`, excluding the PR author. Run live integration tests outside
+GitHub with company-managed credentials after that approval.

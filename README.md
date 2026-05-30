@@ -345,15 +345,14 @@ user-specified non-test resources.
 
 ### Integration CI Approval
 
-Live integration tests are available through the manual `Integration Tests`
-GitHub Actions workflow. The workflow uses the `integration-tests` GitHub
-Environment as the approval boundary; configure that environment with required
-reviewers and store all Snowflake, BigQuery, GCS, and fixture values as
-environment secrets.
+Pull request CI includes an approval-only `Integration Approval` check. It does
+not run live integration tests and does not receive Snowflake, BigQuery, GCS, or
+fixture credentials.
 
-Normal pull request CI does not run live integration tests or receive live
-resource secrets. To test a PR, run the manual workflow for the PR head ref and
-approve the `integration-tests` environment only after reviewing that ref.
+The check passes when the current PR head has a fresh approving review from an
+`OWNER`, `MEMBER`, or `COLLABORATOR`, excluding the PR author. New commits require
+a new approval. Run live integration tests outside GitHub with company-managed
+credentials after that approval.
 
 ## Security Notes
 
