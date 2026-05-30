@@ -1,5 +1,6 @@
 {% macro iceberg_sync_json_sql_literal(value) -%}
   {%- set json_value = value | tojson -%}
+  {%- set json_value = json_value | replace("\\u0027", "'") -%}
   {%- set escaped = json_value | replace("'", "''") -%}
   {{ return("'" ~ escaped ~ "'") }}
 {%- endmacro %}

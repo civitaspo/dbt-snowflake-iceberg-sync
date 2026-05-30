@@ -125,7 +125,7 @@ native partition decorators.
     bigquery_export_incremental_predicates=["20260530"],
 
     incremental_strategy='delete+copy',
-    incremental_predicate="order_date = '2026-05-30'",
+    incremental_predicate="\"order_date\" = '2026-05-30'",
 
     iceberg_table_external_volume='ICEBERG_EXTERNAL_VOLUME'
   )
@@ -159,7 +159,7 @@ is BigQuery SQL, not Snowflake SQL.
     bigquery_staging_table_reuse=true,
 
     incremental_strategy='delete+copy',
-    incremental_predicate="order_date = '2026-05-30'",
+    incremental_predicate="\"order_date\" = '2026-05-30'",
 
     iceberg_table_external_volume='ICEBERG_EXTERNAL_VOLUME'
   )
@@ -197,6 +197,12 @@ absent.
 The Snowflake transaction begins after export and table DDL. If `DELETE` or
 `COPY INTO` fails, the procedure rolls back the transaction and preserves the
 previous committed table data.
+
+The `incremental_predicate` is evaluated against the internal Iceberg table, not
+the exposed view. Top-level source field names are preserved exactly in that
+table for `MATCH_BY_COLUMN_NAME = CASE_SENSITIVE`, so quote lowercase or mixed
+case source names in Snowflake predicates, for example
+`incremental_predicate="\"event_date\" = '20240111'"`.
 
 ## Schema Support
 
