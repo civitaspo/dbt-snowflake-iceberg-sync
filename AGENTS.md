@@ -69,5 +69,6 @@ not create or delete caller-provided BigQuery fixture tables.
 
 The GitHub Actions integration workflow checks only PR approval state. It should
 pass when the current PR head has a fresh approval from an `OWNER`, `MEMBER`, or
-`COLLABORATOR`, excluding the PR author. Run live integration tests outside
-GitHub with company-managed credentials after that approval.
+`COLLABORATOR`, excluding the PR author, and should bypass approval when the PR
+author is a repository owner. Run live integration tests outside GitHub with
+company-managed credentials after that approval.

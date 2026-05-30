@@ -32,9 +32,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPOSITORY: ${{ github.repository }}
         run: |
+          if [ "$PR_AUTHOR_ASSOCIATION" = "OWNER" ]; then
+            echo "Integration test approval bypassed because $PR_AUTHOR is a repository owner."
+            exit 0
+          fi
+
           reviews_json="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/reviews" --paginate --slurp)"
 
           approver="$(

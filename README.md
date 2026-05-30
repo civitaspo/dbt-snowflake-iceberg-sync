@@ -351,8 +351,9 @@ fixture credentials.
 
 The check passes when the current PR head has a fresh approving review from an
 `OWNER`, `MEMBER`, or `COLLABORATOR`, excluding the PR author. New commits require
-a new approval. Run live integration tests outside GitHub with company-managed
-credentials after that approval.
+a new approval. The check is bypassed when the PR author is a repository owner.
+Run live integration tests outside GitHub with company-managed credentials after
+that approval.
 
 ## Security Notes
 
