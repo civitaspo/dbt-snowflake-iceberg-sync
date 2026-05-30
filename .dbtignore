@@ -1,0 +1,6 @@
+.github/
+docs/
+mise.lock
+mise.toml
+tests/
+uv.lock
