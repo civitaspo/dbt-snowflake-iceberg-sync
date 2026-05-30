@@ -48,9 +48,43 @@ def test_maps_nested_record_to_structured_object():
     assert '"City" VARCHAR' in columns[0].snowflake_type
 
 
-def test_rejects_unsupported_type():
-    with pytest.raises(SchemaError, match="BIGNUMERIC"):
-        map_bigquery_schema([{"name": "TooWide", "type": "BIGNUMERIC"}])
+def test_maps_repeated_record_to_structured_array():
+    columns = map_bigquery_schema(
+        [
+            {
+                "name": "Items",
+                "type": "RECORD",
+                "mode": "REPEATED",
+                "fields": [
+                    {"name": "Sku", "type": "STRING"},
+                    {"name": "Quantity", "type": "INT64"},
+                ],
+            }
+        ]
+    )
+
+    assert columns[0].snowflake_type.startswith("ARRAY(OBJECT(")
+    assert '"Sku" VARCHAR' in columns[0].snowflake_type
+
+
+@pytest.mark.parametrize("field_type", ["BIGNUMERIC", "JSON", "GEOGRAPHY", "TIME"])
+def test_rejects_unsupported_type(field_type):
+    with pytest.raises(SchemaError, match=field_type):
+        map_bigquery_schema([{"name": "UnsupportedField", "type": field_type}])
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ([{"type": "STRING"}], "missing a name"),
+        ([{"name": "Mystery", "type": "INTERVAL"}], "INTERVAL"),
+        ([{"name": "EmptyRecord", "type": "RECORD", "fields": []}], "must contain"),
+        ([{"name": "BytesArray", "type": "BYTES", "mode": "REPEATED"}], "repeated BYTES"),
+    ],
+)
+def test_rejects_malformed_or_unsupported_fields(fields, message):
+    with pytest.raises(SchemaError, match=message):
+        map_bigquery_schema(fields)
 
 
 def test_detects_view_alias_collisions():
@@ -122,4 +156,78 @@ def test_schema_compatibility_rejects_type_change():
     desired = [SnowflakeColumn("OrderID", "VARCHAR")]
 
     with pytest.raises(SchemaError, match="incompatible type change"):
+        validate_schema_compatibility(existing, desired)
+
+
+def test_schema_compatibility_rejects_removed_columns():
+    existing = [
+        SnowflakeColumn("OrderID", "BIGINT"),
+        SnowflakeColumn("CustomerName", "VARCHAR"),
+    ]
+    desired = [SnowflakeColumn("OrderID", "BIGINT")]
+
+    with pytest.raises(SchemaError, match="removed"):
+        validate_schema_compatibility(existing, desired)
+
+
+def test_schema_compatibility_rejects_reordered_columns():
+    existing = [
+        SnowflakeColumn("OrderID", "BIGINT"),
+        SnowflakeColumn("CustomerName", "VARCHAR"),
+    ]
+    desired = [
+        SnowflakeColumn("CustomerName", "VARCHAR"),
+        SnowflakeColumn("OrderID", "BIGINT"),
+    ]
+
+    with pytest.raises(SchemaError, match="reordered or renamed"):
+        validate_schema_compatibility(existing, desired)
+
+
+def test_schema_compatibility_rejects_nested_field_removal():
+    existing = [
+        SnowflakeColumn(
+            "payload",
+            "OBJECT",
+            fields=(
+                SnowflakeColumn("a", "VARCHAR"),
+                SnowflakeColumn("b", "VARCHAR"),
+            ),
+        )
+    ]
+    desired = [
+        SnowflakeColumn(
+            "payload",
+            "OBJECT",
+            fields=(SnowflakeColumn("a", "VARCHAR"),),
+        )
+    ]
+
+    with pytest.raises(SchemaError, match="nested fields were removed"):
+        validate_schema_compatibility(existing, desired)
+
+
+def test_schema_compatibility_rejects_nested_field_reorder():
+    existing = [
+        SnowflakeColumn(
+            "payload",
+            "OBJECT",
+            fields=(
+                SnowflakeColumn("a", "VARCHAR"),
+                SnowflakeColumn("b", "VARCHAR"),
+            ),
+        )
+    ]
+    desired = [
+        SnowflakeColumn(
+            "payload",
+            "OBJECT",
+            fields=(
+                SnowflakeColumn("b", "VARCHAR"),
+                SnowflakeColumn("a", "VARCHAR"),
+            ),
+        )
+    ]
+
+    with pytest.raises(SchemaError, match="nested field order changed"):
         validate_schema_compatibility(existing, desired)
