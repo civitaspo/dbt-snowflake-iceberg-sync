@@ -21,6 +21,17 @@ class FakeBigQueryClient:
             ("project", "dataset", "orders"): {
                 "schema": {"fields": [{"name": "OrderID", "type": "INT64"}]}
             },
+            ("project", "dataset", "orders_by_date"): {
+                "schema": {"fields": [{"name": "OrderID", "type": "INT64"}]},
+                "timePartitioning": {"type": "DAY", "field": "order_date"},
+            },
+            ("project", "dataset", "orders_by_bucket"): {
+                "schema": {"fields": [{"name": "OrderID", "type": "INT64"}]},
+                "rangePartitioning": {
+                    "field": "bucket_id",
+                    "range": {"start": "0", "end": "100", "interval": "10"},
+                },
+            },
             ("project", "dataset", "events_20260101"): {
                 "schema": {"fields": [{"name": "EventID", "type": "STRING"}]}
             },
@@ -98,6 +109,57 @@ def test_table_suffix_expands_concrete_tables(payload_factory):
     assert concrete_extract_tables(
         config.bigquery, "table_suffix", ("20260101", "20260102"), FakeBigQueryClient()
     ) == ["events_20260101", "events_20260102"]
+
+
+def test_auto_extract_time_partitioned_table_uses_partition_decorator(payload_factory):
+    config = parse_config(payload_factory(bigquery__table_id="orders_by_date"))
+    client = FakeBigQueryClient()
+
+    assert (
+        resolve_predicate_type(config.bigquery, ("20260101",), client)
+        == "partition_decorator"
+    )
+    assert concrete_extract_tables(
+        config.bigquery, "partition_decorator", ("20260101",), client
+    ) == ["orders_by_date$20260101"]
+
+
+def test_auto_extract_range_partitioned_table_uses_partition_decorator(payload_factory):
+    config = parse_config(payload_factory(bigquery__table_id="orders_by_bucket"))
+    client = FakeBigQueryClient()
+
+    assert (
+        resolve_predicate_type(config.bigquery, ("10",), client) == "partition_decorator"
+    )
+    assert concrete_extract_tables(
+        config.bigquery, "partition_decorator", ("10",), client
+    ) == ["orders_by_bucket$10"]
+
+
+def test_extract_non_partitioned_table_runs_direct_extract(base_payload):
+    config = parse_config(base_payload)
+    client = FakeBigQueryClient()
+
+    result = BigQuerySourceAdapter(client).export(
+        config,
+        context=SourceExecutionContext(
+            effective_mode="full_refresh",
+            destination_uri="gcs://bucket/prefix/run",
+        ),
+    )
+
+    assert client.extract_jobs == [
+        (
+            {"projectId": "project", "datasetId": "dataset", "tableId": "orders"},
+            ["gcs://bucket/prefix/run/segment-00000-*.parquet"],
+        )
+    ]
+    assert result.segments == [
+        {
+            "table_id": "orders",
+            "destination_uri": "gcs://bucket/prefix/run/segment-00000-*.parquet",
+        }
+    ]
 
 
 def test_table_suffix_requires_wildcard(base_payload):
@@ -179,3 +241,37 @@ def test_select_export_force_rebuild_runs_query(payload_factory):
 
     assert len(client.query_jobs) == 1
     assert len(client.patches) == 1
+
+
+def test_select_export_runs_query_then_extracts_staging_table(payload_factory):
+    client = FakeBigQueryClient()
+    payload = payload_factory(
+        bigquery__export_strategy="select",
+        bigquery__export_predicate_type="where",
+        bigquery__full_refresh_predicates=["order_date = DATE '2026-01-01'"],
+        bigquery__staging_dataset_id="staging",
+        bigquery__staging_table_reuse=False,
+        model__sql="select *\nfrom `project.dataset.orders`",
+    )
+    config = parse_config(payload)
+
+    result = BigQuerySourceAdapter(client).export(
+        config,
+        context=SourceExecutionContext(
+            effective_mode="full_refresh",
+            destination_uri="gcs://bucket/prefix/run",
+        ),
+    )
+
+    assert len(client.query_jobs) == 1
+    query, destination_table = client.query_jobs[0]
+    assert "WHERE (order_date = DATE '2026-01-01')" in query
+    assert client.extract_jobs == [
+        (
+            destination_table,
+            ["gcs://bucket/prefix/run/segment-00000-*.parquet"],
+        )
+    ]
+    assert result.staging_table_reference == (
+        f"project.staging.{destination_table['tableId']}"
+    )
