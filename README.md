@@ -343,6 +343,18 @@ test prefixes. The tests use caller-provided BigQuery fixture tables and do not
 create or delete those fixture tables. Cleanup is best-effort and must not delete
 user-specified non-test resources.
 
+### Integration CI Approval
+
+Live integration tests are available through the manual `Integration Tests`
+GitHub Actions workflow. The workflow uses the `integration-tests` GitHub
+Environment as the approval boundary; configure that environment with required
+reviewers and store all Snowflake, BigQuery, GCS, and fixture values as
+environment secrets.
+
+Normal pull request CI does not run live integration tests or receive live
+resource secrets. To test a PR, run the manual workflow for the PR head ref and
+approve the `integration-tests` environment only after reviewing that ref.
+
 ## Security Notes
 
 - No credential material belongs in dbt model config.
