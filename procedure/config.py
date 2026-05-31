@@ -231,6 +231,8 @@ def validate_config(config: IcebergSyncConfig) -> None:
         raise ConfigError("cluster_by is not supported by iceberg_sync in the first scope")
     if config.bigquery.export_strategy == "select" and not config.bigquery.staging_dataset_id:
         raise ConfigError("bigquery_staging_dataset_id is required for select export strategy")
+    if config.bigquery.export_strategy == "select" and not config.model.sql.strip():
+        raise ConfigError("model SQL is required for bigquery_export_strategy='select'")
     if (
         config.bigquery.export_strategy == "select"
         and config.bigquery.export_predicate_type

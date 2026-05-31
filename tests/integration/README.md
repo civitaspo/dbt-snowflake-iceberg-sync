@@ -12,11 +12,14 @@ uv run pytest -m integration
 
 The integration suite contains separate tests for:
 
-- concrete non-partitioned BigQuery extract
-- native time-partitioned extract through partition decorators
-- native integer range-partitioned extract through partition decorators
-- query execution export through a BigQuery staging table
+- concrete non-partitioned BigQuery extract with `auto` and explicit `none`
+- native time-partitioned extract with `auto` and explicit partition decorators
+- native integer range-partitioned extract with `auto` and explicit partition decorators
+- sharded table extract with all-shard and suffix-filtered plans
+- query execution export with `auto`, `none`, and `where`
+- staging table reuse and forced rebuild behavior
 - incremental `delete+copy` over three dbt runs: create, incremental, repeat
+- invalid parameter combinations that must fail at the dbt/procedure boundary
 
 Fixture tables are supplied by environment variables. The tests create temporary
 Snowflake procedures, views, Iceberg tables, run logs, BigQuery extract jobs, and

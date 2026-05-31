@@ -107,6 +107,11 @@
       "bigquery_staging_dataset_id is required when bigquery_export_strategy='select'"
     ) -%}
   {%- endif -%}
+  {%- if bq['export_strategy'] == 'select' and not payload['model']['sql'] | trim -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "model SQL is required when bigquery_export_strategy='select'"
+    ) -%}
+  {%- endif -%}
   {%- if bq['export_strategy'] == 'select' and bq['export_predicate_type'] not in ['auto', 'none', 'where'] -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
       "select export strategy allows only auto, none, or where predicates"

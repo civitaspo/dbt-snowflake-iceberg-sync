@@ -90,6 +90,207 @@ class FakeBigQueryClient:
         return table
 
 
+EXTRACT_SHAPES = {
+    "non_partitioned": {
+        "table_id": "orders",
+        "all_tables": ["orders"],
+        "is_wildcard": False,
+        "is_partitioned": False,
+    },
+    "wildcard": {
+        "table_id": "events_*",
+        "all_tables": ["events_20260101", "events_20260102"],
+        "is_wildcard": True,
+        "is_partitioned": False,
+    },
+    "time_partitioned": {
+        "table_id": "orders_by_date",
+        "all_tables": ["orders_by_date"],
+        "is_wildcard": False,
+        "is_partitioned": True,
+    },
+    "range_partitioned": {
+        "table_id": "orders_by_bucket",
+        "all_tables": ["orders_by_bucket"],
+        "is_wildcard": False,
+        "is_partitioned": True,
+    },
+}
+
+
+def _extract_matrix_cases():
+    for shape_name in EXTRACT_SHAPES:
+        for requested_type in (
+            "auto",
+            "none",
+            "table_suffix",
+            "partition_decorator",
+            "where",
+        ):
+            for predicates in ((), ("20260101",)):
+                yield pytest.param(
+                    shape_name,
+                    requested_type,
+                    predicates,
+                    id=f"{shape_name}-{requested_type}-{'predicates' if predicates else 'empty'}",
+                )
+
+
+@pytest.mark.parametrize(
+    ("shape_name", "requested_type", "predicates"),
+    list(_extract_matrix_cases()),
+)
+def test_extract_predicate_type_matrix(
+    payload_factory, shape_name, requested_type, predicates
+):
+    shape = EXTRACT_SHAPES[shape_name]
+    client = FakeBigQueryClient()
+    expected_error = _expected_extract_error(shape, requested_type, predicates)
+
+    if expected_error:
+        with pytest.raises(ConfigError, match=expected_error):
+            config = parse_config(
+                payload_factory(
+                    bigquery__table_id=shape["table_id"],
+                    bigquery__export_predicate_type=requested_type,
+                )
+            )
+            resolved_type = resolve_predicate_type(config.bigquery, predicates, client)
+            concrete_extract_tables(config.bigquery, resolved_type, predicates, client)
+        return
+
+    config = parse_config(
+        payload_factory(
+            bigquery__table_id=shape["table_id"],
+            bigquery__export_predicate_type=requested_type,
+        )
+    )
+
+    expected_type, expected_tables = _expected_extract_plan(shape, requested_type, predicates)
+
+    resolved_type = resolve_predicate_type(config.bigquery, predicates, client)
+
+    assert resolved_type == expected_type
+    assert (
+        concrete_extract_tables(config.bigquery, resolved_type, predicates, client)
+        == expected_tables
+    )
+
+
+def _expected_extract_error(shape, requested_type, predicates):
+    if requested_type == "where":
+        return "does not support where"
+    if requested_type == "none" and predicates:
+        return "does not accept predicates"
+    if requested_type == "table_suffix":
+        if not shape["is_wildcard"]:
+            return "ending with"
+        if not predicates:
+            return "at least one predicate"
+    if requested_type == "partition_decorator":
+        if not predicates:
+            return "at least one predicate"
+        if not shape["is_partitioned"]:
+            return "native partitioned table"
+    if (
+        requested_type == "auto"
+        and predicates
+        and not shape["is_wildcard"]
+        and not shape["is_partitioned"]
+    ):
+        return "native partitioned table"
+    return None
+
+
+def _expected_extract_plan(shape, requested_type, predicates):
+    if requested_type == "auto":
+        if not predicates:
+            return "none", shape["all_tables"]
+        if shape["is_wildcard"]:
+            return "table_suffix", [f"events_{predicate}" for predicate in predicates]
+        return "partition_decorator", [
+            f"{shape['table_id']}${predicate}" for predicate in predicates
+        ]
+    if requested_type == "none":
+        return "none", shape["all_tables"]
+    if requested_type == "table_suffix":
+        return "table_suffix", [f"events_{predicate}" for predicate in predicates]
+    return "partition_decorator", [
+        f"{shape['table_id']}${predicate}" for predicate in predicates
+    ]
+
+
+def _select_matrix_cases():
+    for requested_type in (
+        "auto",
+        "none",
+        "where",
+        "table_suffix",
+        "partition_decorator",
+    ):
+        for predicates in ((), ("event_date = DATE '2026-01-01'",)):
+            yield pytest.param(
+                requested_type,
+                predicates,
+                id=f"select-{requested_type}-{'predicates' if predicates else 'empty'}",
+            )
+
+
+@pytest.mark.parametrize(
+    ("requested_type", "predicates"),
+    list(_select_matrix_cases()),
+)
+def test_select_predicate_type_matrix(payload_factory, requested_type, predicates):
+    expected_error = _expected_select_error(requested_type, predicates)
+
+    if expected_error:
+        with pytest.raises(ConfigError, match=expected_error):
+            config = parse_config(
+                payload_factory(
+                    bigquery__export_strategy="select",
+                    bigquery__export_predicate_type=requested_type,
+                    bigquery__staging_dataset_id="staging",
+                    model__sql="select * from `project.dataset.orders`",
+                )
+            )
+            resolved_type = resolve_predicate_type(
+                config.bigquery, predicates, FakeBigQueryClient()
+            )
+            select_sql_with_predicates(config.model.sql, resolved_type, predicates)
+        return
+
+    config = parse_config(
+        payload_factory(
+            bigquery__export_strategy="select",
+            bigquery__export_predicate_type=requested_type,
+            bigquery__staging_dataset_id="staging",
+            model__sql="select * from `project.dataset.orders`",
+        )
+    )
+    expected_type = "where" if requested_type == "auto" and predicates else requested_type
+    if requested_type == "auto" and not predicates:
+        expected_type = "none"
+
+    resolved_type = resolve_predicate_type(config.bigquery, predicates, FakeBigQueryClient())
+    sql = select_sql_with_predicates(config.model.sql, resolved_type, predicates)
+
+    assert resolved_type == expected_type
+    if predicates:
+        assert "WHERE (event_date = DATE '2026-01-01')" in sql
+    else:
+        assert "WHERE" not in sql
+
+
+def _expected_select_error(requested_type, predicates):
+    if requested_type in {"table_suffix", "partition_decorator"}:
+        return "allows only auto, none, or where"
+    if requested_type == "none" and predicates:
+        return "does not accept predicates"
+    if requested_type == "where" and not predicates:
+        return "requires at least one predicate"
+    return None
+
+
 def test_auto_extract_without_predicates_uses_none(base_payload):
     config = parse_config(base_payload)
 
@@ -110,6 +311,12 @@ def test_auto_extract_wildcard_uses_table_suffix(payload_factory):
         resolve_predicate_type(config.bigquery, ("20260101",), FakeBigQueryClient())
         == "table_suffix"
     )
+
+
+def test_auto_extract_wildcard_without_predicates_uses_none(payload_factory):
+    config = parse_config(payload_factory(bigquery__table_id="events_*"))
+
+    assert resolve_predicate_type(config.bigquery, (), FakeBigQueryClient()) == "none"
 
 
 def test_table_suffix_expands_concrete_tables(payload_factory):

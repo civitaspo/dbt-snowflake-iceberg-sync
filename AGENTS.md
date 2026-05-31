@@ -54,8 +54,12 @@ The integration suite should cover more than a happy path. Keep coverage for:
 - non-partitioned BigQuery extract
 - time-partitioned extract through partition decorators
 - integer range-partitioned extract through partition decorators
-- query execution export through a BigQuery staging table
+- sharded BigQuery extract through wildcard and table suffix plans
+- query execution export through BigQuery staging tables with `auto`, `none`,
+  and `where` predicates
+- BigQuery staging table reuse and forced rebuild behavior
 - incremental `delete+copy`, including a repeated incremental run
+- invalid dbt/materialization parameter combinations that must fail
 
 Run the opt-in suite with:
 

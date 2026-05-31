@@ -193,10 +193,10 @@ def resolve_predicate_type(
         return requested
     if bq.export_strategy == "select":
         return "where" if predicates else "none"
-    if bq.table_id.endswith("_*"):
-        return "table_suffix"
     if not predicates:
         return "none"
+    if bq.table_id.endswith("_*"):
+        return "table_suffix"
     if client is None:
         raise ConfigError("auto partition predicate resolution requires BigQuery table metadata")
     table = client.get_table(bq.project_id, bq.dataset_id, bq.table_id)
@@ -227,6 +227,13 @@ def concrete_extract_tables(
         prefix = bq.table_id[:-1]
         return [prefix + predicate for predicate in predicates]
     if predicate_type == "partition_decorator":
+        if bq.table_id.endswith("_*") or "*" in bq.table_id:
+            raise ConfigError(
+                "partition_decorator requires a concrete native partitioned table"
+            )
+        table = client.get_table(bq.project_id, bq.dataset_id, bq.table_id)
+        if not _is_native_partitioned(table):
+            raise ConfigError("partition_decorator requires a native partitioned table")
         return [f"{bq.table_id}${predicate}" for predicate in predicates]
     raise ConfigError(f"unsupported extract predicate type: {predicate_type}")
 
@@ -243,10 +250,14 @@ def select_sql_with_predicates(
     sql = model_sql.strip().rstrip(";")
     if not sql:
         raise ConfigError("model SQL is required for bigquery_export_strategy='select'")
-    if predicate_type == "none" or not predicates:
+    if predicate_type == "none":
+        if predicates:
+            raise ConfigError("none predicate type does not accept predicates")
         return sql
     if predicate_type != "where":
         raise ConfigError("select export strategy supports only where predicates")
+    if not predicates:
+        raise ConfigError("where predicate type requires at least one predicate")
     predicate_sql = " OR ".join(f"({predicate})" for predicate in predicates)
     return f"SELECT *\nFROM (\n{sql}\n) AS __dbt_iceberg_sync_src\nWHERE {predicate_sql}"
 
@@ -427,6 +438,10 @@ def _validate_predicate_type(
         raise ConfigError("select export strategy allows only none or where predicates")
     if bq.export_strategy == "extract" and predicate_type == "where":
         raise ConfigError("extract export strategy does not support where predicates")
+    if predicate_type == "none" and predicates:
+        raise ConfigError("none predicate type does not accept predicates")
+    if predicate_type == "where" and not predicates:
+        raise ConfigError("where predicate type requires at least one predicate")
     if predicate_type == "table_suffix":
         if not bq.table_id.endswith("_*") or bq.table_id.count("*") != 1:
             raise ConfigError("table_suffix requires a table id ending with '_*'")
@@ -448,6 +463,10 @@ def _get_table_or_none(
 def _table_has_hash(table: dict[str, Any], expected_hash: str) -> bool:
     labels = table.get("labels") or {}
     return labels.get("dbt_iceberg_sync_hash") == expected_hash[:63]
+
+
+def _is_native_partitioned(table: dict[str, Any]) -> bool:
+    return bool(table.get("timePartitioning") or table.get("rangePartitioning"))
 
 
 def _table_is_expired(table: dict[str, Any]) -> bool:

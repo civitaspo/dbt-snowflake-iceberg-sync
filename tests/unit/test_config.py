@@ -54,6 +54,100 @@ def test_select_requires_staging_dataset(payload_factory):
         parse_config(payload)
 
 
+def test_select_requires_model_sql(payload_factory):
+    payload = payload_factory(
+        bigquery__export_strategy="select",
+        bigquery__staging_dataset_id="staging",
+        model__sql="",
+    )
+
+    with pytest.raises(ConfigError, match="model SQL is required"):
+        parse_config(payload)
+
+
+def _strategy_config_matrix_cases():
+    for export_strategy in ("extract", "select"):
+        for predicate_type in (
+            "auto",
+            "none",
+            "partition_decorator",
+            "table_suffix",
+            "where",
+        ):
+            for has_model_sql in (False, True):
+                for has_staging_dataset in (False, True):
+                    yield pytest.param(
+                        export_strategy,
+                        predicate_type,
+                        has_model_sql,
+                        has_staging_dataset,
+                        id=(
+                            f"{export_strategy}-{predicate_type}-"
+                            f"{'sql' if has_model_sql else 'no_sql'}-"
+                            f"{'staging' if has_staging_dataset else 'no_staging'}"
+                        ),
+                    )
+
+
+@pytest.mark.parametrize(
+    (
+        "export_strategy",
+        "predicate_type",
+        "has_model_sql",
+        "has_staging_dataset",
+    ),
+    list(_strategy_config_matrix_cases()),
+)
+def test_bigquery_strategy_config_matrix(
+    payload_factory,
+    export_strategy,
+    predicate_type,
+    has_model_sql,
+    has_staging_dataset,
+):
+    payload = payload_factory(
+        bigquery__export_strategy=export_strategy,
+        bigquery__export_predicate_type=predicate_type,
+        bigquery__staging_dataset_id=("staging" if has_staging_dataset else None),
+        model__sql=("select * from `project.dataset.orders`" if has_model_sql else ""),
+    )
+    expected_error = _expected_strategy_config_error(
+        export_strategy,
+        predicate_type,
+        has_model_sql,
+        has_staging_dataset,
+    )
+
+    if expected_error:
+        with pytest.raises(ConfigError, match=expected_error):
+            parse_config(payload)
+    else:
+        config = parse_config(payload)
+        assert config.bigquery.export_strategy == export_strategy
+        assert config.bigquery.export_predicate_type == predicate_type
+
+
+def _expected_strategy_config_error(
+    export_strategy,
+    predicate_type,
+    has_model_sql,
+    has_staging_dataset,
+):
+    if export_strategy == "extract":
+        if predicate_type == "where":
+            return "extract export strategy"
+        if has_model_sql:
+            return "model SQL"
+        return None
+    if not has_staging_dataset:
+        return "bigquery_staging_dataset_id"
+    if not has_model_sql:
+        return "model SQL"
+    if predicate_type in {"partition_decorator", "table_suffix"}:
+        return "select export strategy"
+    return None
+
+
 def test_rejects_disabled_change_tracking_for_iceberg_v3(payload_factory):
     payload = payload_factory(iceberg_table__change_tracking=False)
 
@@ -176,6 +270,36 @@ def test_effective_mode_full_refresh_when_table_missing(base_payload):
 
     assert effective_mode_for(config, table_exists=False) == "full_refresh"
     assert effective_mode_for(config, table_exists=True) == "incremental"
+
+
+@pytest.mark.parametrize(
+    ("materialization_strategy", "dbt_full_refresh", "table_exists", "expected"),
+    [
+        ("full_refresh", False, False, "full_refresh"),
+        ("full_refresh", False, True, "full_refresh"),
+        ("full_refresh", True, False, "full_refresh"),
+        ("full_refresh", True, True, "full_refresh"),
+        ("incremental", False, False, "full_refresh"),
+        ("incremental", False, True, "incremental"),
+        ("incremental", True, False, "full_refresh"),
+        ("incremental", True, True, "full_refresh"),
+    ],
+)
+def test_effective_mode_matrix(
+    payload_factory,
+    materialization_strategy,
+    dbt_full_refresh,
+    table_exists,
+    expected,
+):
+    config = parse_config(
+        payload_factory(
+            materialization_strategy=materialization_strategy,
+            dbt_full_refresh=dbt_full_refresh,
+        )
+    )
+
+    assert effective_mode_for(config, table_exists=table_exists) == expected
 
 
 def test_predicates_are_selected_by_effective_mode(payload_factory):
