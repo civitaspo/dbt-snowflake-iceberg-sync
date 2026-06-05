@@ -1,0 +1,76 @@
+name: Integration Approval
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+  pull_request_review:
+    types:
+      - submitted
+      - dismissed
+
+permissions: {}
+
+concurrency:
+  group: integration-approval-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  approval:
+    name: Approval
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    timeout-minutes: 5
+
+    steps:
+      - name: Check integration test approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ "$PR_AUTHOR_ASSOCIATION" = "OWNER" ]; then
+            echo "Integration test approval bypassed because $PR_AUTHOR is a repository owner."
+            exit 0
+          fi
+
+          reviews_json="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/reviews" --paginate --slurp)"
+
+          approver="$(
+            jq -r \
+              --arg head_sha "$HEAD_SHA" \
+              --arg pr_author "$PR_AUTHOR" \
+              '
+              [
+                .[][]
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+              ]
+              | sort_by(.user.login, .submitted_at)
+              | group_by(.user.login)
+              | map(last)
+              | map(
+                  select(.state == "APPROVED")
+                  | select(.commit_id == $head_sha)
+                  | select(.user.login != $pr_author)
+                  | . as $review
+                  | select(["OWNER", "MEMBER", "COLLABORATOR"] | index($review.author_association))
+                )
+              | first
+              | .user.login // ""
+              ' <<< "$reviews_json"
+          )"
+
+          if [ -z "$approver" ]; then
+            echo "::error::Integration test approval is required for the current PR head." >&2
+            echo "Add a fresh approving PR review from an OWNER, MEMBER, or COLLABORATOR." >&2
+            exit 1
+          fi
+
+          echo "Integration test approval granted by $approver for $HEAD_SHA."

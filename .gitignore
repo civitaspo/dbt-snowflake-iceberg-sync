@@ -1,0 +1,15 @@
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+__pycache__/
+*.py[cod]
+target/
+logs/
+dbt_packages/
+package-lock.yml
+profiles.yml
+!tests/ci_profiles/profiles.yml
+.user.yml
+.env
+.DS_Store
