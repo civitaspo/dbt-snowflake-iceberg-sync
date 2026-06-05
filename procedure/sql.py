@@ -69,12 +69,17 @@ def create_or_replace_view_sql(
     target: RelationConfig, internal: RelationConfig, columns: list[ViewColumn]
 ) -> str:
     select_list = ",\n  ".join(
-        f"{quote_identifier(column.source_name)} AS {column.alias}" for column in columns
+        f"{quote_identifier(column.source_name)} AS {quote_view_alias(column.alias)}"
+        for column in columns
     )
     return f"""CREATE OR REPLACE VIEW {relation_sql(target)} AS
 SELECT
   {select_list}
 FROM {relation_sql(internal)}"""
+
+
+def quote_view_alias(alias: str) -> str:
+    return quote_identifier(alias.upper())
 
 
 def desc_stage_sql(stage_fqn: str) -> str:

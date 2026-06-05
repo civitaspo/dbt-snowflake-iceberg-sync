@@ -74,11 +74,26 @@ jobs:
           echo "changed=true" >> "$GITHUB_OUTPUT"
           git diff --name-only -- .github/workflows
 
+      - name: Require Securefix configuration
+        if: |
+          github.event_name == 'pull_request' &&
+          steps.workflow-fixes.outputs.changed == 'true' &&
+          (env.SECUREFIX_CLIENT_APP_ID == '' || env.SECUREFIX_SERVER_REPOSITORY == '')
+        run: |
+          if [ -z "${SECUREFIX_CLIENT_APP_ID}" ]; then
+            echo "Workflow security fixes are needed, but SECUREFIX_CLIENT_APP_ID is not configured." >&2
+          fi
+          if [ -z "${SECUREFIX_SERVER_REPOSITORY}" ]; then
+            echo "Workflow security fixes are needed, but SECUREFIX_SERVER_REPOSITORY is not configured." >&2
+          fi
+          exit 1
+
       - name: Request Securefix commit
         if: |
           github.event_name == 'pull_request' &&
           steps.workflow-fixes.outputs.changed == 'true' &&
-          env.SECUREFIX_CLIENT_APP_ID != ''
+          env.SECUREFIX_CLIENT_APP_ID != '' &&
+          env.SECUREFIX_SERVER_REPOSITORY != ''
         uses: csm-actions/securefix-action@4d885e1bcb71f4f110215c833002ce9fa0ee0fa6 # v0.6.0
         with:
           action: client
@@ -86,15 +101,6 @@ jobs:
           app_private_key: ${{ secrets.SECUREFIX_CLIENT_PRIVATE_KEY }}
           commit_message: "ci: apply workflow security fixes"
           server_repository: ${{ env.SECUREFIX_SERVER_REPOSITORY }}
-
-      - name: Require Securefix configuration
-        if: |
-          github.event_name == 'pull_request' &&
-          steps.workflow-fixes.outputs.changed == 'true' &&
-          env.SECUREFIX_CLIENT_APP_ID == ''
-        run: |
-          echo "Workflow security fixes are needed, but SECUREFIX_CLIENT_APP_ID is not configured." >&2
-          exit 1
 
       - name: Check workflow formatting
         if: github.event_name != 'pull_request'

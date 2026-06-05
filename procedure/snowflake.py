@@ -130,8 +130,11 @@ def parse_stage_location(export_location: str) -> tuple[str, str]:
         stage_raw, stage_path = raw.split("/", 1)
     else:
         stage_raw, stage_path = raw, ""
-    stage_parts = [part.strip('"') for part in stage_raw.split(".") if part]
-    if not 1 <= len(stage_parts) <= 3:
+    raw_parts = stage_raw.split(".")
+    if any(part == "" for part in raw_parts):
+        raise ConfigError("bigquery_export_location contains an invalid stage name")
+    stage_parts = [part.strip('"') for part in raw_parts]
+    if any(part == "" for part in stage_parts) or not 1 <= len(stage_parts) <= 3:
         raise ConfigError("bigquery_export_location contains an invalid stage name")
     return quote_stage_fqn(stage_parts), stage_path.strip("/")
 

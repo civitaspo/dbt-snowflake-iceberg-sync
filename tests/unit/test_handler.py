@@ -23,6 +23,7 @@ class FakeSnowflake:
         self.fail_delete = fail_delete
         self.existing_columns = existing_columns or [SnowflakeColumn("OrderID", "BIGINT")]
         self.calls = []
+        self.run_logs = []
 
     def ensure_run_log(self, relation):
         self.calls.append(("ensure_run_log", relation))
@@ -71,6 +72,7 @@ class FakeSnowflake:
 
     def write_run_log(self, relation, payload):
         self.calls.append(("write_run_log", payload["status"]))
+        self.run_logs.append(payload)
 
 
 class FakeSource:
@@ -183,6 +185,34 @@ def test_handler_writes_failure_log_when_source_export_fails(base_payload):
 
     assert ("begin",) not in snowflake.calls
     assert ("write_run_log", "failure") in snowflake.calls
+    assert snowflake.run_logs[-1]["error_message"] == "SourceError: export failed"
+
+
+def test_handler_sanitizes_failure_log_error_message(base_payload):
+    snowflake = FakeSnowflake(table_exists=False)
+    source = FakeSource(fail_export=True)
+
+    def fail_export(config, context):
+        raise SourceError(
+            "BigQuery API error 403: token=abc123 "
+            "gs://private-bucket/path "
+            "https://example.invalid/path"
+        )
+
+    source.export = fail_export
+
+    with pytest.raises(SourceError):
+        IcebergSyncRunner(
+            object(),
+            snowflake_client=snowflake,
+            source_adapters={"bigquery": source},
+        ).run(base_payload)
+
+    error_message = snowflake.run_logs[-1]["error_message"]
+    assert "abc123" not in error_message
+    assert "private-bucket" not in error_message
+    assert "example.invalid" not in error_message
+    assert "SourceError:" in error_message
 
 
 def test_handler_rolls_back_transaction_on_copy_failure(base_payload):

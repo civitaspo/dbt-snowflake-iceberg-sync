@@ -337,8 +337,7 @@ DBT_SNOWFLAKE_ICEBERG_SYNC_INCREMENTAL_EXPECTED_ROWS
 ```
 
 `SNOWFLAKE_AUTHENTICATOR` defaults to `externalbrowser` when unset.
-`DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TABLE_EXPECTED_ROWS` and
-`DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_TABLE_ID` are optional. The
+`DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TABLE_EXPECTED_ROWS` is optional. The
 incremental predicate list variables accept either JSON arrays or comma-separated
 strings.
 

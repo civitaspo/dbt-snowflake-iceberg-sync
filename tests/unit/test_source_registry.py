@@ -45,3 +45,8 @@ def test_bigquery_adapter_rejects_malformed_secret_json(base_payload, monkeypatc
 
     with pytest.raises(ValueError):
         registry.create_source_adapter(parse_config(base_payload))
+
+
+def test_create_source_adapter_honors_explicit_empty_factory_map(base_payload):
+    with pytest.raises(IcebergSyncError, match="unsupported source_type"):
+        registry.create_source_adapter(parse_config(base_payload), factories={})

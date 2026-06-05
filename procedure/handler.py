@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from contextlib import suppress
 from dataclasses import asdict
 from typing import Any
@@ -93,7 +94,7 @@ class IcebergSyncRunner:
             )
             return result
         except Exception as exc:
-            error_message = str(exc)
+            error_message = _sanitize_error_message(exc)
             with suppress(Exception):
                 self.snowflake.rollback()
             self._write_log(
@@ -190,6 +191,26 @@ def effective_mode_for(config: IcebergSyncConfig, table_exists: bool) -> str:
     if not table_exists:
         return "full_refresh"
     return "incremental"
+
+
+def _sanitize_error_message(exc: Exception) -> str:
+    message = " ".join(str(exc).split())
+    replacements = (
+        (r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer <redacted>"),
+        (r"(?i)(gs|gcs|s3)://\S+", "<redacted-uri>"),
+        (r"(?i)https?://\S+", "<redacted-uri>"),
+        (r"(?i)@[A-Za-z0-9_\".]+/\S+", "@<redacted-stage-path>"),
+        (
+            r"(?i)(password|token|secret|credential|private[_-]?key)(\s*[:=]\s*)"
+            r"('[^']*'|\"[^\"]*\"|\S+)",
+            r"\1\2<redacted>",
+        ),
+    )
+    for pattern, replacement in replacements:
+        message = re.sub(pattern, replacement, message)
+    if len(message) > 500:
+        message = message[:497].rstrip() + "..."
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
 
 
 def _result_payload(

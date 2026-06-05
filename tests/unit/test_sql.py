@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from procedure.config import parse_config
 from procedure.schema import SnowflakeColumn, ViewColumn
-from procedure.sql import copy_into_sql, create_iceberg_table_sql, create_or_replace_view_sql
+from procedure.sql import (
+    copy_into_sql,
+    create_iceberg_table_sql,
+    create_or_replace_view_sql,
+    quote_view_alias,
+)
 
 
 def test_copy_into_uses_required_iceberg_options(base_payload):
@@ -40,5 +45,9 @@ def test_create_view_preserves_source_case_and_aliases_lower_snake(base_payload)
         [ViewColumn("OrderID", "order_id")],
     )
 
-    assert 'SELECT\n  "OrderID" AS order_id' in sql
+    assert 'SELECT\n  "OrderID" AS "ORDER_ID"' in sql
     assert 'FROM "ANALYTICS"."PUBLIC"."__orders"' in sql
+
+
+def test_quote_view_alias_preserves_snowflake_unquoted_folding():
+    assert quote_view_alias("select") == '"SELECT"'

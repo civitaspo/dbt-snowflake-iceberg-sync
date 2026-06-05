@@ -20,6 +20,30 @@ def test_json_sql_literal_round_trips_single_quotes_for_snowflake_sql():
     assert _decode_sql_string_literal(literal) == payload
 
 
+def test_create_view_macro_quotes_uppercase_aliases():
+    macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/relations.sql"
+    template = Environment(extensions=["jinja2.ext.do"]).from_string(
+        macro_path.read_text(encoding="utf-8")
+        + "\n{{ iceberg_sync_create_view_sql(target, internal, view_columns) }}"
+    )
+
+    rendered = template.render(
+        {
+            "target": '"DB"."SCHEMA"."VIEW"',
+            "internal": '"DB"."SCHEMA"."TABLE"',
+            "view_columns": [{"source_name": "OrderID", "alias": "select"}],
+            "adapter": _FakeAdapter(),
+        }
+    )
+
+    assert '"OrderID" AS "SELECT"' in rendered
+
+
+class _FakeAdapter:
+    def quote(self, value: str) -> str:
+        return '"' + value.replace('"', '""') + '"'
+
+
 def _render_json_sql_literal(value: dict[str, str]) -> str:
     macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/json.sql"
     template = Environment().from_string(

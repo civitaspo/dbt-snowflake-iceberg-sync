@@ -49,7 +49,7 @@ class FakeBigQueryClient:
     def get_table(self, project_id, dataset_id, table_id):
         key = (project_id, dataset_id, table_id)
         if key not in self.tables:
-            raise KeyError(key)
+            raise SourceError("not found", status_code=404)
         table = dict(self.tables[key])
         table["tableReference"] = {
             "projectId": project_id,
@@ -593,6 +593,30 @@ def test_select_export_force_rebuild_runs_query(payload_factory):
 
     assert len(client.query_jobs) == 1
     assert len(client.patches) == 1
+
+
+def test_select_export_re_raises_non_404_staging_lookup_error(payload_factory):
+    client = FakeBigQueryClient()
+    payload = payload_factory(
+        bigquery__export_strategy="select",
+        bigquery__staging_dataset_id="staging",
+        model__sql="select * from `project.dataset.orders`",
+    )
+    config = parse_config(payload)
+
+    def fail_get_table(project_id, dataset_id, table_id):
+        raise SourceError("permission denied", status_code=403)
+
+    client.get_table = fail_get_table
+
+    with pytest.raises(SourceError, match="permission denied"):
+        BigQuerySourceAdapter(client).export(
+            config,
+            context=SourceExecutionContext(
+                effective_mode="full_refresh",
+                destination_uri="gcs://bucket/prefix/run",
+            ),
+        )
 
 
 def test_select_export_runs_query_then_extracts_staging_table(payload_factory):

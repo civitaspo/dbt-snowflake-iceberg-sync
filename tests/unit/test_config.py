@@ -65,6 +65,24 @@ def test_select_requires_model_sql(payload_factory):
         parse_config(payload)
 
 
+def test_string_boolean_values_are_coerced(payload_factory):
+    payload = payload_factory(
+        dbt_full_refresh="yes",
+        bigquery__staging_table_reuse="false",
+        bigquery__force_rebuild_staging_table="true",
+        iceberg_table__copy_grants="1",
+        iceberg_table__enable_data_compaction="0",
+    )
+
+    config = parse_config(payload)
+
+    assert config.dbt_full_refresh is True
+    assert config.bigquery.staging_table_reuse is False
+    assert config.bigquery.force_rebuild_staging_table is True
+    assert config.iceberg_table.copy_grants is True
+    assert config.iceberg_table.enable_data_compaction is False
+
+
 def _strategy_config_matrix_cases():
     for export_strategy in ("extract", "select"):
         for predicate_type in (

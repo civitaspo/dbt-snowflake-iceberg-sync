@@ -22,7 +22,7 @@ def create_source_adapter(
     config: IcebergSyncConfig,
     factories: dict[str, SourceAdapterFactory] | None = None,
 ) -> SourceAdapter:
-    registry = factories or default_source_adapter_factories()
+    registry = default_source_adapter_factories() if factories is None else factories
     factory = registry.get(config.source_type)
     if factory is None:
         raise IcebergSyncError(f"unsupported source_type: {config.source_type}")

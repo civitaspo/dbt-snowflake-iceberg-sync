@@ -154,8 +154,11 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         incremental_predicates=tuple(bq_payload.get("incremental_predicates") or ()),
         staging_dataset_id=bq_payload.get("staging_dataset_id"),
         staging_table_expiration_hours=int(bq_payload.get("staging_table_expiration_hours", 24)),
-        staging_table_reuse=bool(bq_payload.get("staging_table_reuse", True)),
-        force_rebuild_staging_table=bool(bq_payload.get("force_rebuild_staging_table", False)),
+        staging_table_reuse=_coerce_bool(bq_payload.get("staging_table_reuse"), True),
+        force_rebuild_staging_table=_coerce_bool(
+            bq_payload.get("force_rebuild_staging_table"),
+            False,
+        ),
     )
 
     iceberg_payload = payload.get("iceberg_table", {})
@@ -172,14 +175,18 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         max_data_extension_time_in_days=_optional_int(
             iceberg_payload.get("max_data_extension_time_in_days")
         ),
-        change_tracking=bool(iceberg_payload.get("change_tracking", True)),
-        copy_grants=bool(iceberg_payload.get("copy_grants", False)),
-        error_logging=bool(iceberg_payload.get("error_logging", False)),
+        change_tracking=_coerce_bool(iceberg_payload.get("change_tracking"), True),
+        copy_grants=_coerce_bool(iceberg_payload.get("copy_grants"), False),
+        error_logging=_coerce_bool(iceberg_payload.get("error_logging"), False),
         iceberg_version=int(iceberg_payload.get("iceberg_version", 3)),
-        enable_iceberg_merge_on_read=bool(
-            iceberg_payload.get("enable_iceberg_merge_on_read", True)
+        enable_iceberg_merge_on_read=_coerce_bool(
+            iceberg_payload.get("enable_iceberg_merge_on_read"),
+            True,
         ),
-        enable_data_compaction=bool(iceberg_payload.get("enable_data_compaction", True)),
+        enable_data_compaction=_coerce_bool(
+            iceberg_payload.get("enable_data_compaction"),
+            True,
+        ),
     )
 
     config = IcebergSyncConfig(
@@ -195,7 +202,7 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         iceberg_table=iceberg_table,
         partition_by=tuple(payload.get("partition_by") or ()),
         cluster_by=tuple(payload.get("cluster_by") or ()),
-        dbt_full_refresh=bool(payload.get("dbt_full_refresh", False)),
+        dbt_full_refresh=_coerce_bool(payload.get("dbt_full_refresh"), False),
     )
     validate_config(config)
     return config
@@ -299,6 +306,20 @@ def _optional_int(value: Any) -> int | None:
     if value in (None, ""):
         return None
     return int(value)
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    return bool(value)
 
 
 def _reject_forbidden_model_config(model_config: Any) -> None:

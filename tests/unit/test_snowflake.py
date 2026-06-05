@@ -58,6 +58,16 @@ def test_parse_stage_location_rejects_too_many_stage_parts():
         parse_stage_location("@A.B.C.D/path")
 
 
+def test_parse_stage_location_rejects_empty_stage_qualifier():
+    with pytest.raises(ConfigError, match="invalid stage name"):
+        parse_stage_location("@A..STAGE/path")
+
+
+def test_parse_stage_location_rejects_empty_quoted_stage_part():
+    with pytest.raises(ConfigError, match="invalid stage name"):
+        parse_stage_location('@DB.""."STAGE"/path')
+
+
 def test_parse_stage_location_supports_one_two_and_three_part_stage_names():
     assert parse_stage_location("@STAGE/path") == ('"STAGE"', "path")
     assert parse_stage_location("@SCHEMA.STAGE/path") == ('"SCHEMA"."STAGE"', "path")

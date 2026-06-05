@@ -427,7 +427,10 @@ class BigQueryRestClient:
             **kwargs,
         )
         if response.status_code >= 400:
-            raise SourceError(f"BigQuery API error {response.status_code}: {response.text}")
+            raise SourceError(
+                f"BigQuery API error {response.status_code}: {response.text}",
+                status_code=response.status_code,
+            )
         return response.json() if response.text else {}
 
 
@@ -456,8 +459,11 @@ def _get_table_or_none(
 ) -> dict[str, Any] | None:
     try:
         return client.get_table(project_id, dataset_id, table_id)
-    except Exception:
-        return None
+    except SourceError as exc:
+        status_code = exc.status_code or getattr(exc, "http_status", None)
+        if status_code == 404:
+            return None
+        raise
 
 
 def _table_has_hash(table: dict[str, Any], expected_hash: str) -> bool:

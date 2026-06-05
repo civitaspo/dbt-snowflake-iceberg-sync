@@ -12,7 +12,7 @@
   CREATE OR REPLACE VIEW {{ target_relation }} AS
   SELECT
   {%- for column in view_columns %}
-    {{ adapter.quote(column['source_name']) }} AS {{ column['alias'] }}{{ "," if not loop.last }}
+    {{ adapter.quote(column['source_name']) }} AS {{ adapter.quote(column['alias'] | upper) }}{{ "," if not loop.last }}
   {%- endfor %}
   FROM {{ internal_relation }}
 {%- endmacro %}

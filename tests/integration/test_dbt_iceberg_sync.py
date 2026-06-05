@@ -347,10 +347,7 @@ def test_dbt_select_query_export(tmp_path: Path):
             model_sql=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_SQL"),
             predicates=case["predicates"],
             predicate_type=str(case["predicate_type"]),
-            table_id=os.environ.get(
-                "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_TABLE_ID",
-                "select_query_source",
-            ),
+            table_id=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_TABLE_ID"),
             staging_dataset_id=_required_env(
                 "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_STAGING_DATASET_ID"
             ),
@@ -1209,6 +1206,11 @@ def _run_dbt_expect_failure(
 def _required_env(name: str) -> str:
     value = os.environ.get(name)
     if not value:
+        if os.environ.get("DBT_SNOWFLAKE_ICEBERG_SYNC_RUN_INTEGRATION") == "1":
+            pytest.fail(
+                f"{name} is required when "
+                "DBT_SNOWFLAKE_ICEBERG_SYNC_RUN_INTEGRATION=1"
+            )
         pytest.skip(f"{name} is required for integration tests")
     return value
 
