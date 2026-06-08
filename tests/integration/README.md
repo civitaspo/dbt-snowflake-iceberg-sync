@@ -13,6 +13,7 @@ uv run pytest -m integration
 The integration suite contains separate tests for:
 
 - concrete non-partitioned BigQuery extract with `auto` and explicit `none`
+- native BigQuery `DATETIME` extract mapped to Snowflake `TIMESTAMP_NTZ(6)`
 - native time-partitioned extract with `auto` and explicit partition decorators
 - native integer range-partitioned extract with `auto` and explicit partition decorators
 - sharded table extract with all-shard and suffix-filtered plans

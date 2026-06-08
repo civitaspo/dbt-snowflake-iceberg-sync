@@ -37,6 +37,17 @@ def test_create_iceberg_table_renders_managed_iceberg_options(base_payload):
     assert '"OrderID" BIGINT NOT NULL' in sql
 
 
+def test_create_iceberg_table_renders_datetime_column(base_payload):
+    config = parse_config(base_payload)
+
+    sql = create_iceberg_table_sql(
+        config,
+        [SnowflakeColumn("some_datetime", "TIMESTAMP_NTZ(6)")],
+    )
+
+    assert '"some_datetime" TIMESTAMP_NTZ(6)' in sql
+
+
 def test_create_view_preserves_source_case_and_aliases_lower_snake(base_payload):
     config = parse_config(base_payload)
 
