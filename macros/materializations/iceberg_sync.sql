@@ -27,14 +27,6 @@
         procedure_result.get('error_message', 'procedure failed')
       ) -%}
     {%- endif -%}
-    {%- set internal_relation = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_payload(
-      procedure_result['internal_relation'], 'table'
-    ) -%}
-    {%- call statement('main') -%}
-      {{ dbt_snowflake_iceberg_sync.iceberg_sync_create_view_sql(
-        this, internal_relation, procedure_result['view_columns']
-      ) }}
-    {%- endcall -%}
   {%- endif -%}
 
   {{ return({'relations': [this]}) }}

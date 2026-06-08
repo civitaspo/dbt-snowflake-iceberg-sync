@@ -18,6 +18,8 @@ def test_run_log_payload_contains_required_fields(base_payload):
         source_job_references=[{"jobId": "job-1"}],
         staging_table_reference=None,
         snowflake_query_ids=["query-1"],
+        retry={"max_attempts": 3, "attempts": 1, "retryable_errors": []},
+        cleanup={"created_internal_table": True},
         status="success",
         error_message=None,
         started_at=now,
@@ -28,3 +30,5 @@ def test_run_log_payload_contains_required_fields(base_payload):
     assert payload["target_view"] == '"ANALYTICS"."PUBLIC"."ORDERS"'
     assert payload["internal_iceberg_table"] == '"ANALYTICS"."PUBLIC"."__ORDERS"'
     assert payload["source_job_references"] == [{"jobId": "job-1"}]
+    assert payload["retry"]["attempts"] == 1
+    assert payload["cleanup"]["created_internal_table"] is True

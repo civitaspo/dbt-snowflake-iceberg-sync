@@ -22,6 +22,9 @@ The integration suite contains separate tests for:
 - incremental `delete+copy` over three dbt runs: create, incremental, repeat
 - invalid parameter combinations that must fail at the dbt/procedure boundary
 
+Mocked procedure-level retry and failed-initial-run cleanup behavior is covered
+by unit tests, not the live integration suite.
+
 Fixture tables are supplied by environment variables. The tests create temporary
 Snowflake procedures, views, Iceberg tables, run logs, BigQuery extract jobs, and
 GCS files, but they do not create or delete the BigQuery fixture tables. See the

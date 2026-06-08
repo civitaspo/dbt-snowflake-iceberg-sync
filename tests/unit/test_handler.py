@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from procedure.errors import SchemaError, SnowflakeExecutionError, SourceError
-from procedure.handler import IcebergSyncRunner
+from procedure.errors import ConfigError, SchemaError, SnowflakeExecutionError, SourceError
+from procedure.handler import IcebergSyncRunner, is_retryable_snowflake_error
 from procedure.schema import SnowflakeColumn
 from procedure.sources.base import SourceExecutionContext, SourceExportResult
 
@@ -13,14 +13,22 @@ class FakeSnowflake:
         self,
         *,
         table_exists=False,
+        target_view_exists=False,
         fail_copy=False,
         fail_delete=False,
+        fail_create_view=False,
+        fail_drop=False,
+        copy_errors=None,
         existing_columns=None,
     ):
         self.query_ids = []
         self.table_exists_value = table_exists
+        self.target_view_exists_value = target_view_exists
         self.fail_copy = fail_copy
         self.fail_delete = fail_delete
+        self.fail_create_view = fail_create_view
+        self.fail_drop = fail_drop
+        self.copy_errors = list(copy_errors or [])
         self.existing_columns = existing_columns or [SnowflakeColumn("OrderID", "BIGINT")]
         self.calls = []
         self.run_logs = []
@@ -30,6 +38,12 @@ class FakeSnowflake:
 
     def table_exists(self, relation):
         self.calls.append(("table_exists", relation.identifier))
+        return self.table_exists_value
+
+    def relation_exists(self, relation, *, expected_type=None):
+        self.calls.append(("relation_exists", relation.identifier, expected_type))
+        if expected_type == "VIEW":
+            return self.target_view_exists_value
         return self.table_exists_value
 
     def resolve_stage_location(self, export_location, run_id):
@@ -43,6 +57,11 @@ class FakeSnowflake:
 
     def create_iceberg_table(self, config, columns):
         self.calls.append(("create_iceberg_table", [column.source_name for column in columns]))
+
+    def drop_iceberg_table(self, relation):
+        self.calls.append(("drop_iceberg_table", relation.identifier))
+        if self.fail_drop:
+            raise SnowflakeExecutionError("drop failed")
 
     def describe_table(self, relation):
         self.calls.append(("describe_table", relation.identifier))
@@ -61,6 +80,8 @@ class FakeSnowflake:
 
     def copy_into_iceberg(self, relation, stage_run_location):
         self.calls.append(("copy", stage_run_location))
+        if self.copy_errors:
+            raise self.copy_errors.pop(0)
         if self.fail_copy:
             raise SnowflakeExecutionError("copy failed")
 
@@ -69,6 +90,13 @@ class FakeSnowflake:
 
     def rollback(self):
         self.calls.append(("rollback",))
+
+    def create_or_replace_view(self, target, internal, columns):
+        self.calls.append(
+            ("create_or_replace_view", target.identifier, [column.alias for column in columns])
+        )
+        if self.fail_create_view:
+            raise SnowflakeExecutionError("view creation failed")
 
     def write_run_log(self, relation, payload):
         self.calls.append(("write_run_log", payload["status"]))
@@ -103,7 +131,7 @@ class FakeSource:
 
 
 def test_handler_full_refresh_success(base_payload):
-    snowflake = FakeSnowflake(table_exists=False)
+    snowflake = FakeSnowflake(table_exists=False, target_view_exists=False)
     source = FakeSource()
 
     result = IcebergSyncRunner(
@@ -117,7 +145,10 @@ def test_handler_full_refresh_success(base_payload):
     assert result["view_columns"] == [{"source_name": "OrderID", "alias": "order_id"}]
     assert ("delete", None) in snowflake.calls
     assert ("commit",) in snowflake.calls
+    assert ("create_or_replace_view", "ORDERS", ["order_id"]) in snowflake.calls
     assert ("write_run_log", "success") in snowflake.calls
+    assert result["retry"]["attempts"] == 1
+    assert result["cleanup"]["created_internal_table"] is True
 
 
 def test_handler_incremental_uses_incremental_predicate(payload_factory):
@@ -125,7 +156,7 @@ def test_handler_incremental_uses_incremental_predicate(payload_factory):
         incremental_predicate="event_date >= '2026-01-01'",
         bigquery__incremental_predicates=["_PARTITIONDATE >= '2026-01-01'"],
     )
-    snowflake = FakeSnowflake(table_exists=True)
+    snowflake = FakeSnowflake(table_exists=True, target_view_exists=True)
 
     IcebergSyncRunner(
         object(),
@@ -137,7 +168,7 @@ def test_handler_incremental_uses_incremental_predicate(payload_factory):
 
 
 def test_handler_existing_table_allows_additive_columns(base_payload):
-    snowflake = FakeSnowflake(table_exists=True)
+    snowflake = FakeSnowflake(table_exists=True, target_view_exists=True)
     source = FakeSource(
         columns=[
             SnowflakeColumn("OrderID", "BIGINT"),
@@ -159,6 +190,7 @@ def test_handler_existing_table_allows_additive_columns(base_payload):
 def test_handler_existing_table_rejects_schema_change(base_payload):
     snowflake = FakeSnowflake(
         table_exists=True,
+        target_view_exists=True,
         existing_columns=[SnowflakeColumn("OrderID", "VARCHAR")],
     )
 
@@ -243,6 +275,181 @@ def test_handler_rolls_back_transaction_on_delete_failure(base_payload):
     assert ("rollback",) in snowflake.calls
     assert ("commit",) not in snowflake.calls
     assert ("write_run_log", "failure") in snowflake.calls
+
+
+def test_retryable_snowflake_internal_error_retries_and_succeeds(payload_factory):
+    payload = payload_factory(
+        retry__initial_delay_seconds=0,
+        retry__jitter_seconds=0,
+    )
+    snowflake = FakeSnowflake(
+        table_exists=False,
+        copy_errors=[
+            SnowflakeExecutionError("SQL execution internal error: incident 123")
+        ],
+    )
+    source = FakeSource()
+
+    result = IcebergSyncRunner(
+        object(),
+        snowflake_client=snowflake,
+        source_adapters={"bigquery": source},
+        sleep_func=lambda seconds: None,
+        jitter_func=lambda start, end: 0,
+    ).run(payload)
+
+    assert result["status"] == "success"
+    assert result["retry"]["attempts"] == 2
+    assert result["retry"]["retryable_errors"][0]["attempt"] == 1
+    assert result["retry"]["retryable_errors"][0]["rolled_back"] is True
+    assert snowflake.calls.count(("rollback",)) == 1
+    assert snowflake.calls.count(("begin",)) == 2
+    assert [call for call in source.calls if call[0] == "full_refresh"] == [
+        ("full_refresh", "gcs://bucket/dbt/run")
+    ]
+    assert (
+        snowflake.calls.count(("copy", '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/dbt/run'))
+        == 2
+    )
+
+
+def test_retryable_snowflake_internal_error_messages_are_classified():
+    assert is_retryable_snowflake_error(
+        SnowflakeExecutionError("SQL execution internal error while loading table")
+    )
+    assert is_retryable_snowflake_error(
+        SnowflakeExecutionError("Processing aborted; incident 42")
+    )
+    assert not is_retryable_snowflake_error(
+        SnowflakeExecutionError("000603 XX000 300005")
+    )
+    assert not is_retryable_snowflake_error(ConfigError("invalid config"))
+
+
+def test_non_retryable_snowflake_error_is_not_retried(base_payload):
+    snowflake = FakeSnowflake(
+        table_exists=False,
+        copy_errors=[SnowflakeExecutionError("insufficient privileges to operate on table")],
+    )
+
+    with pytest.raises(SnowflakeExecutionError, match="insufficient privileges"):
+        IcebergSyncRunner(
+            object(),
+            snowflake_client=snowflake,
+            source_adapters={"bigquery": FakeSource()},
+            sleep_func=lambda seconds: None,
+        ).run(base_payload)
+
+    assert snowflake.calls.count(("begin",)) == 1
+    assert snowflake.calls.count(("rollback",)) == 1
+    assert snowflake.run_logs[-1]["retry"]["retryable_errors"] == []
+
+
+def test_retry_exhaustion_raises_original_error_and_logs_history(payload_factory):
+    payload = payload_factory(
+        retry__max_attempts=2,
+        retry__initial_delay_seconds=0,
+        retry__jitter_seconds=0,
+    )
+    error = SnowflakeExecutionError("SQL execution internal error incident")
+    snowflake = FakeSnowflake(table_exists=False, copy_errors=[error, error])
+
+    with pytest.raises(SnowflakeExecutionError, match="internal error"):
+        IcebergSyncRunner(
+            object(),
+            snowflake_client=snowflake,
+            source_adapters={"bigquery": FakeSource()},
+            sleep_func=lambda seconds: None,
+            jitter_func=lambda start, end: 0,
+        ).run(payload)
+
+    assert snowflake.calls.count(("begin",)) == 2
+    assert snowflake.calls.count(("rollback",)) == 2
+    assert snowflake.run_logs[-1]["retry"]["attempts"] == 2
+    assert len(snowflake.run_logs[-1]["retry"]["retryable_errors"]) == 2
+
+
+def test_config_schema_and_source_errors_are_not_retried(base_payload):
+    for exc in (
+        SchemaError("schema failed"),
+        SourceError("permission denied", status_code=403),
+    ):
+        snowflake = FakeSnowflake(table_exists=False)
+        source = FakeSource()
+
+        def fail_map_schema(export_result, exc=exc):
+            raise exc
+
+        source.map_schema = fail_map_schema
+
+        with pytest.raises(type(exc)):
+            IcebergSyncRunner(
+                object(),
+                snowflake_client=snowflake,
+                source_adapters={"bigquery": source},
+                sleep_func=lambda seconds: None,
+            ).run(base_payload)
+
+        assert ("begin",) not in snowflake.calls
+        assert snowflake.run_logs[-1]["retry"]["attempts"] == 0
+
+
+def test_created_internal_table_is_dropped_on_failed_initial_run(base_payload):
+    snowflake = FakeSnowflake(table_exists=False, fail_copy=True)
+
+    with pytest.raises(SnowflakeExecutionError, match="copy failed"):
+        IcebergSyncRunner(
+            object(),
+            snowflake_client=snowflake,
+            source_adapters={"bigquery": FakeSource()},
+        ).run(base_payload)
+
+    assert ("drop_iceberg_table", "__ORDERS") in snowflake.calls
+    assert snowflake.run_logs[-1]["cleanup"]["created_internal_table"] is True
+    assert snowflake.run_logs[-1]["cleanup"]["dropped_created_internal_table"] is True
+
+
+def test_preexisting_internal_table_is_not_dropped_on_failure(base_payload):
+    snowflake = FakeSnowflake(table_exists=True, target_view_exists=True, fail_copy=True)
+
+    with pytest.raises(SnowflakeExecutionError, match="copy failed"):
+        IcebergSyncRunner(
+            object(),
+            snowflake_client=snowflake,
+            source_adapters={"bigquery": FakeSource()},
+        ).run(base_payload)
+
+    assert not any(call[0] == "drop_iceberg_table" for call in snowflake.calls)
+    assert snowflake.run_logs[-1]["cleanup"]["created_internal_table"] is False
+
+
+def test_view_creation_failure_drops_new_internal_table(base_payload):
+    snowflake = FakeSnowflake(table_exists=False, fail_create_view=True)
+
+    with pytest.raises(SnowflakeExecutionError, match="view creation failed"):
+        IcebergSyncRunner(
+            object(),
+            snowflake_client=snowflake,
+            source_adapters={"bigquery": FakeSource()},
+        ).run(base_payload)
+
+    assert ("commit",) in snowflake.calls
+    assert ("drop_iceberg_table", "__ORDERS") in snowflake.calls
+    assert snowflake.run_logs[-1]["cleanup"]["dropped_created_internal_table"] is True
+
+
+def test_cleanup_failure_preserves_original_error_and_logs_cleanup_failure(base_payload):
+    snowflake = FakeSnowflake(table_exists=False, fail_copy=True, fail_drop=True)
+
+    with pytest.raises(SnowflakeExecutionError, match="copy failed"):
+        IcebergSyncRunner(
+            object(),
+            snowflake_client=snowflake,
+            source_adapters={"bigquery": FakeSource()},
+        ).run(base_payload)
+
+    assert snowflake.run_logs[-1]["error_message"] == "SnowflakeExecutionError: copy failed"
+    assert "drop failed" in snowflake.run_logs[-1]["cleanup"]["cleanup_error_message"]
 
 
 def test_handler_skips_run_log_when_run_log_table_is_not_configured(payload_factory):

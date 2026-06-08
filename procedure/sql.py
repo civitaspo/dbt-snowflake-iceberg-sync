@@ -78,6 +78,10 @@ SELECT
 FROM {relation_sql(internal)}"""
 
 
+def drop_iceberg_table_sql(relation: RelationConfig) -> str:
+    return f"DROP ICEBERG TABLE IF EXISTS {relation_sql(relation)}"
+
+
 def quote_view_alias(alias: str) -> str:
     return quote_identifier(alias.upper())
 
@@ -100,11 +104,20 @@ def create_run_log_table_sql(relation: RelationConfig) -> str:
   source_job_references VARIANT,
   staging_table_reference VARCHAR,
   snowflake_query_ids VARIANT,
+  retry VARIANT,
+  cleanup VARIANT,
   status VARCHAR,
   error_message VARCHAR,
   started_at TIMESTAMP_LTZ,
   finished_at TIMESTAMP_LTZ
 )"""
+
+
+def alter_run_log_table_sql(relation: RelationConfig) -> list[str]:
+    return [
+        f"ALTER TABLE {relation_sql(relation)} ADD COLUMN IF NOT EXISTS retry VARIANT",
+        f"ALTER TABLE {relation_sql(relation)} ADD COLUMN IF NOT EXISTS cleanup VARIANT",
+    ]
 
 
 def insert_run_log_sql(relation: RelationConfig, payload: dict[str, Any]) -> str:
@@ -133,6 +146,8 @@ def insert_run_log_sql(relation: RelationConfig, payload: dict[str, Any]) -> str
   source_job_references,
   staging_table_reference,
   snowflake_query_ids,
+  retry,
+  cleanup,
   status,
   error_message,
   started_at,
@@ -151,6 +166,8 @@ SELECT
   {json_value("source_job_references")},
   {value("staging_table_reference")},
   {json_value("snowflake_query_ids")},
+  {json_value("retry")},
+  {json_value("cleanup")},
   {value("status")},
   {value("error_message")},
   TO_TIMESTAMP_LTZ({value("started_at")}),
