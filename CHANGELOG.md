@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.1 - 2026-06-08
+
+### Changed
+
+- Documented materialization option requirements by common, Iceberg table, and
+  BigQuery source option groups.
+- Normalized package-managed Snowflake object identifiers to uppercase for
+  unquoted-identifier compatibility.
+- Preserved BigQuery and Parquet source column case for
+  `MATCH_BY_COLUMN_NAME = CASE_SENSITIVE` loads.
+
 ## 0.1.0 - 2026-06-07
 
 ### Added
