@@ -15,7 +15,7 @@ def test_iceberg_sync_dbt_run_executes_procedure_as_main_statement(
     tmp_path: Path,
     monkeypatch,
 ):
-    executed_sql = _run_dbt_iceberg_sync_model(
+    run_result, executed_sql = _run_dbt_iceberg_sync_model(
         tmp_path,
         monkeypatch,
         {"status": "success"},
@@ -25,6 +25,7 @@ def test_iceberg_sync_dbt_run_executes_procedure_as_main_statement(
         call for call in executed_sql if _normalize_sql(call["sql"]).startswith("call ")
     ]
 
+    assert run_result.success
     assert len(call_statements) == 1
     assert call_statements[0]["fetch"] is True
     assert call_statements[0]["auto_begin"] is True
@@ -34,15 +35,15 @@ def test_iceberg_sync_dbt_run_surfaces_procedure_failure(
     tmp_path: Path,
     monkeypatch,
 ):
-    result = _run_dbt_iceberg_sync_model(
+    run_result, _ = _run_dbt_iceberg_sync_model(
         tmp_path,
         monkeypatch,
         {"status": "failure", "error_message": "procedure exploded"},
-        expect_success=False,
     )
 
-    message = result.result.results[0].message
+    message = run_result.result.results[0].message
 
+    assert not run_result.success
     assert "procedure exploded" in message
     assert "main is not being called during running model" not in message
 
@@ -51,8 +52,6 @@ def _run_dbt_iceberg_sync_model(
     tmp_path: Path,
     monkeypatch,
     procedure_result: dict[str, object],
-    *,
-    expect_success: bool = True,
 ):
     repo_root = Path(__file__).resolve().parents[2]
     project_dir = tmp_path / "project"
@@ -178,10 +177,7 @@ def _run_dbt_iceberg_sync_model(
         ]
     )
 
-    assert run_result.success is expect_success
-    if expect_success:
-        return executed_sql
-    return run_result
+    return run_result, executed_sql
 
 
 def _show_objects_table() -> agate.Table:
