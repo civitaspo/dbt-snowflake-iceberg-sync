@@ -79,6 +79,59 @@ def test_dbt_extract_smoke(tmp_path: Path):
         _cleanup(context, [model_name])
 
 
+def test_dbt_extract_datetime(tmp_path: Path):
+    context = _integration_context(tmp_path, "datetime")
+    model_name = f"iceberg_sync_datetime_{context.run_id}"
+    export_prefix = _export_prefix(context, model_name)
+    models = {
+        model_name: _extract_model_sql(
+            context,
+            model_name=model_name,
+            table_id=_required_env(
+                "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATETIME_TABLE_ID"
+            ),
+            export_predicate_type="none",
+            base_location=export_prefix,
+            export_prefix=export_prefix,
+        )
+    }
+
+    _write_project(context, models)
+    try:
+        _run_dbt(context, "deps")
+        _run_dbt(context, "run", "--select", model_name)
+        _assert_models(
+            context,
+            [
+                _assertion(
+                    context,
+                    model_name,
+                    expected_rows=_required_int_env(
+                        "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATETIME_EXPECTED_ROWS"
+                    ),
+                    expected_modes=["full_refresh"],
+                    expected_source_job_reference_counts=[1],
+                    expected_column_types=[
+                        {
+                            "name": "occurred_datetime",
+                            "type": "TIMESTAMP_NTZ(6)",
+                        }
+                    ],
+                    expected_view_values={
+                        "column": "occurred_datetime",
+                        "values": sorted(
+                            _required_env_list(
+                                "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATETIME_EXPECTED_VALUES"
+                            )
+                        ),
+                    },
+                )
+            ],
+        )
+    finally:
+        _cleanup(context, [model_name])
+
+
 def test_dbt_extract_modes(tmp_path: Path):
     context = _integration_context(tmp_path, "extract_modes")
     cases = [
@@ -959,6 +1012,8 @@ def _assertion(
     expected_modes: list[str],
     require_staging_table: bool = False,
     expected_source_job_reference_counts: list[int] | None = None,
+    expected_column_types: list[dict[str, str]] | None = None,
+    expected_view_values: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "view_relation": _unquoted_relation(
@@ -980,6 +1035,8 @@ def _assertion(
         "expected_modes": expected_modes,
         "require_staging_table": require_staging_table,
         "expected_source_job_reference_counts": expected_source_job_reference_counts,
+        "expected_column_types": expected_column_types,
+        "expected_view_values": expected_view_values,
     }
 
 
@@ -1122,6 +1179,55 @@ def _assertion_macros() -> str:
                   {{ model['view_relation'] }} expected source job reference counts
                   {{ model.get('expected_source_job_reference_counts') }},
                   got {{ actual_job_counts }}
+                {% endset %}
+                {{ exceptions.raise_compiler_error(message) }}
+              {% endif %}
+            {% endif %}
+
+            {% if model.get('expected_column_types') is not none %}
+              {% set describe_sql %}
+                describe table {{ model['internal_relation'] }}
+              {% endset %}
+              {% set describe_rows = run_query(describe_sql) %}
+              {% set actual_column_types = {} %}
+              {% for row in describe_rows.rows %}
+                {% do actual_column_types.update({
+                  (row[0] | string | lower): (row[1] | string | upper)
+                }) %}
+              {% endfor %}
+              {% for expected in model.get('expected_column_types') %}
+                {% set actual_type = actual_column_types.get(expected['name'] | lower) %}
+                {% if actual_type != (expected['type'] | upper) %}
+                  {% set message %}
+                    {{ model['internal_relation'] }} expected column
+                    {{ expected['name'] }} type {{ expected['type'] }},
+                    got {{ actual_type }}
+                  {% endset %}
+                  {{ exceptions.raise_compiler_error(message) }}
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+
+            {% if model.get('expected_view_values') is not none %}
+              {% set value_config = model.get('expected_view_values') %}
+              {% set value_sql %}
+                select to_varchar(
+                  "{{ value_config['column'] | upper }}",
+                  'YYYY-MM-DD HH24:MI:SS.FF6'
+                ) as value
+                from {{ model['view_relation'] }}
+                order by value
+              {% endset %}
+              {% set value_rows = run_query(value_sql) %}
+              {% set actual_values = [] %}
+              {% for row in value_rows.rows %}
+                {% do actual_values.append(row[0]) %}
+              {% endfor %}
+              {% if actual_values != value_config.get('values') %}
+                {% set message %}
+                  {{ model['view_relation'] }} expected
+                  {{ value_config.get('values') }} for {{ value_config['column'] }},
+                  got {{ actual_values }}
                 {% endset %}
                 {{ exceptions.raise_compiler_error(message) }}
               {% endif %}

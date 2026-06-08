@@ -16,6 +16,7 @@ def test_maps_supported_bigquery_scalars():
         [
             {"name": "OrderID", "type": "INT64", "mode": "REQUIRED"},
             {"name": "CustomerName", "type": "STRING"},
+            {"name": "OrderDateTime", "type": "DATETIME"},
             {"name": "CreatedAt", "type": "TIMESTAMP"},
             {"name": "Amount", "type": "NUMERIC"},
         ]
@@ -24,10 +25,20 @@ def test_maps_supported_bigquery_scalars():
     assert [column.snowflake_type for column in columns] == [
         "BIGINT",
         "VARCHAR",
+        "TIMESTAMP_NTZ(6)",
         "TIMESTAMP_LTZ(6)",
         "NUMBER(38,9)",
     ]
     assert columns[0].nullable is False
+
+
+def test_maps_required_bigquery_datetime_to_not_null_ddl():
+    columns = map_bigquery_schema(
+        [{"name": "some_datetime", "type": "DATETIME", "mode": "REQUIRED"}]
+    )
+
+    assert columns[0].snowflake_type == "TIMESTAMP_NTZ(6)"
+    assert columns[0].ddl == '"some_datetime" TIMESTAMP_NTZ(6) NOT NULL'
 
 
 def test_maps_nested_record_to_structured_object():
@@ -67,7 +78,9 @@ def test_maps_repeated_record_to_structured_array():
     assert '"Sku" VARCHAR' in columns[0].snowflake_type
 
 
-@pytest.mark.parametrize("field_type", ["BIGNUMERIC", "JSON", "GEOGRAPHY", "TIME"])
+@pytest.mark.parametrize(
+    "field_type", ["BIGNUMERIC", "BIGDECIMAL", "JSON", "GEOGRAPHY", "TIME"]
+)
 def test_rejects_unsupported_type(field_type):
     with pytest.raises(SchemaError, match=field_type):
         map_bigquery_schema([{"name": "UnsupportedField", "type": field_type}])
@@ -134,6 +147,13 @@ def test_schema_compatibility_treats_double_describe_type_as_equivalent():
     )
 
 
+def test_schema_compatibility_accepts_unchanged_datetime_mapping():
+    validate_schema_compatibility(
+        [SnowflakeColumn("OccurredDateTime", "TIMESTAMP_NTZ(6)")],
+        [SnowflakeColumn("OccurredDateTime", "TIMESTAMP_NTZ(6)")],
+    )
+
+
 def test_schema_compatibility_normalizes_structured_type_field_names():
     validate_schema_compatibility(
         [
@@ -154,6 +174,14 @@ def test_schema_compatibility_normalizes_structured_type_field_names():
 def test_schema_compatibility_rejects_type_change():
     existing = [SnowflakeColumn("OrderID", "BIGINT")]
     desired = [SnowflakeColumn("OrderID", "VARCHAR")]
+
+    with pytest.raises(SchemaError, match="incompatible type change"):
+        validate_schema_compatibility(existing, desired)
+
+
+def test_schema_compatibility_rejects_change_to_datetime_mapping():
+    existing = [SnowflakeColumn("OccurredDateTime", "TIMESTAMP_LTZ(6)")]
+    desired = map_bigquery_schema([{"name": "OccurredDateTime", "type": "DATETIME"}])
 
     with pytest.raises(SchemaError, match="incompatible type change"):
         validate_schema_compatibility(existing, desired)

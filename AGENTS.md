@@ -52,6 +52,7 @@ complete environment variable list.
 The integration suite should cover more than a happy path. Keep coverage for:
 
 - non-partitioned BigQuery extract
+- BigQuery `DATETIME` extract mapped to Snowflake `TIMESTAMP_NTZ(6)`
 - time-partitioned extract through partition decorators
 - integer range-partitioned extract through partition decorators
 - sharded BigQuery extract through wildcard and table suffix plans
