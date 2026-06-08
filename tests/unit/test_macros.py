@@ -58,6 +58,31 @@ def test_identifier_macros_normalize_snowflake_object_identifiers():
     assert rendered.strip() == "ORDERS"
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (' "orders" ', '"ORDERS"'),
+        ('my"stage', '"MY""STAGE"'),
+        ('"my""stage"', '"MY""STAGE"'),
+    ],
+)
+def test_quote_object_identifier_macro_escapes_embedded_quotes(value: str, expected: str):
+    macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/identifiers.sql"
+    template = Environment(extensions=["jinja2.ext.do"]).from_string(
+        macro_path.read_text(encoding="utf-8")
+        + "\n{{ iceberg_sync_quote_object_identifier(value) }}"
+    )
+
+    rendered = template.render(
+        {
+            "value": value,
+            "return": lambda item: item,
+        }
+    )
+
+    assert rendered.strip() == expected
+
+
 def test_internal_identifier_macro_normalizes_to_unquoted_snowflake_form():
     macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/identifiers.sql"
     template = Environment(extensions=["jinja2.ext.do"]).from_string(
@@ -163,6 +188,24 @@ def test_deployment_config_honors_explicit_stage_and_run_log_table():
 
 
 @pytest.mark.parametrize(
+    "handler_stage",
+    [
+        'db.schema.my"stage',
+        '"db"."schema"."my""stage"',
+    ],
+)
+def test_deployment_config_escapes_quotes_in_stage_identifiers(handler_stage: str):
+    config = _render_deployment_config(
+        {
+            **_minimal_deployment_vars(),
+            "handler_stage": handler_stage,
+        }
+    )
+
+    assert config["handler_stage"] == '"DB"."SCHEMA"."MY""STAGE"'
+
+
+@pytest.mark.parametrize(
     "missing_key",
     ["handler_local_path", "google_cloud_service_account_secret_fqdn"],
 )
@@ -235,7 +278,10 @@ def _normalize_object_identifier(value: object) -> str:
 
 
 def _quote_object_identifier(value: object) -> str:
-    return '"' + _normalize_object_identifier(value).replace('"', '""') + '"'
+    identifier = str(value).strip()
+    if len(identifier) >= 2 and identifier[0] == '"' and identifier[-1] == '"':
+        identifier = identifier[1:-1].replace('""', '"')
+    return '"' + identifier.upper().replace('"', '""') + '"'
 
 
 def _object_fqn(
@@ -249,10 +295,9 @@ def _object_fqn(
         raise RuntimeError(
             f"{field_name} must have between {min_parts} and {max_parts} parts"
         )
-    normalized_parts = [_normalize_object_identifier(part) for part in parts]
-    if any(not part for part in normalized_parts):
+    if any(not str(part).strip() for part in parts):
         raise RuntimeError(f"{field_name} contains an empty identifier")
-    return ".".join(_quote_object_identifier(part) for part in normalized_parts)
+    return ".".join(_quote_object_identifier(part) for part in parts)
 
 
 def _relation_from_fqn(value: object, field_name: str) -> dict[str, str]:
