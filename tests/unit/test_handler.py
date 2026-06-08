@@ -151,7 +151,7 @@ def test_handler_existing_table_allows_additive_columns(base_payload):
         source_adapters={"bigquery": source},
     ).run(base_payload)
 
-    assert ("describe_table", "__orders") in snowflake.calls
+    assert ("describe_table", "__ORDERS") in snowflake.calls
     assert ("add_columns", ["CustomerName"]) in snowflake.calls
     assert ("commit",) in snowflake.calls
 

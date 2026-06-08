@@ -28,12 +28,13 @@ def test_create_iceberg_table_renders_managed_iceberg_options(base_payload):
         [SnowflakeColumn("OrderID", "BIGINT", nullable=False)],
     )
 
-    assert 'CREATE ICEBERG TABLE IF NOT EXISTS "ANALYTICS"."PUBLIC"."__orders"' in sql
+    assert 'CREATE ICEBERG TABLE IF NOT EXISTS "ANALYTICS"."PUBLIC"."__ORDERS"' in sql
     assert "EXTERNAL_VOLUME = 'ICEBERG_EXTERNAL_VOLUME'" in sql
     assert "CATALOG = 'SNOWFLAKE'" in sql
     assert "STORAGE_SERIALIZATION_POLICY = COMPATIBLE" in sql
     assert "ERROR_LOGGING = FALSE" in sql
     assert "ENABLE_DATA_COMPACTION = TRUE" in sql
+    assert '"OrderID" BIGINT NOT NULL' in sql
 
 
 def test_create_view_preserves_source_case_and_aliases_lower_snake(base_payload):
@@ -46,7 +47,7 @@ def test_create_view_preserves_source_case_and_aliases_lower_snake(base_payload)
     )
 
     assert 'SELECT\n  "OrderID" AS "ORDER_ID"' in sql
-    assert 'FROM "ANALYTICS"."PUBLIC"."__orders"' in sql
+    assert 'FROM "ANALYTICS"."PUBLIC"."__ORDERS"' in sql
 
 
 def test_quote_view_alias_preserves_snowflake_unquoted_folding():

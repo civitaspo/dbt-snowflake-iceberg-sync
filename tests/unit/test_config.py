@@ -11,8 +11,44 @@ def test_parse_config_defaults(base_payload):
 
     assert config.source_type == "bigquery"
     assert config.bigquery.export_strategy == "extract"
-    assert config.internal_relation.identifier == "__orders"
+    assert config.target_relation.identifier == "ORDERS"
+    assert config.internal_relation.identifier == "__ORDERS"
     assert config.iceberg_table.external_volume == "ICEBERG_EXTERNAL_VOLUME"
+
+
+def test_parse_config_normalizes_only_snowflake_object_identifiers(payload_factory):
+    payload = payload_factory(
+        target_relation__database="analytics",
+        target_relation__schema="public",
+        target_relation__identifier="orders",
+        internal_relation__database="analytics",
+        internal_relation__schema="public",
+        internal_relation__identifier="__orders",
+        deployment__procedure_database="analytics",
+        deployment__procedure_schema="util",
+        deployment__procedure_name="iceberg_sync",
+        deployment__run_log_table={
+            "database": "analytics",
+            "schema": "util",
+            "identifier": "iceberg_sync_run_log",
+        },
+        bigquery__project_id="my-project",
+        bigquery__dataset_id="mixed_Case_dataset",
+        bigquery__table_id="Events_*",
+    )
+
+    config = parse_config(payload)
+
+    assert config.target_relation.fqn == "ANALYTICS.PUBLIC.ORDERS"
+    assert config.internal_relation.fqn == "ANALYTICS.PUBLIC.__ORDERS"
+    assert config.deployment.procedure_database == "ANALYTICS"
+    assert config.deployment.procedure_schema == "UTIL"
+    assert config.deployment.procedure_name == "ICEBERG_SYNC"
+    assert config.deployment.run_log_table is not None
+    assert config.deployment.run_log_table.fqn == "ANALYTICS.UTIL.ICEBERG_SYNC_RUN_LOG"
+    assert config.bigquery.project_id == "my-project"
+    assert config.bigquery.dataset_id == "mixed_Case_dataset"
+    assert config.bigquery.table_id == "Events_*"
 
 
 @pytest.mark.parametrize(

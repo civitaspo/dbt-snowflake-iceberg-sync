@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .errors import ConfigError
+from .utils import normalize_snowflake_object_identifier
 
 SUPPORTED_SOURCE_TYPES = {"bigquery"}
 MATERIALIZATION_STRATEGIES = {"full_refresh", "incremental"}
@@ -132,9 +133,11 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
 
     deployment_payload = payload.get("deployment", {})
     deployment = DeploymentConfig(
-        procedure_database=deployment_payload.get("procedure_database"),
-        procedure_schema=deployment_payload.get("procedure_schema"),
-        procedure_name=deployment_payload.get("procedure_name"),
+        procedure_database=_optional_object_identifier(
+            deployment_payload.get("procedure_database")
+        ),
+        procedure_schema=_optional_object_identifier(deployment_payload.get("procedure_schema")),
+        procedure_name=_optional_object_identifier(deployment_payload.get("procedure_name")),
         run_log_table=_optional_relation(deployment_payload.get("run_log_table"), "run_log_table"),
         google_cloud_service_account_secret_alias=deployment_payload.get(
             "google_cloud_service_account_secret_alias"
@@ -278,9 +281,15 @@ def _relation(value: Any, field_name: str) -> RelationConfig:
     if not isinstance(value, dict):
         raise ConfigError(f"{field_name} must be an object")
     return RelationConfig(
-        database=_required(value, "database", f"{field_name}.database"),
-        schema=_required(value, "schema", f"{field_name}.schema"),
-        identifier=_required(value, "identifier", f"{field_name}.identifier"),
+        database=normalize_snowflake_object_identifier(
+            _required(value, "database", f"{field_name}.database")
+        ),
+        schema=normalize_snowflake_object_identifier(
+            _required(value, "schema", f"{field_name}.schema")
+        ),
+        identifier=normalize_snowflake_object_identifier(
+            _required(value, "identifier", f"{field_name}.identifier")
+        ),
     )
 
 
@@ -288,6 +297,12 @@ def _optional_relation(value: Any, field_name: str) -> RelationConfig | None:
     if value in (None, ""):
         return None
     return _relation(value, field_name)
+
+
+def _optional_object_identifier(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    return normalize_snowflake_object_identifier(str(value))
 
 
 def _required(value: dict[str, Any], key: str, field_name: str) -> str:
