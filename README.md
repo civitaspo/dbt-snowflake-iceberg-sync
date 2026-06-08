@@ -173,6 +173,113 @@ from `my-gcp-project.analytics.orders`
 The procedure creates or reuses a deterministic staging table, exports it to GCS
 as Parquet, and then loads those files into the Snowflake-managed Iceberg table.
 
+## Materialization Options
+
+All options in this section are dbt model `config()` arguments. The
+materialization separates common options from source-specific options so future
+source types can define their own required fields. In the current release,
+`source_type='bigquery'` is the only supported source type, so every working
+model uses the BigQuery option group below.
+
+Credential material is not a materialization option. Keep service account JSON
+and secret names in Snowflake resources and `vars.iceberg_sync`; model configs
+that contain credential-like keys are rejected.
+
+### Common Options
+
+| Option | Required | Default | Description |
+| --- | --- | --- | --- |
+| `materialized` | Yes | None | Must be `iceberg_sync`. |
+| `source_type` | No | `bigquery` | Source adapter to use. Only `bigquery` is supported in this release. |
+| `materialization_strategy` | No | `incremental` | `incremental` or `full_refresh`. `full_refresh` always reloads the target table. |
+| `incremental_strategy` | No | `delete+copy` | Incremental load strategy. Only `delete+copy` is supported. |
+| `incremental_predicate` | Conditional | None | Snowflake SQL predicate used to delete rows from the internal Iceberg table during incremental runs. Required when `bigquery_export_incremental_predicates` is non-empty, and must be absent when that list is empty. |
+| `partition_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. |
+| `cluster_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. |
+
+The effective mode becomes full refresh when dbt is invoked with
+`--full-refresh`, when `materialization_strategy='full_refresh'`, or when the
+internal Iceberg table does not yet exist.
+
+### Iceberg Table Options
+
+These options apply to the Snowflake-managed Iceberg table created behind the
+exposed dbt view. The table is created as `__<model_identifier>` in the model's
+target database and schema.
+
+| Option | Required | Default | Description |
+| --- | --- | --- | --- |
+| `iceberg_table_external_volume` | Yes | None | Snowflake external volume used by `CREATE ICEBERG TABLE`. |
+| `iceberg_table_base_location` | No | `<database>/<schema>/<identifier>` | Iceberg base location. When omitted, the package derives a stable location from the target relation. |
+| `iceberg_table_target_file_size` | No | `AUTO` | Passed to `TARGET_FILE_SIZE`. |
+| `iceberg_table_storage_serialization_policy` | No | `COMPATIBLE` | `COMPATIBLE` or `OPTIMIZED`. |
+| `iceberg_table_data_retention_time_in_days` | No | `7` | Passed to `DATA_RETENTION_TIME_IN_DAYS`. |
+| `iceberg_table_max_data_extension_time_in_days` | No | None | Optional `MAX_DATA_EXTENSION_TIME_IN_DAYS`. |
+| `iceberg_table_change_tracking` | No | `true` | Passed to `CHANGE_TRACKING`. Must stay `true` when `iceberg_table_iceberg_version=3`. |
+| `iceberg_table_copy_grants` | No | `false` | Adds `COPY GRANTS` when the table is created. |
+| `iceberg_table_error_logging` | No | `false` | Must stay `false`; Snowflake does not support error logging for this Iceberg `COPY INTO` path. |
+| `iceberg_table_iceberg_version` | No | `3` | `2` or `3`. |
+| `iceberg_table_enable_iceberg_merge_on_read` | No | `true` | Passed to `ENABLE_ICEBERG_MERGE_ON_READ`. |
+| `iceberg_table_enable_data_compaction` | No | `true` | Passed to `ENABLE_DATA_COMPACTION`. |
+
+### BigQuery Source Options
+
+These options apply when `source_type='bigquery'`.
+
+| Option | Required | Default | Description |
+| --- | --- | --- | --- |
+| `google_cloud_project_id` | Yes | None | BigQuery project for metadata, query, and extract jobs. |
+| `bigquery_dataset_id` | Yes | None | BigQuery dataset containing the source table or wildcard shard set. |
+| `bigquery_table_id` | Yes | None | BigQuery source table id. For `extract`, this is the table to export and may end with `_*` for sharded tables. For `select`, this still identifies the source for deterministic staging-table hashing even though the model SQL is the exported query. |
+| `bigquery_location` | Yes | None | BigQuery job location, for example `US` or a regional location. |
+| `bigquery_export_location` | Yes | None | Named Snowflake stage location that resolves to the GCS export prefix, for example `@DB.SCHEMA.STAGE/path`. User stages (`@~`) and table stages (`@%`) are rejected. |
+| `bigquery_export_strategy` | No | `extract` | `extract` exports BigQuery tables directly. `select` runs model SQL into a BigQuery staging table, then exports that table. |
+| `bigquery_export_predicate_type` | No | `auto` | Predicate planning mode. Supported values are `auto`, `none`, `partition_decorator`, `table_suffix`, and `where`; valid values depend on `bigquery_export_strategy`. |
+| `bigquery_export_full_refresh_predicates` | No | `[]` | Source predicates used only when the effective mode is full refresh. A string is treated as a single-item list. |
+| `bigquery_export_incremental_predicates` | No | `[]` | Source predicates used only when the effective mode is incremental. Must be paired with `incremental_predicate`. A string is treated as a single-item list. |
+
+BigQuery source predicates are interpreted differently by predicate type:
+
+| Predicate type | Valid with | Predicate value meaning |
+| --- | --- | --- |
+| `auto` | `extract`, `select` | Chooses `none` when no source predicates are configured. For `extract`, chooses `table_suffix` for `bigquery_table_id` values ending in `_*`, or `partition_decorator` for native time- or integer-range-partitioned tables. For `select`, chooses `where` when predicates exist. |
+| `none` | `extract`, `select` | No source predicates are allowed. `extract` exports the concrete table, or every table matching the wildcard prefix when `bigquery_table_id` ends in `_*`. |
+| `partition_decorator` | `extract` only | Each predicate is appended as a BigQuery partition decorator, such as `20260530` or an integer-range partition id. Requires a concrete native partitioned table. |
+| `table_suffix` | `extract` only | Each predicate is appended to the wildcard prefix. Requires `bigquery_table_id` to end with `_*`. |
+| `where` | `select` only | Each predicate is BigQuery SQL. Predicates are combined with `OR` and applied outside the model SQL subquery. |
+
+### BigQuery Extract Requirements
+
+Use `bigquery_export_strategy='extract'` for concrete tables, native partitioned
+tables, and sharded tables. The dbt model body must be empty in this mode; model
+SQL is rejected so it is not silently ignored.
+
+`extract` does not use BigQuery staging table options. Its required fields are
+the common BigQuery source fields plus `iceberg_table_external_volume`.
+
+### BigQuery Select/Staging Requirements
+
+Use `bigquery_export_strategy='select'` for arbitrary BigQuery SQL. The dbt
+model body is required and must be BigQuery SQL. `select` allows only `auto`,
+`none`, or `where` predicate types.
+
+| Option | Required | Default | Description |
+| --- | --- | --- | --- |
+| `bigquery_staging_dataset_id` | Yes for `select` | None | BigQuery dataset where deterministic staging tables are created. |
+| `bigquery_staging_table_expiration_hours` | No | `24` | Expiration applied to generated staging tables. |
+| `bigquery_staging_table_reuse` | No | `true` | Reuse an existing non-expired staging table when its stored hash matches the model SQL, predicates, source identity, target relation, and export settings. |
+| `force_rebuild_staging_table` | No | `false` | Rebuild the staging table even if a reusable table exists. This option is currently unprefixed in dbt model config. |
+
+When `where` predicates are configured for `select`, the package renders:
+
+```sql
+SELECT *
+FROM (
+<model SQL>
+) AS __dbt_iceberg_sync_src
+WHERE (<predicate 1>) OR (<predicate 2>)
+```
+
 ## Full Refresh Behavior
 
 The effective mode is full refresh when:
