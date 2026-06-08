@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.4 - 2026-06-09
+
+### Added
+
+- Added configurable retry handling for retryable Snowflake load transaction
+  failures.
+- Added failed-initial-run cleanup for newly created internal Iceberg tables.
+- Persisted retry and cleanup metadata in procedure results and run logs.
+
+### Changed
+
+- Moved exposed target view creation into the Snowflake procedure after a
+  successful load commit.
+- Treated missing internal Iceberg tables or exposed target views as full
+  refresh runs.
+- Narrowed Snowflake retry classification to messages containing
+  `SQL execution internal error` or `incident`.
+
 ## 0.1.3 - 2026-06-08
 
 ### Changed
