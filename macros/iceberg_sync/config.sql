@@ -27,7 +27,7 @@
     dbt_snowflake_iceberg_sync.iceberg_sync_defaulted_var(
       vars_dict,
       'procedure_schema',
-      'DEPS'
+      target.schema
     )
   ) -%}
   {%- set procedure_name = dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(

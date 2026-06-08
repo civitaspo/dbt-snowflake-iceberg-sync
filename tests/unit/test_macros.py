@@ -111,7 +111,7 @@ def test_internal_identifier_macro_normalizes_to_unquoted_snowflake_form():
         ("ci_analytics", "dbt_ci"),
     ],
 )
-def test_deployment_config_defaults_to_active_target_database_and_deps_schema(
+def test_deployment_config_defaults_to_active_target_database_and_schema(
     target_database: str,
     target_schema: str,
 ):
@@ -122,7 +122,7 @@ def test_deployment_config_defaults_to_active_target_database_and_deps_schema(
     )
 
     expected_database = target_database.upper()
-    expected_schema = "DEPS"
+    expected_schema = target_schema.upper()
 
     assert config["procedure_database"] == expected_database
     assert config["procedure_schema"] == expected_schema
@@ -150,7 +150,7 @@ def test_procedure_fqn_renders_string_without_relation_type():
         target_schema="dbt_clone",
     )
 
-    assert rendered == '"CLONE_DBT"."DEPS"."ICEBERG_SYNC"'
+    assert rendered == '"CLONE_DBT"."DBT_CLONE"."ICEBERG_SYNC"'
 
 
 def test_install_macro_uses_create_or_alter_procedure():

@@ -53,12 +53,13 @@ vars:
 ```
 
 `procedure_database` defaults to the active dbt `target.database`, and
-`procedure_schema` defaults to `DEPS`. `procedure_name` defaults to
-`ICEBERG_SYNC`, and `handler_stage` defaults to
+`procedure_schema` defaults to the active dbt `target.schema`.
+`procedure_name` defaults to `ICEBERG_SYNC`, and `handler_stage` defaults to
 `<procedure_database>.<procedure_schema>.ICEBERG_SYNC_HANDLER_STAGE`. Override
 these only when the package helper objects should live outside the active target
 database/schema. This lets clone and CI targets install helper objects in their
-own target database without requiring privileges on a production database.
+own target database and schema without requiring privileges on a production
+database/schema.
 
 The package creates a run log table named
 `<procedure_database>.<procedure_schema>.ICEBERG_SYNC_RUN_LOG` by default. Set
@@ -71,7 +72,7 @@ Deployment vars:
 | `handler_local_path` | Yes | None | Local path to the package `procedure/` directory uploaded by the installer. |
 | `google_cloud_service_account_secret_fqdn` | Yes | None | Fully qualified Snowflake secret containing the GCP service account JSON. |
 | `procedure_database` | No | `target.database` | Database where the package procedure and default helper objects are installed. |
-| `procedure_schema` | No | `DEPS` | Schema where the package procedure and default helper objects are installed. |
+| `procedure_schema` | No | `target.schema` | Schema where the package procedure and default helper objects are installed. |
 | `procedure_name` | No | `ICEBERG_SYNC` | Name of the Snowflake stored procedure. |
 | `handler_stage` | No | `<procedure_database>.<procedure_schema>.ICEBERG_SYNC_HANDLER_STAGE` | Internal Snowflake stage used for the Python handler files. |
 | `handler_stage_path` | No | `procedure` | Directory prefix inside `handler_stage` for uploaded handler files. |
