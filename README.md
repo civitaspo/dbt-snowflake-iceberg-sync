@@ -316,7 +316,7 @@ The effective mode is full refresh when:
 
 - dbt runs with `--full-refresh`;
 - `materialization_strategy='full_refresh'`;
-- the internal Iceberg table does not exist.
+- the internal Iceberg table or exposed target view does not exist.
 
 Full refresh deletes all rows from the internal Iceberg table before copying the
 new Parquet files.
