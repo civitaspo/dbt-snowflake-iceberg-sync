@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.3 - 2026-06-08
+
+### Changed
+
+- Added first-class BigQuery `DATETIME` schema support, mapping it to Snowflake
+  `TIMESTAMP_NTZ(6)`.
+- Kept `TIME`, `GEOGRAPHY`, `JSON`, `BIGNUMERIC`, and `BIGDECIMAL`
+  unsupported.
+- Added unit and opt-in integration coverage for `DATETIME` extract behavior.
+
 ## 0.1.2 - 2026-06-08
 
 ### Changed
