@@ -3,9 +3,12 @@ from __future__ import annotations
 from procedure.config import parse_config
 from procedure.schema import SnowflakeColumn, ViewColumn
 from procedure.sql import (
+    alter_run_log_table_sql,
     copy_into_sql,
     create_iceberg_table_sql,
     create_or_replace_view_sql,
+    create_run_log_table_sql,
+    drop_iceberg_table_sql,
     quote_view_alias,
 )
 
@@ -59,6 +62,28 @@ def test_create_view_preserves_source_case_and_aliases_lower_snake(base_payload)
 
     assert 'SELECT\n  "OrderID" AS "ORDER_ID"' in sql
     assert 'FROM "ANALYTICS"."PUBLIC"."__ORDERS"' in sql
+
+
+def test_drop_iceberg_table_uses_if_exists(base_payload):
+    config = parse_config(base_payload)
+
+    sql = drop_iceberg_table_sql(config.internal_relation)
+
+    assert sql == 'DROP ICEBERG TABLE IF EXISTS "ANALYTICS"."PUBLIC"."__ORDERS"'
+
+
+def test_run_log_sql_includes_retry_and_cleanup_columns(base_payload):
+    config = parse_config(base_payload)
+    run_log = config.deployment.run_log_table
+    assert run_log is not None
+
+    create_sql = create_run_log_table_sql(run_log)
+    alter_sql = alter_run_log_table_sql(run_log)
+
+    assert "retry VARIANT" in create_sql
+    assert "cleanup VARIANT" in create_sql
+    assert any("ADD COLUMN IF NOT EXISTS retry VARIANT" in sql for sql in alter_sql)
+    assert any("ADD COLUMN IF NOT EXISTS cleanup VARIANT" in sql for sql in alter_sql)
 
 
 def test_quote_view_alias_preserves_snowflake_unquoted_folding():

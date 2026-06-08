@@ -174,6 +174,16 @@
     },
     'model_config': model_config,
     'deployment': deployment,
+    'retry': {
+      'max_attempts': config.get('iceberg_sync_retry_max_attempts', 3),
+      'initial_delay_seconds': config.get('iceberg_sync_retry_initial_delay_seconds', 5),
+      'max_delay_seconds': config.get('iceberg_sync_retry_max_delay_seconds', 60),
+      'backoff_multiplier': config.get('iceberg_sync_retry_backoff_multiplier', 2.0),
+      'jitter_seconds': config.get('iceberg_sync_retry_jitter_seconds', 3)
+    },
+    'cleanup': {
+      'created_table_on_failure': config.get('iceberg_sync_cleanup_created_table_on_failure', true)
+    },
     'bigquery': {
       'export_strategy': config.get('bigquery_export_strategy', none) or 'extract',
       'project_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config('google_cloud_project_id'),

@@ -14,6 +14,8 @@ def test_parse_config_defaults(base_payload):
     assert config.target_relation.identifier == "ORDERS"
     assert config.internal_relation.identifier == "__ORDERS"
     assert config.iceberg_table.external_volume == "ICEBERG_EXTERNAL_VOLUME"
+    assert config.retry.max_attempts == 3
+    assert config.cleanup.created_table_on_failure is True
 
 
 def test_parse_config_normalizes_only_snowflake_object_identifiers(payload_factory):
@@ -61,6 +63,12 @@ def test_parse_config_normalizes_only_snowflake_object_identifiers(payload_facto
         ({"bigquery__export_predicate_type": "having"}, "bigquery_export_predicate_type"),
         ({"iceberg_table__iceberg_version": 1}, "iceberg_table_iceberg_version"),
         ({"iceberg_table__storage_serialization_policy": "FAST"}, "storage_serialization_policy"),
+        ({"retry__max_attempts": 0}, "iceberg_sync_retry_max_attempts"),
+        ({"retry__initial_delay_seconds": -1}, "initial_delay"),
+        ({"retry__max_delay_seconds": -1}, "max_delay"),
+        ({"retry__backoff_multiplier": 0.9}, "backoff"),
+        ({"retry__jitter_seconds": -1}, "jitter"),
+        ({"cleanup__created_table_on_failure": "not-bool"}, "cleanup_created_table"),
         ({"partition_by": ["event_date"]}, "partition_by"),
         ({"cluster_by": ["event_name"]}, "cluster_by"),
     ],
@@ -310,40 +318,90 @@ def test_rejects_missing_required_payload_fields(base_payload, path, message):
 def test_effective_mode_prefers_full_refresh_flag(payload_factory):
     config = parse_config(payload_factory(dbt_full_refresh=True))
 
-    assert effective_mode_for(config, table_exists=True) == "full_refresh"
+    assert effective_mode_for(
+        config,
+        internal_table_exists=True,
+        target_view_exists=True,
+    ) == "full_refresh"
 
 
 def test_effective_mode_prefers_materialization_full_refresh(payload_factory):
     config = parse_config(payload_factory(materialization_strategy="full_refresh"))
 
-    assert effective_mode_for(config, table_exists=True) == "full_refresh"
+    assert effective_mode_for(
+        config,
+        internal_table_exists=True,
+        target_view_exists=True,
+    ) == "full_refresh"
 
 
 def test_effective_mode_full_refresh_when_table_missing(base_payload):
     config = parse_config(base_payload)
 
-    assert effective_mode_for(config, table_exists=False) == "full_refresh"
-    assert effective_mode_for(config, table_exists=True) == "incremental"
+    assert (
+        effective_mode_for(
+            config,
+            internal_table_exists=False,
+            target_view_exists=True,
+        )
+        == "full_refresh"
+    )
+    assert (
+        effective_mode_for(
+            config,
+            internal_table_exists=True,
+            target_view_exists=True,
+        )
+        == "incremental"
+    )
+
+
+def test_effective_mode_full_refresh_when_target_view_missing(base_payload):
+    config = parse_config(base_payload)
+
+    assert (
+        effective_mode_for(
+            config,
+            internal_table_exists=True,
+            target_view_exists=False,
+        )
+        == "full_refresh"
+    )
 
 
 @pytest.mark.parametrize(
-    ("materialization_strategy", "dbt_full_refresh", "table_exists", "expected"),
+    (
+        "materialization_strategy",
+        "dbt_full_refresh",
+        "internal_table_exists",
+        "target_view_exists",
+        "expected",
+    ),
     [
-        ("full_refresh", False, False, "full_refresh"),
-        ("full_refresh", False, True, "full_refresh"),
-        ("full_refresh", True, False, "full_refresh"),
-        ("full_refresh", True, True, "full_refresh"),
-        ("incremental", False, False, "full_refresh"),
-        ("incremental", False, True, "incremental"),
-        ("incremental", True, False, "full_refresh"),
-        ("incremental", True, True, "full_refresh"),
+        ("full_refresh", False, False, False, "full_refresh"),
+        ("full_refresh", False, False, True, "full_refresh"),
+        ("full_refresh", False, True, False, "full_refresh"),
+        ("full_refresh", False, True, True, "full_refresh"),
+        ("full_refresh", True, False, False, "full_refresh"),
+        ("full_refresh", True, False, True, "full_refresh"),
+        ("full_refresh", True, True, False, "full_refresh"),
+        ("full_refresh", True, True, True, "full_refresh"),
+        ("incremental", False, False, False, "full_refresh"),
+        ("incremental", False, False, True, "full_refresh"),
+        ("incremental", False, True, False, "full_refresh"),
+        ("incremental", False, True, True, "incremental"),
+        ("incremental", True, False, False, "full_refresh"),
+        ("incremental", True, False, True, "full_refresh"),
+        ("incremental", True, True, False, "full_refresh"),
+        ("incremental", True, True, True, "full_refresh"),
     ],
 )
 def test_effective_mode_matrix(
     payload_factory,
     materialization_strategy,
     dbt_full_refresh,
-    table_exists,
+    internal_table_exists,
+    target_view_exists,
     expected,
 ):
     config = parse_config(
@@ -353,7 +411,14 @@ def test_effective_mode_matrix(
         )
     )
 
-    assert effective_mode_for(config, table_exists=table_exists) == expected
+    assert (
+        effective_mode_for(
+            config,
+            internal_table_exists=internal_table_exists,
+            target_view_exists=target_view_exists,
+        )
+        == expected
+    )
 
 
 def test_predicates_are_selected_by_effective_mode(payload_factory):

@@ -20,6 +20,7 @@ The integration suite contains separate tests for:
 - query execution export with `auto`, `none`, and `where`
 - staging table reuse and forced rebuild behavior
 - incremental `delete+copy` over three dbt runs: create, incremental, repeat
+- mocked procedure-level retry and failed-initial-run cleanup behavior in unit tests
 - invalid parameter combinations that must fail at the dbt/procedure boundary
 
 Fixture tables are supplied by environment variables. The tests create temporary

@@ -90,6 +90,20 @@ class IcebergTableConfig:
 
 
 @dataclass(frozen=True)
+class RetryPolicyConfig:
+    max_attempts: int = 3
+    initial_delay_seconds: float = 5
+    max_delay_seconds: float = 60
+    backoff_multiplier: float = 2.0
+    jitter_seconds: float = 3
+
+
+@dataclass(frozen=True)
+class CleanupConfig:
+    created_table_on_failure: bool = True
+
+
+@dataclass(frozen=True)
 class IcebergSyncConfig:
     source_type: str
     materialization_strategy: str
@@ -101,6 +115,8 @@ class IcebergSyncConfig:
     deployment: DeploymentConfig
     bigquery: BigQueryConfig
     iceberg_table: IcebergTableConfig
+    retry: RetryPolicyConfig = field(default_factory=RetryPolicyConfig)
+    cleanup: CleanupConfig = field(default_factory=CleanupConfig)
     partition_by: tuple[str, ...] = field(default_factory=tuple)
     cluster_by: tuple[str, ...] = field(default_factory=tuple)
     dbt_full_refresh: bool = False
@@ -192,6 +208,38 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         ),
     )
 
+    retry_payload = payload.get("retry", {})
+    retry = RetryPolicyConfig(
+        max_attempts=_int(
+            retry_payload.get("max_attempts", 3), "iceberg_sync_retry_max_attempts"
+        ),
+        initial_delay_seconds=_float(
+            retry_payload.get("initial_delay_seconds", 5),
+            "iceberg_sync_retry_initial_delay_seconds",
+        ),
+        max_delay_seconds=_float(
+            retry_payload.get("max_delay_seconds", 60),
+            "iceberg_sync_retry_max_delay_seconds",
+        ),
+        backoff_multiplier=_float(
+            retry_payload.get("backoff_multiplier", 2.0),
+            "iceberg_sync_retry_backoff_multiplier",
+        ),
+        jitter_seconds=_float(
+            retry_payload.get("jitter_seconds", 3),
+            "iceberg_sync_retry_jitter_seconds",
+        ),
+    )
+
+    cleanup_payload = payload.get("cleanup", {})
+    cleanup = CleanupConfig(
+        created_table_on_failure=_coerce_bool_strict(
+            cleanup_payload.get("created_table_on_failure"),
+            True,
+            "iceberg_sync_cleanup_created_table_on_failure",
+        )
+    )
+
     config = IcebergSyncConfig(
         source_type=_defaulted(payload, "source_type", "bigquery"),
         materialization_strategy=_defaulted(payload, "materialization_strategy", "incremental"),
@@ -203,6 +251,8 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         deployment=deployment,
         bigquery=bigquery,
         iceberg_table=iceberg_table,
+        retry=retry,
+        cleanup=cleanup,
         partition_by=tuple(payload.get("partition_by") or ()),
         cluster_by=tuple(payload.get("cluster_by") or ()),
         dbt_full_refresh=_coerce_bool(payload.get("dbt_full_refresh"), False),
@@ -233,6 +283,16 @@ def validate_config(config: IcebergSyncConfig) -> None:
         raise ConfigError("iceberg_table_change_tracking must be true for Iceberg V3 tables")
     if config.iceberg_table.error_logging:
         raise ConfigError("iceberg_table_error_logging is not supported for Iceberg COPY INTO")
+    if config.retry.max_attempts < 1:
+        raise ConfigError("iceberg_sync_retry_max_attempts must be at least 1")
+    if config.retry.initial_delay_seconds < 0:
+        raise ConfigError("iceberg_sync_retry_initial_delay_seconds must be non-negative")
+    if config.retry.max_delay_seconds < 0:
+        raise ConfigError("iceberg_sync_retry_max_delay_seconds must be non-negative")
+    if config.retry.backoff_multiplier < 1.0:
+        raise ConfigError("iceberg_sync_retry_backoff_multiplier must be at least 1.0")
+    if config.retry.jitter_seconds < 0:
+        raise ConfigError("iceberg_sync_retry_jitter_seconds must be non-negative")
     if config.bigquery.export_predicate_type not in PREDICATE_TYPES:
         raise ConfigError("bigquery_export_predicate_type is invalid")
     if config.partition_by:
@@ -323,6 +383,20 @@ def _optional_int(value: Any) -> int | None:
     return int(value)
 
 
+def _int(value: Any, field_name: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{field_name} must be an integer") from exc
+
+
+def _float(value: Any, field_name: str) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{field_name} must be a number") from exc
+
+
 def _coerce_bool(value: Any, default: bool) -> bool:
     if value is None:
         return default
@@ -335,6 +409,20 @@ def _coerce_bool(value: Any, default: bool) -> bool:
         if normalized in {"false", "0", "no"}:
             return False
     return bool(value)
+
+
+def _coerce_bool_strict(value: Any, default: bool, field_name: str) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    raise ConfigError(f"{field_name} must be a boolean")
 
 
 def _reject_forbidden_model_config(model_config: Any) -> None:

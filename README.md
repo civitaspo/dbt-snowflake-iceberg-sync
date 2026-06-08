@@ -220,10 +220,16 @@ and quoted in internal table DDL and exposed view SQL.
 | `incremental_predicate` | Conditional | None | Snowflake SQL predicate used to delete rows from the internal Iceberg table during incremental runs. Required when `bigquery_export_incremental_predicates` is non-empty, and must be absent when that list is empty. |
 | `partition_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. |
 | `cluster_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. |
+| `iceberg_sync_retry_max_attempts` | No | `3` | Maximum attempts for retryable Snowflake load transaction failures. Must be at least `1`. |
+| `iceberg_sync_retry_initial_delay_seconds` | No | `5` | Initial delay before retrying a retryable Snowflake load transaction failure. |
+| `iceberg_sync_retry_max_delay_seconds` | No | `60` | Maximum retry delay after applying exponential backoff and jitter. |
+| `iceberg_sync_retry_backoff_multiplier` | No | `2.0` | Retry delay multiplier. Must be at least `1.0`. |
+| `iceberg_sync_retry_jitter_seconds` | No | `3` | Maximum random jitter added to retry delays. |
+| `iceberg_sync_cleanup_created_table_on_failure` | No | `true` | Drop a newly-created internal Iceberg table after failed initial creation when no target view existed before the run. |
 
 The effective mode becomes full refresh when dbt is invoked with
 `--full-refresh`, when `materialization_strategy='full_refresh'`, or when the
-internal Iceberg table does not yet exist.
+internal Iceberg table or exposed target view does not yet exist.
 
 ### Iceberg Table Options
 
@@ -328,6 +334,38 @@ absent.
 The Snowflake transaction begins after export and table DDL. If `DELETE` or
 `COPY INTO` fails, the procedure rolls back the transaction and preserves the
 previous committed table data.
+
+## Retry And Cleanup Behavior
+
+The procedure retries only transient Snowflake failures raised by the load
+transaction:
+
+```sql
+BEGIN;
+DELETE FROM <internal_iceberg_table> [WHERE ...];
+COPY INTO <internal_iceberg_table> ... LOAD_MODE = ADD_FILES_COPY;
+COMMIT;
+```
+
+Retries reuse the same BigQuery export files and do not rerun the BigQuery
+export job. The retry classifier is intentionally narrow and applies only to
+Snowflake execution errors that look like transient internal failures, including
+messages containing `000603`, `XX000`, `300005`, `SQL execution internal error`,
+or `incident`.
+
+The procedure does not retry configuration, schema, predicate validation,
+BigQuery source, permission, or relation-conflict errors.
+
+The stored procedure creates or replaces the exposed dbt view after a successful
+load commit. During initial creation, if the procedure created the internal
+Iceberg table and the run fails before the target view is successfully created,
+the procedure drops that newly-created internal table when
+`iceberg_sync_cleanup_created_table_on_failure=true`. Pre-existing internal
+tables are never dropped by this cleanup path.
+
+The run log and returned procedure result include `retry` and `cleanup` objects
+with attempt counts, retryable error diagnostics, and best-effort cleanup
+outcomes.
 
 The `incremental_predicate` is evaluated against the internal Iceberg table, not
 the exposed view. Top-level source field names are preserved exactly in that

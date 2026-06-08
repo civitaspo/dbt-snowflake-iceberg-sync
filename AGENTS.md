@@ -60,6 +60,7 @@ The integration suite should cover more than a happy path. Keep coverage for:
   and `where` predicates
 - BigQuery staging table reuse and forced rebuild behavior
 - incremental `delete+copy`, including a repeated incremental run
+- procedure-level Snowflake retry and failed-initial-run cleanup behavior
 - invalid dbt/materialization parameter combinations that must fail
 
 Run the opt-in suite with:

@@ -9,14 +9,17 @@ from typing import Any
 
 from .config import RelationConfig
 from .errors import ConfigError, SnowflakeExecutionError
-from .schema import SnowflakeColumn, columns_from_snowflake_describe
+from .schema import SnowflakeColumn, ViewColumn, columns_from_snowflake_describe
 from .sql import (
+    alter_run_log_table_sql,
     alter_table_add_columns_sql,
     copy_into_sql,
     create_iceberg_table_sql,
+    create_or_replace_view_sql,
     create_run_log_table_sql,
     delete_sql,
     desc_stage_sql,
+    drop_iceberg_table_sql,
     insert_run_log_sql,
     relation_sql,
 )
@@ -48,11 +51,20 @@ class SnowflakeClient:
             raise SnowflakeExecutionError(str(exc)) from exc
 
     def table_exists(self, relation: RelationConfig) -> bool:
+        return self.relation_exists(relation)
+
+    def relation_exists(
+        self, relation: RelationConfig, *, expected_type: str | None = None
+    ) -> bool:
+        type_filter = ""
+        if expected_type is not None:
+            type_filter = f" AND TABLE_TYPE = {sql_string(expected_type.upper())}"
         rows = self.execute(
             "SELECT COUNT(*) AS TABLE_COUNT "
             f"FROM {quote_fqn(relation.database, 'INFORMATION_SCHEMA', 'TABLES')} "
             f"WHERE TABLE_SCHEMA = {sql_string(relation.schema)} "
             f"AND TABLE_NAME = {sql_string(relation.identifier)}"
+            f"{type_filter}"
         )
         if not rows:
             return False
@@ -67,9 +79,20 @@ class SnowflakeClient:
     def create_iceberg_table(self, config: Any, columns: list[SnowflakeColumn]) -> None:
         self.execute(create_iceberg_table_sql(config, columns))
 
+    def drop_iceberg_table(self, relation: RelationConfig) -> None:
+        self.execute(drop_iceberg_table_sql(relation))
+
     def add_columns(self, relation: RelationConfig, columns: list[SnowflakeColumn]) -> None:
         for statement in alter_table_add_columns_sql(relation, columns):
             self.execute(statement)
+
+    def create_or_replace_view(
+        self,
+        target: RelationConfig,
+        internal: RelationConfig,
+        columns: list[ViewColumn],
+    ) -> None:
+        self.execute(create_or_replace_view_sql(target, internal, columns))
 
     def resolve_stage_location(self, export_location: str, run_id: str) -> StageLocation:
         stage_fqn, stage_path = parse_stage_location(export_location)
@@ -112,6 +135,8 @@ class SnowflakeClient:
     def ensure_run_log(self, relation: RelationConfig | None) -> None:
         if relation is not None:
             self.execute(create_run_log_table_sql(relation))
+            for statement in alter_run_log_table_sql(relation):
+                self.execute(statement)
 
     def write_run_log(self, relation: RelationConfig | None, payload: dict[str, Any]) -> None:
         if relation is not None:

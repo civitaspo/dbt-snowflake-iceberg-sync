@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import random
 import re
-from contextlib import suppress
+import time
+from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
 
-from .config import IcebergSyncConfig, parse_config
-from .errors import IcebergSyncError
+from .config import IcebergSyncConfig, RetryPolicyConfig, parse_config
+from .errors import IcebergSyncError, SnowflakeExecutionError
 from .run_log import build_run_log_payload
 from .schema import (
     SnowflakeColumn,
@@ -36,10 +38,14 @@ class IcebergSyncRunner:
         *,
         snowflake_client: SnowflakeClient | None = None,
         source_adapters: dict[str, SourceAdapter] | None = None,
+        sleep_func: Callable[[float], None] = time.sleep,
+        jitter_func: Callable[[float, float], float] = random.uniform,
     ):
         self.session = session
         self.snowflake = snowflake_client or SnowflakeClient(session)
         self.source_adapters = source_adapters or {}
+        self.sleep = sleep_func
+        self.jitter = jitter_func
 
     def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         config = parse_config(payload)
@@ -49,11 +55,27 @@ class IcebergSyncRunner:
         predicates: tuple[str, ...] = ()
         export_result: SourceExportResult | None = None
         error_message: str | None = None
+        retry = _initial_retry_payload(config.retry)
+        cleanup = _initial_cleanup_payload()
+        internal_table_existed_before = False
+        target_view_existed_before = False
+        load_committed = False
+        view_created = False
 
         try:
             self.snowflake.ensure_run_log(config.deployment.run_log_table)
-            table_exists = self.snowflake.table_exists(config.internal_relation)
-            effective_mode = effective_mode_for(config, table_exists)
+            internal_table_existed_before = self.snowflake.table_exists(
+                config.internal_relation
+            )
+            target_view_existed_before = self.snowflake.relation_exists(
+                config.target_relation,
+                expected_type="VIEW",
+            )
+            effective_mode = effective_mode_for(
+                config,
+                internal_table_existed_before,
+                target_view_existed_before,
+            )
             predicates = config.predicates_for_mode(effective_mode)
             source = self._source_adapter(config)
             stage = self.snowflake.resolve_stage_location(
@@ -69,8 +91,27 @@ class IcebergSyncRunner:
             )
             desired_columns = source.map_schema(export_result)
 
-            self._create_or_validate_table(config, table_exists, desired_columns)
-            self._load(config, effective_mode, stage.run_stage_location)
+            created_internal_table, altered_schema = self._create_or_validate_table(
+                config,
+                internal_table_existed_before,
+                desired_columns,
+            )
+            cleanup["created_internal_table"] = created_internal_table
+            cleanup["altered_internal_table_schema"] = altered_schema
+            retry = self._load_with_retry(
+                config,
+                effective_mode,
+                stage.run_stage_location,
+                retry,
+            )
+            load_committed = True
+            view_column_payload = view_columns(desired_columns)
+            self.snowflake.create_or_replace_view(
+                config.target_relation,
+                config.internal_relation,
+                view_column_payload,
+            )
+            view_created = True
 
             result = _result_payload(
                 config=config,
@@ -79,6 +120,8 @@ class IcebergSyncRunner:
                 columns=desired_columns,
                 export_result=export_result,
                 snowflake_query_ids=self.snowflake.query_ids,
+                retry=retry,
+                cleanup=cleanup,
                 status="success",
                 error_message=None,
             )
@@ -88,6 +131,8 @@ class IcebergSyncRunner:
                 effective_mode,
                 predicates,
                 export_result,
+                retry,
+                cleanup,
                 "success",
                 None,
                 started_at,
@@ -95,14 +140,22 @@ class IcebergSyncRunner:
             return result
         except Exception as exc:
             error_message = _sanitize_error_message(exc)
-            with suppress(Exception):
-                self.snowflake.rollback()
+            self._cleanup_created_table_on_failure(
+                config=config,
+                cleanup=cleanup,
+                internal_table_existed_before=internal_table_existed_before,
+                target_view_existed_before=target_view_existed_before,
+                load_committed=load_committed,
+                view_created=view_created,
+            )
             self._write_log(
                 config,
                 run_id,
                 effective_mode,
                 predicates,
                 export_result,
+                retry,
+                cleanup,
                 "failure",
                 error_message,
                 started_at,
@@ -122,10 +175,10 @@ class IcebergSyncRunner:
         config: IcebergSyncConfig,
         table_exists: bool,
         desired_columns: list[SnowflakeColumn],
-    ) -> None:
+    ) -> tuple[bool, bool]:
         self.snowflake.create_iceberg_table(config, desired_columns)
         if not table_exists:
-            return
+            return True, False
         existing_columns = self.snowflake.describe_table(config.internal_relation)
         validate_schema_compatibility(existing_columns, desired_columns)
         if len(desired_columns) > len(existing_columns):
@@ -133,8 +186,44 @@ class IcebergSyncRunner:
                 config.internal_relation,
                 desired_columns[len(existing_columns) :],
             )
+            return False, True
+        return False, False
 
-    def _load(
+    def _load_with_retry(
+        self,
+        config: IcebergSyncConfig,
+        effective_mode: str,
+        stage_run_location: str,
+        retry: dict[str, Any],
+    ) -> dict[str, Any]:
+        for attempt in range(1, config.retry.max_attempts + 1):
+            retry["attempts"] = attempt
+            try:
+                self._load_once(config, effective_mode, stage_run_location)
+                return retry
+            except Exception as exc:
+                retryable = is_retryable_snowflake_error(exc)
+                delay_seconds = (
+                    compute_retry_delay(config.retry, attempt, self.jitter)
+                    if retryable and attempt < config.retry.max_attempts
+                    else 0.0
+                )
+                if retryable:
+                    retry["retryable_errors"].append(
+                        {
+                            "attempt": attempt,
+                            "phase": "load_transaction",
+                            "error_message": _sanitize_error_message(exc),
+                            "rolled_back": True,
+                            "delay_seconds": delay_seconds,
+                        }
+                    )
+                if not retryable or attempt >= config.retry.max_attempts:
+                    raise
+                self.sleep(delay_seconds)
+        return retry
+
+    def _load_once(
         self,
         config: IcebergSyncConfig,
         effective_mode: str,
@@ -150,6 +239,31 @@ class IcebergSyncRunner:
             self.snowflake.rollback()
             raise
 
+    def _cleanup_created_table_on_failure(
+        self,
+        *,
+        config: IcebergSyncConfig,
+        cleanup: dict[str, Any],
+        internal_table_existed_before: bool,
+        target_view_existed_before: bool,
+        load_committed: bool,
+        view_created: bool,
+    ) -> None:
+        should_drop_created_table = (
+            config.cleanup.created_table_on_failure
+            and not internal_table_existed_before
+            and cleanup["created_internal_table"]
+            and not target_view_existed_before
+            and (not load_committed or not view_created)
+        )
+        if not should_drop_created_table:
+            return
+        try:
+            self.snowflake.drop_iceberg_table(config.internal_relation)
+            cleanup["dropped_created_internal_table"] = True
+        except Exception as cleanup_exc:
+            cleanup["cleanup_error_message"] = _sanitize_error_message(cleanup_exc)
+
     def _write_log(
         self,
         config: IcebergSyncConfig,
@@ -157,6 +271,8 @@ class IcebergSyncRunner:
         effective_mode: str,
         predicates: tuple[str, ...],
         export_result: SourceExportResult | None,
+        retry: dict[str, Any],
+        cleanup: dict[str, Any],
         status: str,
         error_message: str | None,
         started_at: Any,
@@ -175,6 +291,8 @@ class IcebergSyncRunner:
                 export_result.staging_table_reference if export_result else None
             ),
             snowflake_query_ids=self.snowflake.query_ids,
+            retry=retry,
+            cleanup=cleanup,
             status=status,
             error_message=error_message,
             started_at=started_at,
@@ -183,14 +301,63 @@ class IcebergSyncRunner:
         self.snowflake.write_run_log(config.deployment.run_log_table, payload)
 
 
-def effective_mode_for(config: IcebergSyncConfig, table_exists: bool) -> str:
+def effective_mode_for(
+    config: IcebergSyncConfig,
+    internal_table_exists: bool,
+    target_view_exists: bool,
+) -> str:
     if config.dbt_full_refresh:
         return "full_refresh"
     if config.materialization_strategy == "full_refresh":
         return "full_refresh"
-    if not table_exists:
+    if not internal_table_exists:
+        return "full_refresh"
+    if not target_view_exists:
         return "full_refresh"
     return "incremental"
+
+
+def is_retryable_snowflake_error(exc: Exception) -> bool:
+    if not isinstance(exc, SnowflakeExecutionError):
+        return False
+    text = str(exc)
+    lowered = text.lower()
+    return (
+        "000603" in text
+        or "XX000" in text
+        or "300005" in text
+        or "SQL execution internal error" in text
+        or "incident" in lowered
+    )
+
+
+def compute_retry_delay(
+    policy: RetryPolicyConfig,
+    failed_attempt: int,
+    jitter_func: Callable[[float, float], float] = random.uniform,
+) -> float:
+    base_delay = policy.initial_delay_seconds * (
+        policy.backoff_multiplier ** max(failed_attempt - 1, 0)
+    )
+    jitter = jitter_func(0.0, policy.jitter_seconds) if policy.jitter_seconds else 0.0
+    return min(policy.max_delay_seconds, base_delay + jitter)
+
+
+def _initial_retry_payload(policy: RetryPolicyConfig) -> dict[str, Any]:
+    return {
+        "max_attempts": policy.max_attempts,
+        "attempts": 0,
+        "retryable_errors": [],
+    }
+
+
+def _initial_cleanup_payload() -> dict[str, Any]:
+    return {
+        "created_internal_table": False,
+        "altered_internal_table_schema": False,
+        "dropped_created_internal_table": False,
+        "cleanup_error_message": None,
+    }
 
 
 def _sanitize_error_message(exc: Exception) -> str:
@@ -221,6 +388,8 @@ def _result_payload(
     columns: list[SnowflakeColumn],
     export_result: SourceExportResult,
     snowflake_query_ids: list[str],
+    retry: dict[str, Any],
+    cleanup: dict[str, Any],
     status: str,
     error_message: str | None,
 ) -> dict[str, Any]:
@@ -236,4 +405,6 @@ def _result_payload(
         "source_job_references": export_result.job_references,
         "staging_table_reference": export_result.staging_table_reference,
         "snowflake_query_ids": snowflake_query_ids,
+        "retry": retry,
+        "cleanup": cleanup,
     }

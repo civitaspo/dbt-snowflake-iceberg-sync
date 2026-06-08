@@ -46,6 +46,16 @@ def base_payload() -> dict[str, Any]:
                 "google_cloud_service_account_credentials_json"
             ),
         },
+        "retry": {
+            "max_attempts": 3,
+            "initial_delay_seconds": 5,
+            "max_delay_seconds": 60,
+            "backoff_multiplier": 2.0,
+            "jitter_seconds": 3,
+        },
+        "cleanup": {
+            "created_table_on_failure": True,
+        },
         "bigquery": {
             "export_strategy": "extract",
             "project_id": "project",
