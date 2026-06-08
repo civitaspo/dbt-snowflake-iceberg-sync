@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.2 - 2026-06-08
+
+### Changed
+
+- Defaulted package-managed Snowflake procedure and helper objects to the active
+  dbt target database and schema unless explicitly configured.
+- Rendered procedure references as quoted Snowflake fully qualified names while
+  avoiding unsupported dbt relation types.
+- Used `CREATE OR ALTER PROCEDURE` for procedure deployment.
+- Quoted the Google Cloud service account secret fully qualified name and
+  normalized external access integration identifiers.
+- Enabled mise caching in GitHub Actions workflows to reduce repeated tool
+  downloads.
+
 ## 0.1.1 - 2026-06-08
 
 ### Changed
