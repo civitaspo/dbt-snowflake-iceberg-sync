@@ -350,8 +350,7 @@ COMMIT;
 Retries reuse the same BigQuery export files and do not rerun the BigQuery
 export job. The retry classifier is intentionally narrow and applies only to
 Snowflake execution errors that look like transient internal failures, including
-messages containing `000603`, `XX000`, `300005`, `SQL execution internal error`,
-or `incident`.
+messages containing `SQL execution internal error` or `incident`.
 
 The procedure does not retry configuration, schema, predicate validation,
 BigQuery source, permission, or relation-conflict errors.

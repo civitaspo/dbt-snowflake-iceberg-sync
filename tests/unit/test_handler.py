@@ -285,9 +285,7 @@ def test_retryable_snowflake_internal_error_retries_and_succeeds(payload_factory
     snowflake = FakeSnowflake(
         table_exists=False,
         copy_errors=[
-            SnowflakeExecutionError(
-                "000603 (XX000): SQL execution internal error: incident 123"
-            )
+            SnowflakeExecutionError("SQL execution internal error: incident 123")
         ],
     )
     source = FakeSource()
@@ -315,9 +313,15 @@ def test_retryable_snowflake_internal_error_retries_and_succeeds(payload_factory
     )
 
 
-def test_retryable_snowflake_incident_error_is_classified():
+def test_retryable_snowflake_internal_error_messages_are_classified():
     assert is_retryable_snowflake_error(
-        SnowflakeExecutionError("Processing aborted due to error 300005:403; incident 42")
+        SnowflakeExecutionError("SQL execution internal error while loading table")
+    )
+    assert is_retryable_snowflake_error(
+        SnowflakeExecutionError("Processing aborted; incident 42")
+    )
+    assert not is_retryable_snowflake_error(
+        SnowflakeExecutionError("000603 XX000 300005")
     )
     assert not is_retryable_snowflake_error(ConfigError("invalid config"))
 
@@ -347,10 +351,10 @@ def test_retry_exhaustion_raises_original_error_and_logs_history(payload_factory
         retry__initial_delay_seconds=0,
         retry__jitter_seconds=0,
     )
-    error = SnowflakeExecutionError("000603 SQL execution internal error incident")
+    error = SnowflakeExecutionError("SQL execution internal error incident")
     snowflake = FakeSnowflake(table_exists=False, copy_errors=[error, error])
 
-    with pytest.raises(SnowflakeExecutionError, match="000603"):
+    with pytest.raises(SnowflakeExecutionError, match="internal error"):
         IcebergSyncRunner(
             object(),
             snowflake_client=snowflake,

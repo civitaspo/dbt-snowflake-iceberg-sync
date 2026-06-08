@@ -320,15 +320,8 @@ def effective_mode_for(
 def is_retryable_snowflake_error(exc: Exception) -> bool:
     if not isinstance(exc, SnowflakeExecutionError):
         return False
-    text = str(exc)
-    lowered = text.lower()
-    return (
-        "000603" in text
-        or "XX000" in text
-        or "300005" in text
-        or "SQL execution internal error" in text
-        or "incident" in lowered
-    )
+    lowered = str(exc).lower()
+    return "sql execution internal error" in lowered or "incident" in lowered
 
 
 def compute_retry_delay(
