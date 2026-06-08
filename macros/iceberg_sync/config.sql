@@ -73,15 +73,28 @@
     'handler_local_path'
   ) -%}
   {%- set google_cloud_service_account_secret_fqdn = (
-    dbt_snowflake_iceberg_sync.iceberg_sync_required_var(
-      vars_dict,
-      'google_cloud_service_account_secret_fqdn'
+    dbt_snowflake_iceberg_sync.iceberg_sync_object_fqn(
+      dbt_snowflake_iceberg_sync.iceberg_sync_required_var(
+        vars_dict,
+        'google_cloud_service_account_secret_fqdn'
+      ),
+      'vars.iceberg_sync.google_cloud_service_account_secret_fqdn',
+      3,
+      3
     )
   ) -%}
   {%- set google_cloud_service_account_secret_alias = vars_dict.get(
     'google_cloud_service_account_secret_alias',
     'google_cloud_service_account_credentials_json'
   ) -%}
+  {%- set external_access_integrations = [] -%}
+  {%- for integration in dbt_snowflake_iceberg_sync.iceberg_sync_as_list(
+    vars_dict.get('external_access_integrations', [])
+  ) -%}
+    {%- do external_access_integrations.append(
+      dbt_snowflake_iceberg_sync.iceberg_sync_quote_object_identifier(integration)
+    ) -%}
+  {%- endfor -%}
   {%- if vars_dict.get('run_log_table', none) is not none -%}
     {%- set run_log_table = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_fqn(
       vars_dict.get('run_log_table'), 'vars.iceberg_sync.run_log_table'
@@ -103,7 +116,7 @@
     'handler_import_name': handler_import_name,
     'handler_name': handler_name,
     'handler_local_path': handler_local_path,
-    'external_access_integrations': vars_dict.get('external_access_integrations', []),
+    'external_access_integrations': external_access_integrations,
     'run_log_table': run_log_table,
     'google_cloud_service_account_secret_fqdn': google_cloud_service_account_secret_fqdn,
     'google_cloud_service_account_secret_alias': google_cloud_service_account_secret_alias
@@ -124,10 +137,6 @@
       procedure['identifier']
     )
   ) }}
-{%- endmacro %}
-
-{% macro iceberg_sync_procedure_relation() -%}
-  {{ return(dbt_snowflake_iceberg_sync.iceberg_sync_procedure_fqn()) }}
 {%- endmacro %}
 
 {% macro iceberg_sync_collect_config(model_sql, target_relation, model_node, dbt_full_refresh=False) -%}

@@ -223,6 +223,41 @@ def test_deployment_config_escapes_quotes_in_stage_identifiers(handler_stage: st
     assert config["handler_stage"] == '"DB"."SCHEMA"."MY""STAGE"'
 
 
+def test_deployment_config_quotes_secret_fqdn():
+    config = _render_deployment_config(
+        {
+            **_minimal_deployment_vars(),
+            "google_cloud_service_account_secret_fqdn": 'system.secrets."gcp""json"',
+        }
+    )
+
+    assert (
+        config["google_cloud_service_account_secret_fqdn"]
+        == '"SYSTEM"."SECRETS"."GCP""JSON"'
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("bigquery_api", ['"BIGQUERY_API"']),
+        (["bigquery_api", '"other_api"'], ['"BIGQUERY_API"', '"OTHER_API"']),
+        (None, []),
+    ],
+)
+def test_deployment_config_normalizes_external_access_integrations(
+    value: object,
+    expected: list[str],
+):
+    vars_dict = _minimal_deployment_vars()
+    if value is not None:
+        vars_dict["external_access_integrations"] = value
+
+    config = _render_deployment_config(vars_dict)
+
+    assert config["external_access_integrations"] == expected
+
+
 @pytest.mark.parametrize(
     "missing_key",
     ["handler_local_path", "google_cloud_service_account_secret_fqdn"],
@@ -265,9 +300,11 @@ def _render_deployment_config(
             "var": lambda name, default=None: vars_dict if name == "iceberg_sync" else default,
             "target": SimpleNamespace(database=target_database, schema=target_schema),
             "dbt_snowflake_iceberg_sync": SimpleNamespace(
+                iceberg_sync_as_list=_as_list,
                 iceberg_sync_defaulted_var=_defaulted_var,
                 iceberg_sync_normalize_object_identifier=_normalize_object_identifier,
                 iceberg_sync_object_fqn=_object_fqn,
+                iceberg_sync_quote_object_identifier=_quote_object_identifier,
                 iceberg_sync_relation_from_fqn=_relation_from_fqn,
                 iceberg_sync_required_var=_required_var,
             ),
@@ -316,6 +353,14 @@ def _required_var(vars_dict: dict[str, object], key: str) -> object:
     if value is None or value == "":
         raise RuntimeError(f"vars.iceberg_sync.{key} is required")
     return value
+
+
+def _as_list(value: object) -> list[object]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    return list(value)  # type: ignore[arg-type]
 
 
 def _normalize_object_identifier(value: object) -> str:
