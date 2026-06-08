@@ -111,7 +111,7 @@ def test_internal_identifier_macro_normalizes_to_unquoted_snowflake_form():
         ("ci_analytics", "dbt_ci"),
     ],
 )
-def test_deployment_config_defaults_to_active_target_database_and_schema(
+def test_deployment_config_defaults_to_active_target_database_and_deps_schema(
     target_database: str,
     target_schema: str,
 ):
@@ -122,7 +122,7 @@ def test_deployment_config_defaults_to_active_target_database_and_schema(
     )
 
     expected_database = target_database.upper()
-    expected_schema = target_schema.upper()
+    expected_schema = "DEPS"
 
     assert config["procedure_database"] == expected_database
     assert config["procedure_schema"] == expected_schema
@@ -141,6 +141,24 @@ def test_deployment_config_defaults_to_active_target_database_and_schema(
         "schema": expected_schema,
         "identifier": "ICEBERG_SYNC_RUN_LOG",
     }
+
+
+def test_procedure_fqn_renders_string_without_relation_type():
+    rendered = _render_procedure_fqn(
+        _minimal_deployment_vars(),
+        target_database="clone_dbt",
+        target_schema="dbt_clone",
+    )
+
+    assert rendered == '"CLONE_DBT"."DEPS"."ICEBERG_SYNC"'
+
+
+def test_install_macro_uses_create_or_alter_procedure():
+    macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/install.sql"
+    macro_source = macro_path.read_text(encoding="utf-8")
+
+    assert "CREATE OR ALTER PROCEDURE" in macro_source
+    assert "CREATE OR REPLACE PROCEDURE" not in macro_source
 
 
 def test_deployment_config_honors_explicit_procedure_overrides():
@@ -257,6 +275,33 @@ def _render_deployment_config(
         }
     )
     return json.loads(rendered.strip())
+
+
+def _render_procedure_fqn(
+    vars_dict: dict[str, object],
+    *,
+    target_database: str = "analytics",
+    target_schema: str = "dbt_user",
+) -> str:
+    macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/config.sql"
+    template = Environment(extensions=["jinja2.ext.do"]).from_string(
+        macro_path.read_text(encoding="utf-8") + "\n{{ iceberg_sync_procedure_fqn() }}"
+    )
+
+    rendered = template.render(
+        {
+            "dbt_snowflake_iceberg_sync": SimpleNamespace(
+                iceberg_sync_deployment_config=lambda: _render_deployment_config(
+                    vars_dict,
+                    target_database=target_database,
+                    target_schema=target_schema,
+                ),
+                iceberg_sync_quote_object_identifier=_quote_object_identifier,
+            ),
+            "return": lambda item: item,
+        }
+    )
+    return rendered.strip()
 
 
 def _defaulted_var(vars_dict: dict[str, object], key: str, default: object) -> object:

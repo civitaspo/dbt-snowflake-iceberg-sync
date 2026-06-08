@@ -1,6 +1,6 @@
 {% macro install_iceberg_sync_procedure() -%}
   {%- set deployment = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_config() -%}
-  {%- set procedure_relation = dbt_snowflake_iceberg_sync.iceberg_sync_procedure_relation() -%}
+  {%- set procedure_fqn = dbt_snowflake_iceberg_sync.iceberg_sync_procedure_fqn() -%}
   {%- set handler_stage = deployment['handler_stage'] -%}
   {%- set handler_stage_path = deployment['handler_stage_path'] -%}
   {%- set handler_import_name = deployment['handler_import_name'] -%}
@@ -44,7 +44,7 @@
   {%- endfor %}
 
   {% call statement('iceberg_sync_create_procedure') -%}
-    CREATE OR REPLACE PROCEDURE {{ procedure_relation }}(config VARIANT)
+    CREATE OR ALTER PROCEDURE {{ procedure_fqn }}(config VARIANT)
     RETURNS VARIANT
     LANGUAGE PYTHON
     RUNTIME_VERSION = '3.12'

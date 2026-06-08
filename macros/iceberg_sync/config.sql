@@ -27,7 +27,7 @@
     dbt_snowflake_iceberg_sync.iceberg_sync_defaulted_var(
       vars_dict,
       'procedure_schema',
-      target.schema
+      'DEPS'
     )
   ) -%}
   {%- set procedure_name = dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
@@ -110,12 +110,24 @@
   }) }}
 {%- endmacro %}
 
-{% macro iceberg_sync_procedure_relation() -%}
+{% macro iceberg_sync_procedure_fqn() -%}
   {%- set deployment = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_config() -%}
-  {{ return(dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_payload(
-    deployment['procedure_relation'],
-    'procedure'
-  )) }}
+  {%- set procedure = deployment['procedure_relation'] -%}
+  {{ return(
+    dbt_snowflake_iceberg_sync.iceberg_sync_quote_object_identifier(
+      procedure['database']
+    ) ~ '.' ~
+    dbt_snowflake_iceberg_sync.iceberg_sync_quote_object_identifier(
+      procedure['schema']
+    ) ~ '.' ~
+    dbt_snowflake_iceberg_sync.iceberg_sync_quote_object_identifier(
+      procedure['identifier']
+    )
+  ) }}
+{%- endmacro %}
+
+{% macro iceberg_sync_procedure_relation() -%}
+  {{ return(dbt_snowflake_iceberg_sync.iceberg_sync_procedure_fqn()) }}
 {%- endmacro %}
 
 {% macro iceberg_sync_collect_config(model_sql, target_relation, model_node, dbt_full_refresh=False) -%}
