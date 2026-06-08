@@ -1,17 +1,14 @@
 {% macro install_iceberg_sync_procedure() -%}
-  {%- set vars_dict = var('iceberg_sync', {}) -%}
+  {%- set deployment = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_config() -%}
   {%- set procedure_relation = dbt_snowflake_iceberg_sync.iceberg_sync_procedure_relation() -%}
-  {%- set handler_stage = dbt_snowflake_iceberg_sync.iceberg_sync_required_var(vars_dict, 'handler_stage') -%}
-  {%- set handler_stage_path = vars_dict.get('handler_stage_path', 'procedure') -%}
-  {%- set handler_import_name = vars_dict.get('handler_import_name', 'iceberg_sync_procedure') -%}
-  {%- set handler_name = vars_dict.get('handler_name', handler_import_name ~ '.handler.main') -%}
-  {%- set handler_local_path = dbt_snowflake_iceberg_sync.iceberg_sync_required_var(vars_dict, 'handler_local_path') -%}
-  {%- set external_access_integrations = vars_dict.get('external_access_integrations', []) -%}
-  {%- set google_cloud_service_account_secret_fqdn = dbt_snowflake_iceberg_sync.iceberg_sync_required_var(vars_dict, 'google_cloud_service_account_secret_fqdn') -%}
-  {%- set google_cloud_service_account_secret_alias = vars_dict.get(
-    'google_cloud_service_account_secret_alias',
-    'google_cloud_service_account_credentials_json'
-  ) -%}
+  {%- set handler_stage = deployment['handler_stage'] -%}
+  {%- set handler_stage_path = deployment['handler_stage_path'] -%}
+  {%- set handler_import_name = deployment['handler_import_name'] -%}
+  {%- set handler_name = deployment['handler_name'] -%}
+  {%- set handler_local_path = deployment['handler_local_path'] -%}
+  {%- set external_access_integrations = deployment['external_access_integrations'] -%}
+  {%- set google_cloud_service_account_secret_fqdn = deployment['google_cloud_service_account_secret_fqdn'] -%}
+  {%- set google_cloud_service_account_secret_alias = deployment['google_cloud_service_account_secret_alias'] -%}
   {%- set procedure_files = [
     '__init__.py',
     'handler.py',

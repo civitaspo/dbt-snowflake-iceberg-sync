@@ -46,24 +46,40 @@ Example deployment vars:
 ```yaml
 vars:
   iceberg_sync:
-    procedure_database: ANALYTICS
-    procedure_schema: UTIL
-    procedure_name: ICEBERG_SYNC
-
-    handler_stage: ANALYTICS.UTIL.ICEBERG_SYNC_HANDLER_STAGE
-    handler_stage_path: procedure
-    handler_import_name: iceberg_sync_procedure
-    handler_name: iceberg_sync_procedure.handler.main
     handler_local_path: dbt_packages/dbt_snowflake_iceberg_sync/procedure
 
     external_access_integrations: [BIGQUERY_API]
     google_cloud_service_account_secret_fqdn: ANALYTICS.SECRETS.GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON
-    google_cloud_service_account_secret_alias: google_cloud_service_account_credentials_json
 ```
+
+`procedure_database` defaults to the active dbt `target.database`, and
+`procedure_schema` defaults to the active dbt `target.schema`.
+`procedure_name` defaults to `ICEBERG_SYNC`, and `handler_stage` defaults to
+`<procedure_database>.<procedure_schema>.ICEBERG_SYNC_HANDLER_STAGE`. Override
+these only when the package helper objects should live outside the active target
+database/schema. For example, set `procedure_schema: DEPS` when you intentionally
+want a shared utility schema and have granted the dbt role access to it.
 
 The package creates a run log table named
 `<procedure_database>.<procedure_schema>.ICEBERG_SYNC_RUN_LOG` by default. Set
 `vars.iceberg_sync.run_log_table` to a three-part relation name to override it.
+
+Deployment vars:
+
+| Var | Required | Default | Description |
+| --- | --- | --- | --- |
+| `handler_local_path` | Yes | None | Local path to the package `procedure/` directory uploaded by the installer. |
+| `google_cloud_service_account_secret_fqdn` | Yes | None | Fully qualified Snowflake secret containing the GCP service account JSON. |
+| `procedure_database` | No | `target.database` | Database where the package procedure and default helper objects are installed. |
+| `procedure_schema` | No | `target.schema` | Schema where the package procedure and default helper objects are installed. |
+| `procedure_name` | No | `ICEBERG_SYNC` | Name of the Snowflake stored procedure. |
+| `handler_stage` | No | `<procedure_database>.<procedure_schema>.ICEBERG_SYNC_HANDLER_STAGE` | Internal Snowflake stage used for the Python handler files. |
+| `handler_stage_path` | No | `procedure` | Directory prefix inside `handler_stage` for uploaded handler files. |
+| `handler_import_name` | No | `iceberg_sync_procedure` | Import directory name mounted into the Snowflake Python runtime. |
+| `handler_name` | No | `<handler_import_name>.handler.main` | Python procedure entry point. |
+| `external_access_integrations` | No | `[]` | External access integrations granted to the procedure. |
+| `google_cloud_service_account_secret_alias` | No | `google_cloud_service_account_credentials_json` | Secret alias read by the Python handler. |
+| `run_log_table` | No | `<procedure_database>.<procedure_schema>.ICEBERG_SYNC_RUN_LOG` | Three-part relation used for procedure run logs. |
 
 ## Required GCP IAM Setup
 

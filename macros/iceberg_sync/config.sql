@@ -7,16 +7,76 @@
   {{ return(vars_dict.get(key)) }}
 {%- endmacro %}
 
+{% macro iceberg_sync_defaulted_var(vars_dict, key, default) -%}
+  {%- if vars_dict.get(key, none) is none or vars_dict.get(key) == "" -%}
+    {{ return(default) }}
+  {%- endif -%}
+  {{ return(vars_dict.get(key)) }}
+{%- endmacro %}
+
 {% macro iceberg_sync_deployment_config() -%}
   {%- set vars_dict = var('iceberg_sync', {}) -%}
   {%- set procedure_database = dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
-    dbt_snowflake_iceberg_sync.iceberg_sync_required_var(vars_dict, 'procedure_database')
+    dbt_snowflake_iceberg_sync.iceberg_sync_defaulted_var(
+      vars_dict,
+      'procedure_database',
+      target.database
+    )
   ) -%}
   {%- set procedure_schema = dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
-    dbt_snowflake_iceberg_sync.iceberg_sync_required_var(vars_dict, 'procedure_schema')
+    dbt_snowflake_iceberg_sync.iceberg_sync_defaulted_var(
+      vars_dict,
+      'procedure_schema',
+      target.schema
+    )
   ) -%}
   {%- set procedure_name = dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
-    dbt_snowflake_iceberg_sync.iceberg_sync_required_var(vars_dict, 'procedure_name')
+    dbt_snowflake_iceberg_sync.iceberg_sync_defaulted_var(
+      vars_dict,
+      'procedure_name',
+      'ICEBERG_SYNC'
+    )
+  ) -%}
+  {%- set procedure_relation = {
+    'database': procedure_database,
+    'schema': procedure_schema,
+    'identifier': procedure_name
+  } -%}
+  {%- set handler_stage_default = (
+    procedure_database ~ '.' ~ procedure_schema ~ '.ICEBERG_SYNC_HANDLER_STAGE'
+  ) -%}
+  {%- set handler_stage = dbt_snowflake_iceberg_sync.iceberg_sync_object_fqn(
+    dbt_snowflake_iceberg_sync.iceberg_sync_defaulted_var(
+      vars_dict,
+      'handler_stage',
+      handler_stage_default
+    ),
+    'vars.iceberg_sync.handler_stage'
+  ) -%}
+  {%- set handler_stage_path = dbt_snowflake_iceberg_sync.iceberg_sync_defaulted_var(
+    vars_dict,
+    'handler_stage_path',
+    'procedure'
+  ) -%}
+  {%- set handler_import_name = dbt_snowflake_iceberg_sync.iceberg_sync_defaulted_var(
+    vars_dict,
+    'handler_import_name',
+    'iceberg_sync_procedure'
+  ) -%}
+  {%- set handler_name = dbt_snowflake_iceberg_sync.iceberg_sync_defaulted_var(
+    vars_dict,
+    'handler_name',
+    handler_import_name ~ '.handler.main'
+  ) -%}
+  {%- set handler_local_path = dbt_snowflake_iceberg_sync.iceberg_sync_required_var(
+    vars_dict,
+    'handler_local_path'
+  ) -%}
+  {%- set google_cloud_service_account_secret_fqdn = (
+    dbt_snowflake_iceberg_sync.iceberg_sync_required_var(
+      vars_dict,
+      'google_cloud_service_account_secret_fqdn'
+    )
   ) -%}
   {%- set google_cloud_service_account_secret_alias = vars_dict.get(
     'google_cloud_service_account_secret_alias',
@@ -37,17 +97,24 @@
     'procedure_database': procedure_database,
     'procedure_schema': procedure_schema,
     'procedure_name': procedure_name,
+    'procedure_relation': procedure_relation,
+    'handler_stage': handler_stage,
+    'handler_stage_path': handler_stage_path,
+    'handler_import_name': handler_import_name,
+    'handler_name': handler_name,
+    'handler_local_path': handler_local_path,
+    'external_access_integrations': vars_dict.get('external_access_integrations', []),
     'run_log_table': run_log_table,
+    'google_cloud_service_account_secret_fqdn': google_cloud_service_account_secret_fqdn,
     'google_cloud_service_account_secret_alias': google_cloud_service_account_secret_alias
   }) }}
 {%- endmacro %}
 
 {% macro iceberg_sync_procedure_relation() -%}
   {%- set deployment = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_config() -%}
-  {{ return(api.Relation.create(
-    database=deployment['procedure_database'],
-    schema=deployment['procedure_schema'],
-    identifier=deployment['procedure_name']
+  {{ return(dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_payload(
+    deployment['procedure_relation'],
+    'procedure'
   )) }}
 {%- endmacro %}
 
