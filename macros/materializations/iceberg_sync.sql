@@ -2,9 +2,9 @@
   {%- set payload = dbt_snowflake_iceberg_sync.iceberg_sync_collect_config(
     sql, this, model, flags.FULL_REFRESH
   ) -%}
-  {%- set procedure_relation = dbt_snowflake_iceberg_sync.iceberg_sync_procedure_relation() -%}
+  {%- set procedure_fqn = dbt_snowflake_iceberg_sync.iceberg_sync_procedure_fqn() -%}
   {%- set call_sql -%}
-    CALL {{ procedure_relation }}(
+    CALL {{ procedure_fqn }}(
       PARSE_JSON({{ dbt_snowflake_iceberg_sync.iceberg_sync_json_sql_literal(payload) }})
     )
   {%- endset -%}
