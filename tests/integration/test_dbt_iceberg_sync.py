@@ -1275,7 +1275,7 @@ def _export_prefix(context: IntegrationContext, model_name: str) -> str:
 
 
 def _quoted_relation(database: str, schema: str, identifier: str) -> str:
-    return ".".join(f'"{part}"' for part in (database, schema, identifier))
+    return ".".join(f'"{part.upper()}"' for part in (database, schema, identifier))
 
 
 def _unquoted_relation(database: str, schema: str, identifier: str) -> str:

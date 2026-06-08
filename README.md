@@ -185,6 +185,13 @@ Credential material is not a materialization option. Keep service account JSON
 and secret names in Snowflake resources and `vars.iceberg_sync`; model configs
 that contain credential-like keys are rejected.
 
+Snowflake object identifiers managed by the package, including relation
+database, schema, table, view, procedure, run-log, and named stage identifiers,
+are normalized to uppercase so they are compatible with Snowflake unquoted
+identifier folding. Source column names are different: BigQuery and Parquet loads
+use `MATCH_BY_COLUMN_NAME = CASE_SENSITIVE`, so source column case is preserved
+and quoted in internal table DDL and exposed view SQL.
+
 ### Common Options
 
 | Option | Required | Default | Description |

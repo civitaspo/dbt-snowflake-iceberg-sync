@@ -1,12 +1,24 @@
+{% macro iceberg_sync_normalize_object_identifier(value) -%}
+  {{ return((value | string | trim | replace('"', '') | upper)) }}
+{%- endmacro %}
+
 {% macro iceberg_sync_internal_identifier(target_relation) -%}
-  {{ return("__" ~ target_relation.identifier) }}
+  {{ return(dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
+    "__" ~ target_relation.identifier
+  )) }}
 {%- endmacro %}
 
 {% macro iceberg_sync_relation_payload(relation) -%}
   {{ return({
-    'database': relation.database,
-    'schema': relation.schema,
-    'identifier': relation.identifier
+    'database': dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
+      relation.database
+    ),
+    'schema': dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
+      relation.schema
+    ),
+    'identifier': dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
+      relation.identifier
+    )
   }) }}
 {%- endmacro %}
 
@@ -18,8 +30,14 @@
     ) -%}
   {%- endif -%}
   {{ return({
-    'database': parts[0],
-    'schema': parts[1],
-    'identifier': parts[2]
+    'database': dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
+      parts[0]
+    ),
+    'schema': dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
+      parts[1]
+    ),
+    'identifier': dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
+      parts[2]
+    )
   }) }}
 {%- endmacro %}

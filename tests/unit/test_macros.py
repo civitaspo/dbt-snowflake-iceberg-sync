@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from jinja2 import Environment
 
@@ -39,9 +40,50 @@ def test_create_view_macro_quotes_uppercase_aliases():
     assert '"OrderID" AS "SELECT"' in rendered
 
 
+def test_identifier_macros_normalize_snowflake_object_identifiers():
+    macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/identifiers.sql"
+    template = Environment(extensions=["jinja2.ext.do"]).from_string(
+        macro_path.read_text(encoding="utf-8")
+        + "\n{{ iceberg_sync_normalize_object_identifier(value) }}"
+    )
+
+    rendered = template.render(
+        {
+            "value": ' "orders" ',
+            "return": lambda item: item,
+        }
+    )
+
+    assert rendered.strip() == "ORDERS"
+
+
+def test_internal_identifier_macro_normalizes_to_unquoted_snowflake_form():
+    macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/identifiers.sql"
+    template = Environment(extensions=["jinja2.ext.do"]).from_string(
+        macro_path.read_text(encoding="utf-8")
+        + "\n{{ iceberg_sync_internal_identifier(target_relation) }}"
+    )
+
+    rendered = template.render(
+        {
+            "target_relation": SimpleNamespace(identifier="orders"),
+            "dbt_snowflake_iceberg_sync": SimpleNamespace(
+                iceberg_sync_normalize_object_identifier=_normalize_object_identifier
+            ),
+            "return": lambda item: item,
+        }
+    )
+
+    assert rendered.strip() == "__ORDERS"
+
+
 class _FakeAdapter:
     def quote(self, value: str) -> str:
         return '"' + value.replace('"', '""') + '"'
+
+
+def _normalize_object_identifier(value: object) -> str:
+    return str(value).strip().replace('"', "").upper()
 
 
 def _render_json_sql_literal(value: dict[str, str]) -> str:

@@ -95,7 +95,7 @@ def test_parse_stage_location_rejects_table_stage():
 
 
 def test_parse_stage_location_quotes_named_stage():
-    stage_fqn, stage_path = parse_stage_location("@ANALYTICS.PUBLIC.EXPORT_STAGE/orders")
+    stage_fqn, stage_path = parse_stage_location("@analytics.public.export_stage/orders")
 
     assert stage_fqn == '"ANALYTICS"."PUBLIC"."EXPORT_STAGE"'
     assert stage_path == "orders"

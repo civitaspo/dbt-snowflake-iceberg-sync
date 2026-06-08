@@ -25,6 +25,6 @@ def test_run_log_payload_contains_required_fields(base_payload):
     )
 
     assert payload["run_id"] == "run-1"
-    assert payload["target_view"] == '"ANALYTICS"."PUBLIC"."orders"'
-    assert payload["internal_iceberg_table"] == '"ANALYTICS"."PUBLIC"."__orders"'
+    assert payload["target_view"] == '"ANALYTICS"."PUBLIC"."ORDERS"'
+    assert payload["internal_iceberg_table"] == '"ANALYTICS"."PUBLIC"."__ORDERS"'
     assert payload["source_job_references"] == [{"jobId": "job-1"}]

@@ -30,9 +30,17 @@ def quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
+def normalize_snowflake_object_identifier(identifier: str) -> str:
+    return str(identifier).strip().replace('"', "").upper()
+
+
+def quote_object_identifier(identifier: str) -> str:
+    return quote_identifier(normalize_snowflake_object_identifier(identifier))
+
+
 def quote_fqn(database: str, schema: str, identifier: str) -> str:
     return ".".join(
-        quote_identifier(part)
+        quote_object_identifier(part)
         for part in (
             database,
             schema,
@@ -42,7 +50,7 @@ def quote_fqn(database: str, schema: str, identifier: str) -> str:
 
 
 def quote_stage_fqn(parts: list[str]) -> str:
-    return ".".join(quote_identifier(part) for part in parts)
+    return ".".join(quote_object_identifier(part) for part in parts)
 
 
 def sql_string(value: str) -> str:

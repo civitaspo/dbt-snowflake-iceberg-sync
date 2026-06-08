@@ -9,9 +9,15 @@
 
 {% macro iceberg_sync_deployment_config() -%}
   {%- set vars_dict = var('iceberg_sync', {}) -%}
-  {%- set procedure_database = dbt_snowflake_iceberg_sync.iceberg_sync_required_var(vars_dict, 'procedure_database') -%}
-  {%- set procedure_schema = dbt_snowflake_iceberg_sync.iceberg_sync_required_var(vars_dict, 'procedure_schema') -%}
-  {%- set procedure_name = dbt_snowflake_iceberg_sync.iceberg_sync_required_var(vars_dict, 'procedure_name') -%}
+  {%- set procedure_database = dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
+    dbt_snowflake_iceberg_sync.iceberg_sync_required_var(vars_dict, 'procedure_database')
+  ) -%}
+  {%- set procedure_schema = dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
+    dbt_snowflake_iceberg_sync.iceberg_sync_required_var(vars_dict, 'procedure_schema')
+  ) -%}
+  {%- set procedure_name = dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
+    dbt_snowflake_iceberg_sync.iceberg_sync_required_var(vars_dict, 'procedure_name')
+  ) -%}
   {%- set google_cloud_service_account_secret_alias = vars_dict.get(
     'google_cloud_service_account_secret_alias',
     'google_cloud_service_account_credentials_json'
@@ -53,8 +59,8 @@
   {%- set deployment = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_config() -%}
   {%- set target_payload = dbt_snowflake_iceberg_sync.iceberg_sync_relation_payload(target_relation) -%}
   {%- set internal_payload = {
-    'database': target_relation.database,
-    'schema': target_relation.schema,
+    'database': target_payload['database'],
+    'schema': target_payload['schema'],
     'identifier': dbt_snowflake_iceberg_sync.iceberg_sync_internal_identifier(target_relation)
   } -%}
   {%- set model_config = {} -%}
