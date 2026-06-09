@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0 - 2026-06-09
+
+### Added
+
+- Added dbt Fusion package compatibility metadata and CI parse coverage with a
+  pinned Fusion CLI.
+- Added Fusion-backed release validation and opt-in integration test support via
+  `DBT_SNOWFLAKE_ICEBERG_SYNC_DBT_EXECUTABLE`.
+
+### Changed
+
+- Read materialization options from `meta.iceberg_sync` first so package-specific
+  model configs are accepted by dbt Fusion.
+- Kept legacy top-level materialization config keys readable for existing dbt
+  Core projects.
+- Documented the Fusion-safe model config shape and absolute
+  `handler_local_path` guidance for Snowflake procedure uploads.
+
 ## 0.1.4 - 2026-06-09
 
 ### Added
