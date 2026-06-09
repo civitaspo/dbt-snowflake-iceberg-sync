@@ -238,6 +238,7 @@ and quoted in internal table DDL and exposed view SQL.
 | `iceberg_sync_retry_backoff_multiplier` | No | `2.0` | Retry delay multiplier. Must be at least `1.0`. |
 | `iceberg_sync_retry_jitter_seconds` | No | `3` | Maximum random jitter added to retry delays. |
 | `iceberg_sync_cleanup_created_table_on_failure` | No | `true` | Drop a newly-created internal Iceberg table after failed initial creation when no target view existed before the run. |
+| `iceberg_sync_run_log_fail_on_error` | No | `false` | Fail the model when writing the shared run log table fails. The default keeps run-log writes best-effort for high-concurrency runs. |
 
 The effective mode becomes full refresh when dbt is invoked with
 `--full-refresh`, when `materialization_strategy='full_refresh'`, or when the
@@ -349,8 +350,11 @@ previous committed table data.
 
 ## Retry And Cleanup Behavior
 
-The procedure retries only transient Snowflake failures raised by the load
-transaction:
+The materialization retries transient Snowflake failures at two layers. The dbt
+materialization wraps the outer stored procedure `CALL` in a Snowflake Scripting
+retry block so Snowflake internal errors raised by the `CALL` itself can be
+retried. The procedure also retries transient Snowflake failures raised by the
+load transaction:
 
 ```sql
 BEGIN;
@@ -359,10 +363,14 @@ COPY INTO <internal_iceberg_table> ... LOAD_MODE = ADD_FILES_COPY;
 COMMIT;
 ```
 
-Retries reuse the same BigQuery export files and do not rerun the BigQuery
-export job. The retry classifier is intentionally narrow and applies only to
-Snowflake execution errors that look like transient internal failures, including
-messages containing `SQL execution internal error` or `incident`.
+Procedure-level retries reuse the same BigQuery export files and do not rerun
+the BigQuery export job. Outer `CALL` retries may rerun the procedure and create
+a new export prefix. This remains idempotent for full-refresh and `delete+copy`
+incremental runs because each load attempt applies the configured Snowflake
+delete predicate before copying files. Retry classifiers apply only to stable
+Snowflake execution-error text that looks transient, including messages
+containing `SQL execution internal error`, `incident`, or the scoped-transaction
+error text `Scoped transaction started in stored procedure is incomplete`.
 
 The procedure does not retry configuration, schema, predicate validation,
 BigQuery source, permission, or relation-conflict errors.
@@ -377,6 +385,13 @@ tables are never dropped by this cleanup path.
 The run log and returned procedure result include `retry` and `cleanup` objects
 with attempt counts, retryable error diagnostics, and best-effort cleanup
 outcomes.
+
+The run log table is shared by all concurrent models. Run-log writes are
+best-effort by default, and lock-contention failures such as `000625`, `locked
+table`, or `number of waiters` are retried before being ignored. When a
+successful sync cannot write the run log, the procedure result includes
+`run_log_error`. Set `iceberg_sync_run_log_fail_on_error=true` to restore strict
+run-log behavior.
 
 The `incremental_predicate` is evaluated against the internal Iceberg table, not
 the exposed view. Top-level source field names are preserved exactly in that

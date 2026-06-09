@@ -21,14 +21,23 @@ def test_iceberg_sync_dbt_run_executes_procedure_as_main_statement(
         {"status": "success"},
     )
 
-    call_statements = [
-        call for call in executed_sql if _normalize_sql(call["sql"]).startswith("call ")
+    main_statements = [
+        call
+        for call in executed_sql
+        if _normalize_sql(call["sql"]).startswith("execute immediate ")
     ]
 
     assert run_result.success
-    assert len(call_statements) == 1
-    assert call_statements[0]["fetch"] is True
-    assert call_statements[0]["auto_begin"] is True
+    assert len(main_statements) == 1
+    assert main_statements[0]["fetch"] is True
+    assert main_statements[0]["auto_begin"] is True
+    normalized_sql = _normalize_sql(main_statements[0]["sql"])
+    assert "call " in normalized_sql
+    assert "system$wait" in normalized_sql
+    assert "sql execution internal error" in normalized_sql
+    assert "000603" not in normalized_sql
+    assert "300005" not in normalized_sql
+    assert "scoped transaction started in stored procedure is incomplete" in normalized_sql
 
 
 def test_iceberg_sync_dbt_run_surfaces_procedure_failure(
@@ -148,7 +157,7 @@ def _run_dbt_iceberg_sync_model(
         )
         normalized = _normalize_sql(sql)
         response = AdapterResponse(_message="SUCCESS", code="SUCCESS", rows_affected=1)
-        if normalized.startswith("call "):
+        if normalized.startswith("execute immediate "):
             return response, agate.Table([[json.dumps(procedure_result)]], ["RESULT"])
         if normalized.startswith("show objects"):
             return response, _show_objects_table()

@@ -7,6 +7,7 @@
   {%- set handler_name = deployment['handler_name'] -%}
   {%- set handler_local_path = deployment['handler_local_path'] -%}
   {%- set external_access_integrations = deployment['external_access_integrations'] -%}
+  {%- set run_log_table = deployment['run_log_table'] -%}
   {%- set google_cloud_service_account_secret_fqdn = deployment['google_cloud_service_account_secret_fqdn'] -%}
   {%- set google_cloud_service_account_secret_alias = deployment['google_cloud_service_account_secret_alias'] -%}
   {%- set procedure_files = [
@@ -28,6 +29,38 @@
   {% call statement('iceberg_sync_create_handler_stage') -%}
     CREATE STAGE IF NOT EXISTS {{ handler_stage }}
   {%- endcall %}
+
+  {%- if run_log_table is not none -%}
+    {%- set run_log_relation = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_payload(run_log_table) -%}
+    {% call statement('iceberg_sync_create_run_log_table') -%}
+      CREATE TABLE IF NOT EXISTS {{ run_log_relation }} (
+        run_id VARCHAR,
+        invocation_id VARCHAR,
+        model_unique_id VARCHAR,
+        target_view VARCHAR,
+        internal_iceberg_table VARCHAR,
+        source_type VARCHAR,
+        effective_mode VARCHAR,
+        predicate_json VARIANT,
+        export_segments VARIANT,
+        source_job_references VARIANT,
+        staging_table_reference VARCHAR,
+        snowflake_query_ids VARIANT,
+        retry VARIANT,
+        cleanup VARIANT,
+        status VARCHAR,
+        error_message VARCHAR,
+        started_at TIMESTAMP_LTZ,
+        finished_at TIMESTAMP_LTZ
+      )
+    {%- endcall %}
+    {% call statement('iceberg_sync_alter_run_log_retry') -%}
+      ALTER TABLE {{ run_log_relation }} ADD COLUMN IF NOT EXISTS retry VARIANT
+    {%- endcall %}
+    {% call statement('iceberg_sync_alter_run_log_cleanup') -%}
+      ALTER TABLE {{ run_log_relation }} ADD COLUMN IF NOT EXISTS cleanup VARIANT
+    {%- endcall %}
+  {%- endif -%}
 
   {%- for procedure_file in procedure_files -%}
     {%- set destination_dir = handler_stage_path -%}

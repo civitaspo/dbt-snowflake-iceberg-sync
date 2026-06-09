@@ -56,6 +56,9 @@ def base_payload() -> dict[str, Any]:
         "cleanup": {
             "created_table_on_failure": True,
         },
+        "run_log": {
+            "fail_on_error": False,
+        },
         "bigquery": {
             "export_strategy": "extract",
             "project_id": "project",

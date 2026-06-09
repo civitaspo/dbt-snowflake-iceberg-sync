@@ -104,6 +104,11 @@ class CleanupConfig:
 
 
 @dataclass(frozen=True)
+class RunLogConfig:
+    fail_on_error: bool = False
+
+
+@dataclass(frozen=True)
 class IcebergSyncConfig:
     source_type: str
     materialization_strategy: str
@@ -117,6 +122,7 @@ class IcebergSyncConfig:
     iceberg_table: IcebergTableConfig
     retry: RetryPolicyConfig = field(default_factory=RetryPolicyConfig)
     cleanup: CleanupConfig = field(default_factory=CleanupConfig)
+    run_log: RunLogConfig = field(default_factory=RunLogConfig)
     partition_by: tuple[str, ...] = field(default_factory=tuple)
     cluster_by: tuple[str, ...] = field(default_factory=tuple)
     dbt_full_refresh: bool = False
@@ -240,6 +246,15 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         )
     )
 
+    run_log_payload = payload.get("run_log", {})
+    run_log = RunLogConfig(
+        fail_on_error=_coerce_bool_strict(
+            run_log_payload.get("fail_on_error"),
+            False,
+            "iceberg_sync_run_log_fail_on_error",
+        )
+    )
+
     config = IcebergSyncConfig(
         source_type=_defaulted(payload, "source_type", "bigquery"),
         materialization_strategy=_defaulted(payload, "materialization_strategy", "incremental"),
@@ -253,6 +268,7 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         iceberg_table=iceberg_table,
         retry=retry,
         cleanup=cleanup,
+        run_log=run_log,
         partition_by=tuple(payload.get("partition_by") or ()),
         cluster_by=tuple(payload.get("cluster_by") or ()),
         dbt_full_refresh=_coerce_bool(payload.get("dbt_full_refresh"), False),

@@ -5,6 +5,11 @@
   {{ return("'" ~ escaped ~ "'") }}
 {%- endmacro %}
 
+{% macro iceberg_sync_sql_string_literal(value) -%}
+  {%- set escaped = (value | string) | replace("\\", "\\\\") | replace("'", "''") -%}
+  {{ return("'" ~ escaped ~ "'") }}
+{%- endmacro %}
+
 {% macro iceberg_sync_parse_procedure_result(raw_result) -%}
   {%- if raw_result is string -%}
     {{ return(fromjson(raw_result)) }}
