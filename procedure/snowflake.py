@@ -11,12 +11,11 @@ from .config import RelationConfig
 from .errors import ConfigError, SnowflakeExecutionError
 from .schema import SnowflakeColumn, ViewColumn, columns_from_snowflake_describe
 from .sql import (
-    alter_run_log_table_sql,
     alter_table_add_columns_sql,
     copy_into_sql,
     create_iceberg_table_sql,
+    create_or_alter_run_log_table_sql,
     create_or_replace_view_sql,
-    create_run_log_table_sql,
     delete_sql,
     desc_stage_sql,
     drop_iceberg_table_sql,
@@ -134,9 +133,7 @@ class SnowflakeClient:
 
     def ensure_run_log(self, relation: RelationConfig | None) -> None:
         if relation is not None:
-            self.execute(create_run_log_table_sql(relation))
-            for statement in alter_run_log_table_sql(relation):
-                self.execute(statement)
+            self.execute(create_or_alter_run_log_table_sql(relation))
 
     def write_run_log(self, relation: RelationConfig | None, payload: dict[str, Any]) -> None:
         if relation is not None:

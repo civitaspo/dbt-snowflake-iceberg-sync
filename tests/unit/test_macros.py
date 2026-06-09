@@ -161,6 +161,15 @@ def test_install_macro_uses_create_or_alter_procedure():
     assert "CREATE OR REPLACE PROCEDURE" not in macro_source
 
 
+def test_install_macro_uses_create_or_alter_for_run_log_table():
+    macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/install.sql"
+    macro_source = macro_path.read_text(encoding="utf-8")
+
+    assert "CREATE OR ALTER TABLE" in macro_source
+    assert "CREATE TABLE IF NOT EXISTS" not in macro_source
+    assert "ADD COLUMN IF NOT EXISTS" not in macro_source
+
+
 def test_deployment_config_honors_explicit_procedure_overrides():
     config = _render_deployment_config(
         {

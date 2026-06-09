@@ -63,7 +63,7 @@
   {%- set retry_call_sql = "EXECUTE IMMEDIATE " ~ dbt_snowflake_iceberg_sync.iceberg_sync_sql_string_literal(retry_call_block) -%}
 
   {%- if execute -%}
-    {%- call statement('main', fetch_result=True) -%}
+    {%- call statement('main', fetch_result=True, auto_begin=False) -%}
       {{ retry_call_sql }}
     {%- endcall -%}
     {%- set procedure_table = load_result('main')['table'] -%}
