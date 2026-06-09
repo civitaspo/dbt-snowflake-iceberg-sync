@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.1 - 2026-06-09
+
+### Changed
+
+- Made shared run-log writes best-effort by default with retry for Snowflake
+  lock-contention failures, while keeping strict behavior available through
+  `iceberg_sync_run_log_fail_on_error`.
+- Moved run-log table setup to install-time deployment instead of each
+  materialization run.
+- Added materialization-level retry around the outer stored procedure call for
+  stable transient Snowflake error messages.
+- Hardened load transaction cleanup so rollback failures do not mask the
+  original load error.
+
 ## 0.2.0 - 2026-06-09
 
 ### Added
