@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.2 - 2026-06-09
+
+### Changed
+
+- Switched package-managed run-log table setup to `CREATE OR ALTER TABLE`
+  instead of separate create and alter statements.
+- Disabled dbt's outer transaction wrapper for the materialization procedure
+  call so run-log writes remain standalone procedure statements.
+
 ## 0.2.1 - 2026-06-09
 
 ### Changed

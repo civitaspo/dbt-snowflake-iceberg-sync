@@ -1,5 +1,5 @@
 name: dbt_snowflake_iceberg_sync
-version: 0.2.1
+version: 0.2.2
 config-version: 2
 
 profile: dbt_snowflake_iceberg_sync
