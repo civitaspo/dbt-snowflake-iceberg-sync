@@ -81,8 +81,27 @@ def test_run_log_sql_uses_create_or_alter_and_includes_all_columns(base_payload)
     assert 'CREATE OR ALTER TABLE "ANALYTICS"."UTIL"."ICEBERG_SYNC_RUN_LOG"' in create_sql
     assert "CREATE TABLE IF NOT EXISTS" not in create_sql
     assert "ADD COLUMN IF NOT EXISTS" not in create_sql
-    assert "retry VARIANT" in create_sql
-    assert "cleanup VARIANT" in create_sql
+    for expected_column in [
+        "run_id VARCHAR",
+        "invocation_id VARCHAR",
+        "model_unique_id VARCHAR",
+        "target_view VARCHAR",
+        "internal_iceberg_table VARCHAR",
+        "source_type VARCHAR",
+        "effective_mode VARCHAR",
+        "predicate_json VARIANT",
+        "export_segments VARIANT",
+        "source_job_references VARIANT",
+        "staging_table_reference VARCHAR",
+        "snowflake_query_ids VARIANT",
+        "retry VARIANT",
+        "cleanup VARIANT",
+        "status VARCHAR",
+        "error_message VARCHAR",
+        "started_at TIMESTAMP_LTZ",
+        "finished_at TIMESTAMP_LTZ",
+    ]:
+        assert expected_column in create_sql
 
 
 def test_quote_view_alias_preserves_snowflake_unquoted_folding():
