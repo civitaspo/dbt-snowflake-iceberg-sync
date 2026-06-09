@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3 - 2026-06-09
+
+### Added
+
+- Added configurable BigQuery Parquet export compression with `ZSTD` as the
+  default and support for `NONE`, `SNAPPY`, `GZIP`, and `ZSTD`.
+
 ## 0.2.2 - 2026-06-09
 
 ### Changed
