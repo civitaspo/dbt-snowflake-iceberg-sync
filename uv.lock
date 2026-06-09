@@ -504,7 +504,9 @@ source = { editable = "." }
 
 [package.optional-dependencies]
 dev = [
+    { name = "packaging" },
     { name = "pytest" },
+    { name = "pyyaml" },
     { name = "ruff" },
 ]
 integration = [
@@ -516,7 +518,9 @@ integration = [
 dev = [
     { name = "dbt-core" },
     { name = "dbt-snowflake" },
+    { name = "packaging" },
     { name = "pytest" },
+    { name = "pyyaml" },
     { name = "ruff" },
 ]
 
@@ -524,7 +528,9 @@ dev = [
 requires-dist = [
     { name = "dbt-core", marker = "extra == 'integration'", specifier = ">=1.10,<1.11" },
     { name = "dbt-snowflake", marker = "extra == 'integration'", specifier = ">=1.10,<1.11" },
+    { name = "packaging", marker = "extra == 'dev'", specifier = ">=24" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
 ]
 provides-extras = ["dev", "integration"]
@@ -533,7 +539,9 @@ provides-extras = ["dev", "integration"]
 dev = [
     { name = "dbt-core", specifier = ">=1.10,<1.11" },
     { name = "dbt-snowflake", specifier = ">=1.10,<1.11" },
+    { name = "packaging", specifier = ">=24" },
     { name = "pytest", specifier = ">=8" },
+    { name = "pyyaml", specifier = ">=6" },
     { name = "ruff", specifier = ">=0.5" },
 ]
 

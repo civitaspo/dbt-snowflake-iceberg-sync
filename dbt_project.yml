@@ -4,7 +4,7 @@ config-version: 2
 
 profile: dbt_snowflake_iceberg_sync
 
-require-dbt-version: ">=1.8.0"
+require-dbt-version: ">=1.10.0,<3.0.0"
 
 macro-paths:
   - macros

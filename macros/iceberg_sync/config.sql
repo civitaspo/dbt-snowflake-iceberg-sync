@@ -140,7 +140,7 @@
 {%- endmacro %}
 
 {% macro iceberg_sync_collect_config(model_sql, target_relation, model_node, dbt_full_refresh=False) -%}
-  {%- do dbt_snowflake_iceberg_sync.iceberg_sync_validate_forbidden_model_configs() -%}
+  {%- do dbt_snowflake_iceberg_sync.iceberg_sync_validate_forbidden_model_configs(model_node) -%}
 
   {%- set partition_by = dbt_snowflake_iceberg_sync.iceberg_sync_as_list(config.get('partition_by', [])) -%}
   {%- set cluster_by = dbt_snowflake_iceberg_sync.iceberg_sync_as_list(config.get('cluster_by', [])) -%}
@@ -155,12 +155,16 @@
   {%- if model_node.config is defined and model_node.config.extra is defined -%}
     {%- set model_config = model_node.config.extra -%}
   {%- endif -%}
+  {%- set source_type = dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'source_type', none) -%}
+  {%- set materialization_strategy = dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'materialization_strategy', none) -%}
+  {%- set incremental_strategy = dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'incremental_strategy', none) -%}
+  {%- set incremental_predicate = dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'incremental_predicate', none) -%}
 
   {%- set payload = {
-    'source_type': config.get('source_type', none) or 'bigquery',
-    'materialization_strategy': config.get('materialization_strategy', none) or 'incremental',
-    'incremental_strategy': config.get('incremental_strategy', none) or 'delete+copy',
-    'incremental_predicate': config.get('incremental_predicate', none),
+    'source_type': source_type or 'bigquery',
+    'materialization_strategy': materialization_strategy or 'incremental',
+    'incremental_strategy': incremental_strategy or 'delete+copy',
+    'incremental_predicate': incremental_predicate,
     'dbt_full_refresh': dbt_full_refresh,
     'partition_by': partition_by,
     'cluster_by': cluster_by,
@@ -175,43 +179,43 @@
     'model_config': model_config,
     'deployment': deployment,
     'retry': {
-      'max_attempts': config.get('iceberg_sync_retry_max_attempts', 3),
-      'initial_delay_seconds': config.get('iceberg_sync_retry_initial_delay_seconds', 5),
-      'max_delay_seconds': config.get('iceberg_sync_retry_max_delay_seconds', 60),
-      'backoff_multiplier': config.get('iceberg_sync_retry_backoff_multiplier', 2.0),
-      'jitter_seconds': config.get('iceberg_sync_retry_jitter_seconds', 3)
+      'max_attempts': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_sync_retry_max_attempts', 3),
+      'initial_delay_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_sync_retry_initial_delay_seconds', 5),
+      'max_delay_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_sync_retry_max_delay_seconds', 60),
+      'backoff_multiplier': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_sync_retry_backoff_multiplier', 2.0),
+      'jitter_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_sync_retry_jitter_seconds', 3)
     },
     'cleanup': {
-      'created_table_on_failure': config.get('iceberg_sync_cleanup_created_table_on_failure', true)
+      'created_table_on_failure': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_sync_cleanup_created_table_on_failure', true)
     },
     'bigquery': {
-      'export_strategy': config.get('bigquery_export_strategy', none) or 'extract',
-      'project_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config('google_cloud_project_id'),
-      'dataset_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config('bigquery_dataset_id'),
-      'table_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config('bigquery_table_id'),
-      'location': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config('bigquery_location'),
-      'export_location': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config('bigquery_export_location'),
-      'export_predicate_type': config.get('bigquery_export_predicate_type', none) or 'auto',
-      'full_refresh_predicates': dbt_snowflake_iceberg_sync.iceberg_sync_as_list(config.get('bigquery_export_full_refresh_predicates', [])),
-      'incremental_predicates': dbt_snowflake_iceberg_sync.iceberg_sync_as_list(config.get('bigquery_export_incremental_predicates', [])),
-      'staging_dataset_id': config.get('bigquery_staging_dataset_id', none),
-      'staging_table_expiration_hours': config.get('bigquery_staging_table_expiration_hours', 24),
-      'staging_table_reuse': config.get('bigquery_staging_table_reuse', true),
-      'force_rebuild_staging_table': config.get('force_rebuild_staging_table', false)
+      'export_strategy': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_strategy', none) or 'extract',
+      'project_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'google_cloud_project_id'),
+      'dataset_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_dataset_id'),
+      'table_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_table_id'),
+      'location': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_location'),
+      'export_location': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_export_location'),
+      'export_predicate_type': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_predicate_type', none) or 'auto',
+      'full_refresh_predicates': dbt_snowflake_iceberg_sync.iceberg_sync_as_list(dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_full_refresh_predicates', [])),
+      'incremental_predicates': dbt_snowflake_iceberg_sync.iceberg_sync_as_list(dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_incremental_predicates', [])),
+      'staging_dataset_id': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_staging_dataset_id', none),
+      'staging_table_expiration_hours': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_staging_table_expiration_hours', 24),
+      'staging_table_reuse': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_staging_table_reuse', true),
+      'force_rebuild_staging_table': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'force_rebuild_staging_table', false)
     },
     'iceberg_table': {
-      'external_volume': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config('iceberg_table_external_volume'),
-      'base_location': config.get('iceberg_table_base_location', none),
-      'target_file_size': config.get('iceberg_table_target_file_size', none) or 'AUTO',
-      'storage_serialization_policy': config.get('iceberg_table_storage_serialization_policy', none) or 'COMPATIBLE',
-      'data_retention_time_in_days': config.get('iceberg_table_data_retention_time_in_days', 7),
-      'max_data_extension_time_in_days': config.get('iceberg_table_max_data_extension_time_in_days', none),
-      'change_tracking': config.get('iceberg_table_change_tracking', true),
-      'copy_grants': config.get('iceberg_table_copy_grants', false),
-      'error_logging': config.get('iceberg_table_error_logging', false),
-      'iceberg_version': config.get('iceberg_table_iceberg_version', 3),
-      'enable_iceberg_merge_on_read': config.get('iceberg_table_enable_iceberg_merge_on_read', true),
-      'enable_data_compaction': config.get('iceberg_table_enable_data_compaction', true)
+      'external_volume': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'iceberg_table_external_volume'),
+      'base_location': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_table_base_location', none),
+      'target_file_size': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_table_target_file_size', none) or 'AUTO',
+      'storage_serialization_policy': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_table_storage_serialization_policy', none) or 'COMPATIBLE',
+      'data_retention_time_in_days': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_table_data_retention_time_in_days', 7),
+      'max_data_extension_time_in_days': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_table_max_data_extension_time_in_days', none),
+      'change_tracking': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_table_change_tracking', true),
+      'copy_grants': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_table_copy_grants', false),
+      'error_logging': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_table_error_logging', false),
+      'iceberg_version': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_table_iceberg_version', 3),
+      'enable_iceberg_merge_on_read': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_table_enable_iceberg_merge_on_read', true),
+      'enable_data_compaction': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_table_enable_data_compaction', true)
     }
   } -%}
   {%- do dbt_snowflake_iceberg_sync.iceberg_sync_validate_payload(payload) -%}
