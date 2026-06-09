@@ -21,6 +21,7 @@ DBT_SNOWFLAKE_ICEBERG_SYNC_DBT_EXECUTABLE=/path/to/dbtf uv run pytest -m integra
 The integration suite contains separate tests for:
 
 - concrete non-partitioned BigQuery extract with `auto` and explicit `none`
+- BigQuery extract compression with `NONE`, `SNAPPY`, `GZIP`, and `ZSTD`
 - native BigQuery `DATETIME` extract mapped to Snowflake `TIMESTAMP_NTZ(6)`
 - native time-partitioned extract with `auto` and explicit partition decorators
 - native integer range-partitioned extract with `auto` and explicit partition decorators

@@ -300,6 +300,49 @@ def test_dbt_extract_modes(tmp_path: Path):
         _cleanup(context, model_names)
 
 
+def test_dbt_extract_compression_modes(tmp_path: Path):
+    context = _integration_context(tmp_path, "extract_compression")
+    table_id = _required_env(
+        "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_NON_PARTITIONED_TABLE_ID"
+    )
+    expected_rows = _required_int_env(
+        "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_NON_PARTITIONED_EXPECTED_ROWS"
+    )
+    model_sql: dict[str, str] = {}
+    assertions: list[dict[str, Any]] = []
+    model_names: list[str] = []
+    for codec in ("NONE", "SNAPPY", "GZIP", "ZSTD"):
+        model_name = f"iceberg_sync_compression_{codec.lower()}_{context.run_id}"
+        export_prefix = _export_prefix(context, model_name)
+        model_names.append(model_name)
+        model_sql[model_name] = _extract_model_sql(
+            context,
+            model_name=model_name,
+            table_id=table_id,
+            export_predicate_type="none",
+            base_location=export_prefix,
+            export_prefix=export_prefix,
+            extra_config={"bigquery_export_compression": codec},
+        )
+        assertions.append(
+            _assertion(
+                context,
+                model_name,
+                expected_rows=expected_rows,
+                expected_modes=["full_refresh"],
+                expected_source_job_reference_counts=[1],
+            )
+        )
+
+    _write_project(context, model_sql)
+    try:
+        _run_dbt(context, "deps")
+        _run_dbt(context, "run", "--select", *model_names)
+        _assert_models(context, assertions)
+    finally:
+        _cleanup(context, model_names)
+
+
 def test_dbt_select_query_export(tmp_path: Path):
     context = _integration_context(tmp_path, "select")
     cases = [

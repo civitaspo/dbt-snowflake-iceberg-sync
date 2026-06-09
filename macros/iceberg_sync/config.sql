@@ -198,6 +198,7 @@
       'table_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_table_id'),
       'location': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_location'),
       'export_location': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_export_location'),
+      'export_compression': (dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_compression', none) or 'ZSTD') | upper,
       'export_predicate_type': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_predicate_type', none) or 'auto',
       'full_refresh_predicates': dbt_snowflake_iceberg_sync.iceberg_sync_as_list(dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_full_refresh_predicates', [])),
       'incremental_predicates': dbt_snowflake_iceberg_sync.iceberg_sync_as_list(dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_incremental_predicates', [])),
