@@ -57,10 +57,30 @@ def test_iceberg_sync_dbt_run_surfaces_procedure_failure(
     assert "main is not being called during running model" not in message
 
 
+def test_iceberg_sync_dbt_run_rejects_invalid_outer_retry_number(
+    tmp_path: Path,
+    monkeypatch,
+):
+    run_result, executed_sql = _run_dbt_iceberg_sync_model(
+        tmp_path,
+        monkeypatch,
+        {"status": "success"},
+        model_config_extra="iceberg_sync_retry_max_attempts='not-number'",
+    )
+
+    assert not run_result.success
+    assert not any(
+        _normalize_sql(call["sql"]).startswith("execute immediate ")
+        for call in executed_sql
+    )
+
+
 def _run_dbt_iceberg_sync_model(
     tmp_path: Path,
     monkeypatch,
     procedure_result: dict[str, object],
+    *,
+    model_config_extra: str = "",
 ):
     repo_root = Path(__file__).resolve().parents[2]
     project_dir = tmp_path / "project"
@@ -116,10 +136,17 @@ def _run_dbt_iceberg_sync_model(
         ),
         encoding="utf-8",
     )
+    extra_config_sql = ""
+    if model_config_extra:
+        extra_config_sql = ",\n" + textwrap.indent(
+            model_config_extra.strip(),
+            "                ",
+        )
+
     (models_dir / "model.sql").write_text(
         textwrap.dedent(
-            """
-            {{ config(
+            f"""
+            {{{{ config(
                 materialized='iceberg_sync',
                 google_cloud_project_id='project',
                 bigquery_dataset_id='dataset',
@@ -127,8 +154,8 @@ def _run_dbt_iceberg_sync_model(
                 bigquery_location='US',
                 bigquery_export_location='@test_db.test_schema.test_stage/path',
                 snowflake_stage='test_db.test_schema.test_stage',
-                iceberg_table_external_volume='test_volume'
-            ) }}
+                iceberg_table_external_volume='test_volume'{extra_config_sql}
+            ) }}}}
             select 1 as id
             """
         ),

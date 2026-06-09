@@ -9,13 +9,17 @@
     )
   {%- endset -%}
   {%- set retry_config = payload['retry'] -%}
+  {%- set retry_max_attempts = retry_config.get('max_attempts', 3) -%}
+  {%- set retry_initial_delay_seconds = retry_config.get('initial_delay_seconds', 5) -%}
+  {%- set retry_max_delay_seconds = retry_config.get('max_delay_seconds', 60) -%}
+  {%- set retry_backoff_multiplier = retry_config.get('backoff_multiplier', 2.0) -%}
   {%- set retry_call_block -%}
     DECLARE
       iceberg_sync_attempt INTEGER DEFAULT 1;
-      iceberg_sync_max_attempts INTEGER DEFAULT {{ retry_config.get('max_attempts', 3) }};
-      iceberg_sync_initial_delay_seconds FLOAT DEFAULT {{ retry_config.get('initial_delay_seconds', 5) }};
-      iceberg_sync_max_delay_seconds FLOAT DEFAULT {{ retry_config.get('max_delay_seconds', 60) }};
-      iceberg_sync_backoff_multiplier FLOAT DEFAULT {{ retry_config.get('backoff_multiplier', 2.0) }};
+      iceberg_sync_max_attempts INTEGER DEFAULT {{ retry_max_attempts }};
+      iceberg_sync_initial_delay_seconds FLOAT DEFAULT {{ retry_initial_delay_seconds }};
+      iceberg_sync_max_delay_seconds FLOAT DEFAULT {{ retry_max_delay_seconds }};
+      iceberg_sync_backoff_multiplier FLOAT DEFAULT {{ retry_backoff_multiplier }};
       iceberg_sync_result VARIANT;
       iceberg_sync_message STRING;
       iceberg_sync_delay_seconds FLOAT;
