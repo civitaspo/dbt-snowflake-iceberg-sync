@@ -11,6 +11,7 @@ from .utils import normalize_snowflake_object_identifier
 SUPPORTED_SOURCE_TYPES = {"bigquery"}
 MATERIALIZATION_STRATEGIES = {"full_refresh", "incremental"}
 BIGQUERY_EXPORT_STRATEGIES = {"extract", "select"}
+BIGQUERY_PARQUET_EXPORT_COMPRESSIONS = {"GZIP", "NONE", "SNAPPY", "ZSTD"}
 PREDICATE_TYPES = {"auto", "none", "partition_decorator", "table_suffix", "where"}
 INCREMENTAL_STRATEGIES = {"delete+copy"}
 STORAGE_SERIALIZATION_POLICIES = {"COMPATIBLE", "OPTIMIZED"}
@@ -64,6 +65,7 @@ class BigQueryConfig:
     table_id: str
     location: str
     export_location: str
+    export_compression: str = "ZSTD"
     export_predicate_type: str = "auto"
     full_refresh_predicates: tuple[str, ...] = field(default_factory=tuple)
     incremental_predicates: tuple[str, ...] = field(default_factory=tuple)
@@ -174,6 +176,7 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         table_id=_required(bq_payload, "table_id", "bigquery.table_id"),
         location=_required(bq_payload, "location", "bigquery.location"),
         export_location=_required(bq_payload, "export_location", "bigquery.export_location"),
+        export_compression=str(_defaulted(bq_payload, "export_compression", "ZSTD")).upper(),
         export_predicate_type=_defaulted(bq_payload, "export_predicate_type", "auto"),
         full_refresh_predicates=tuple(bq_payload.get("full_refresh_predicates") or ()),
         incremental_predicates=tuple(bq_payload.get("incremental_predicates") or ()),
@@ -286,6 +289,10 @@ def validate_config(config: IcebergSyncConfig) -> None:
         raise ConfigError("incremental_strategy must be 'delete+copy'")
     if config.bigquery.export_strategy not in BIGQUERY_EXPORT_STRATEGIES:
         raise ConfigError("bigquery_export_strategy must be 'extract' or 'select'")
+    if config.bigquery.export_compression not in BIGQUERY_PARQUET_EXPORT_COMPRESSIONS:
+        raise ConfigError(
+            "bigquery_export_compression must be one of GZIP, NONE, SNAPPY, or ZSTD"
+        )
     if (
         config.iceberg_table.storage_serialization_policy
         not in STORAGE_SERIALIZATION_POLICIES

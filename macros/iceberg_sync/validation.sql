@@ -190,6 +190,11 @@
       "bigquery_export_strategy must be 'extract' or 'select'"
     ) -%}
   {%- endif -%}
+  {%- if bq['export_compression'] not in ['GZIP', 'NONE', 'SNAPPY', 'ZSTD'] -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "bigquery_export_compression must be one of GZIP, NONE, SNAPPY, or ZSTD"
+    ) -%}
+  {%- endif -%}
   {%- if bq['export_predicate_type'] not in ['auto', 'none', 'partition_decorator', 'table_suffix', 'where'] -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
       "bigquery_export_predicate_type is invalid"

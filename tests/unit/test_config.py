@@ -11,6 +11,7 @@ def test_parse_config_defaults(base_payload):
 
     assert config.source_type == "bigquery"
     assert config.bigquery.export_strategy == "extract"
+    assert config.bigquery.export_compression == "ZSTD"
     assert config.target_relation.identifier == "ORDERS"
     assert config.internal_relation.identifier == "__ORDERS"
     assert config.iceberg_table.external_volume == "ICEBERG_EXTERNAL_VOLUME"
@@ -61,6 +62,7 @@ def test_parse_config_normalizes_only_snowflake_object_identifiers(payload_facto
         ({"materialization_strategy": "merge"}, "materialization_strategy"),
         ({"incremental_strategy": "append"}, "incremental_strategy"),
         ({"bigquery__export_strategy": "load"}, "bigquery_export_strategy"),
+        ({"bigquery__export_compression": "brotli"}, "bigquery_export_compression"),
         ({"bigquery__export_predicate_type": "having"}, "bigquery_export_predicate_type"),
         ({"iceberg_table__iceberg_version": 1}, "iceberg_table_iceberg_version"),
         ({"iceberg_table__storage_serialization_policy": "FAST"}, "storage_serialization_policy"),
@@ -129,6 +131,21 @@ def test_string_boolean_values_are_coerced(payload_factory):
     assert config.iceberg_table.copy_grants is True
     assert config.iceberg_table.enable_data_compaction is False
     assert config.run_log.fail_on_error is True
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("none", "NONE"),
+        ("SNAPPY", "SNAPPY"),
+        ("gzip", "GZIP"),
+        ("zstd", "ZSTD"),
+    ],
+)
+def test_bigquery_export_compression_is_normalized(payload_factory, value, expected):
+    config = parse_config(payload_factory(bigquery__export_compression=value))
+
+    assert config.bigquery.export_compression == expected
 
 
 def _strategy_config_matrix_cases():

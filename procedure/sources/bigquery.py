@@ -38,6 +38,7 @@ class BigQueryClientProtocol(Protocol):
         location: str,
         source_table: dict[str, str],
         destination_uris: list[str],
+        compression: str,
     ) -> dict[str, Any]: ...
 
     def patch_table(
@@ -106,6 +107,7 @@ class BigQuerySourceAdapter:
                     "tableId": table_id,
                 },
                 destination_uris=[segment_uri],
+                compression=bq.export_compression,
             )
             job_refs.append(job.get("jobReference", job))
             segments.append({"table_id": table_id, "destination_uri": segment_uri})
@@ -172,6 +174,7 @@ class BigQuerySourceAdapter:
             location=bq.location,
             source_table=staging_ref,
             destination_uris=[segment_uri],
+            compression=bq.export_compression,
         )
         job_refs.append(extract_job.get("jobReference", extract_job))
         return SourceExportResult(
@@ -369,6 +372,7 @@ class BigQueryRestClient:
         location: str,
         source_table: dict[str, str],
         destination_uris: list[str],
+        compression: str,
     ) -> dict[str, Any]:
         body = {
             "jobReference": {"projectId": project_id, "location": location},
@@ -377,6 +381,7 @@ class BigQueryRestClient:
                     "sourceTable": source_table,
                     "destinationUris": destination_uris,
                     "destinationFormat": "PARQUET",
+                    "compression": compression,
                 }
             },
         }

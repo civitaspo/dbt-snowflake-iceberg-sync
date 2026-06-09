@@ -6,6 +6,7 @@ from procedure.config import ConfigError, parse_config
 from procedure.errors import SourceError
 from procedure.sources.base import SourceExecutionContext
 from procedure.sources.bigquery import (
+    BigQueryRestClient,
     BigQuerySourceAdapter,
     concrete_extract_tables,
     resolve_predicate_type,
@@ -77,10 +78,18 @@ class FakeBigQueryClient:
         }
         return {"jobReference": {"projectId": project_id, "jobId": "query-job"}}
 
-    def run_extract_job(self, project_id, *, location, source_table, destination_uris):
+    def run_extract_job(
+        self,
+        project_id,
+        *,
+        location,
+        source_table,
+        destination_uris,
+        compression,
+    ):
         if self.fail_extract:
             raise SourceError("extract failed")
-        self.extract_jobs.append((source_table, destination_uris))
+        self.extract_jobs.append((source_table, destination_uris, compression))
         return {"jobReference": {"projectId": project_id, "jobId": "extract-job"}}
 
     def patch_table(self, project_id, dataset_id, table_id, patch):
@@ -381,6 +390,7 @@ def test_extract_non_partitioned_table_runs_direct_extract(base_payload):
         (
             {"projectId": "project", "datasetId": "dataset", "tableId": "orders"},
             ["gcs://bucket/prefix/run/segment-00000-*.parquet"],
+            "ZSTD",
         )
     ]
     assert result.segments == [
@@ -595,6 +605,21 @@ def test_select_export_force_rebuild_runs_query(payload_factory):
     assert len(client.patches) == 1
 
 
+def test_extract_export_uses_configured_compression(payload_factory):
+    client = FakeBigQueryClient()
+    config = parse_config(payload_factory(bigquery__export_compression="snappy"))
+
+    BigQuerySourceAdapter(client).export(
+        config,
+        context=SourceExecutionContext(
+            effective_mode="full_refresh",
+            destination_uri="gcs://bucket/prefix/run",
+        ),
+    )
+
+    assert client.extract_jobs[0][2] == "SNAPPY"
+
+
 def test_select_export_re_raises_non_404_staging_lookup_error(payload_factory):
     client = FakeBigQueryClient()
     payload = payload_factory(
@@ -646,11 +671,62 @@ def test_select_export_runs_query_then_extracts_staging_table(payload_factory):
         (
             destination_table,
             ["gcs://bucket/prefix/run/segment-00000-*.parquet"],
+            "ZSTD",
         )
     ]
     assert result.staging_table_reference == (
         f"project.staging.{destination_table['tableId']}"
     )
+
+
+def test_select_export_uses_configured_compression(payload_factory):
+    client = FakeBigQueryClient()
+    payload = payload_factory(
+        bigquery__export_strategy="select",
+        bigquery__export_compression="gzip",
+        bigquery__staging_dataset_id="staging",
+        bigquery__staging_table_reuse=False,
+        model__sql="select * from `project.dataset.orders`",
+    )
+    config = parse_config(payload)
+
+    BigQuerySourceAdapter(client).export(
+        config,
+        context=SourceExecutionContext(
+            effective_mode="full_refresh",
+            destination_uri="gcs://bucket/prefix/run",
+        ),
+    )
+
+    assert client.extract_jobs[0][2] == "GZIP"
+
+
+def test_rest_extract_job_sets_parquet_compression():
+    client = object.__new__(BigQueryRestClient)
+    captured = {}
+
+    def fake_insert_and_wait(project_id, location, body):
+        captured["project_id"] = project_id
+        captured["location"] = location
+        captured["body"] = body
+        return {"jobReference": {"projectId": project_id, "jobId": "extract-job"}}
+
+    client._insert_and_wait = fake_insert_and_wait
+
+    client.run_extract_job(
+        "project",
+        location="US",
+        source_table={"projectId": "project", "datasetId": "dataset", "tableId": "orders"},
+        destination_uris=["gs://bucket/path/*.parquet"],
+        compression="ZSTD",
+    )
+
+    assert captured["body"]["configuration"]["extract"] == {
+        "sourceTable": {"projectId": "project", "datasetId": "dataset", "tableId": "orders"},
+        "destinationUris": ["gs://bucket/path/*.parquet"],
+        "destinationFormat": "PARQUET",
+        "compression": "ZSTD",
+    }
 
 
 def test_extract_export_raises_when_no_tables_match(payload_factory):

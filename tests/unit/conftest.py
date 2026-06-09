@@ -66,6 +66,7 @@ def base_payload() -> dict[str, Any]:
             "table_id": "orders",
             "location": "US",
             "export_location": "@ANALYTICS.PUBLIC.EXPORT_STAGE/dbt",
+            "export_compression": "ZSTD",
             "export_predicate_type": "auto",
             "full_refresh_predicates": [],
             "incremental_predicates": [],

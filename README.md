@@ -90,7 +90,8 @@ The GCP service account stored in the Snowflake secret needs permissions to:
 - Read BigQuery table metadata.
 - Run BigQuery query jobs when `bigquery_export_strategy='select'`.
 - Run BigQuery extract jobs.
-- Write Parquet exports to the GCS bucket behind `bigquery_export_location`.
+- Write ZSTD-compressed Parquet exports to the GCS bucket behind
+  `bigquery_export_location` by default.
 - Read or create staging tables when select/staging mode is used.
 
 Exact IAM bindings depend on your project layout. Keep the permissions scoped to
@@ -276,6 +277,7 @@ These options apply when `source_type='bigquery'`.
 | `bigquery_table_id` | Yes | None | BigQuery source table id. For `extract`, this is the table to export and may end with `_*` for sharded tables. For `select`, this still identifies the source for deterministic staging-table hashing even though the model SQL is the exported query. |
 | `bigquery_location` | Yes | None | BigQuery job location, for example `US` or a regional location. |
 | `bigquery_export_location` | Yes | None | Named Snowflake stage location that resolves to the GCS export prefix, for example `@DB.SCHEMA.STAGE/path`. User stages (`@~`) and table stages (`@%`) are rejected. |
+| `bigquery_export_compression` | No | `ZSTD` | BigQuery Parquet extract compression. Supported values are `NONE`, `SNAPPY`, `GZIP`, and `ZSTD`. Applies to both direct `extract` exports and `select` exports from generated staging tables. |
 | `bigquery_export_strategy` | No | `extract` | `extract` exports BigQuery tables directly. `select` runs model SQL into a BigQuery staging table, then exports that table. |
 | `bigquery_export_predicate_type` | No | `auto` | Predicate planning mode. Supported values are `auto`, `none`, `partition_decorator`, `table_suffix`, and `where`; valid values depend on `bigquery_export_strategy`. |
 | `bigquery_export_full_refresh_predicates` | No | `[]` | Source predicates used only when the effective mode is full refresh. A string is treated as a single-item list. |
@@ -297,6 +299,10 @@ Use `bigquery_export_strategy='extract'` for concrete tables, native partitioned
 tables, and sharded tables. The dbt model body must be empty in this mode; model
 SQL is rejected so it is not silently ignored.
 
+Extract jobs write Parquet with `bigquery_export_compression='ZSTD'` by default.
+Use `NONE`, `SNAPPY`, or `GZIP` only when downstream compatibility or performance
+testing calls for a different codec.
+
 `extract` does not use BigQuery staging table options. Its required fields are
 the common BigQuery source fields plus `iceberg_table_external_volume`.
 
@@ -310,7 +316,7 @@ model body is required and must be BigQuery SQL. `select` allows only `auto`,
 | --- | --- | --- | --- |
 | `bigquery_staging_dataset_id` | Yes for `select` | None | BigQuery dataset where deterministic staging tables are created. |
 | `bigquery_staging_table_expiration_hours` | No | `24` | Expiration applied to generated staging tables. |
-| `bigquery_staging_table_reuse` | No | `true` | Reuse an existing non-expired staging table when its stored hash matches the model SQL, predicates, source identity, target relation, and export settings. |
+| `bigquery_staging_table_reuse` | No | `true` | Reuse an existing non-expired staging table when its stored hash matches the model SQL, predicates, source identity, and target relation. The final Parquet extract still runs with the current `bigquery_export_compression`. |
 | `force_rebuild_staging_table` | No | `false` | Rebuild the staging table even if a reusable table exists. This option is currently unprefixed in dbt model config. |
 
 When `where` predicates are configured for `select`, the package renders:
