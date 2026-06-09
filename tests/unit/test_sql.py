@@ -3,11 +3,10 @@ from __future__ import annotations
 from procedure.config import parse_config
 from procedure.schema import SnowflakeColumn, ViewColumn
 from procedure.sql import (
-    alter_run_log_table_sql,
     copy_into_sql,
     create_iceberg_table_sql,
+    create_or_alter_run_log_table_sql,
     create_or_replace_view_sql,
-    create_run_log_table_sql,
     drop_iceberg_table_sql,
     quote_view_alias,
 )
@@ -72,18 +71,37 @@ def test_drop_iceberg_table_uses_if_exists(base_payload):
     assert sql == 'DROP ICEBERG TABLE IF EXISTS "ANALYTICS"."PUBLIC"."__ORDERS"'
 
 
-def test_run_log_sql_includes_retry_and_cleanup_columns(base_payload):
+def test_run_log_sql_uses_create_or_alter_and_includes_all_columns(base_payload):
     config = parse_config(base_payload)
     run_log = config.deployment.run_log_table
     assert run_log is not None
 
-    create_sql = create_run_log_table_sql(run_log)
-    alter_sql = alter_run_log_table_sql(run_log)
+    create_sql = create_or_alter_run_log_table_sql(run_log)
 
-    assert "retry VARIANT" in create_sql
-    assert "cleanup VARIANT" in create_sql
-    assert any("ADD COLUMN IF NOT EXISTS retry VARIANT" in sql for sql in alter_sql)
-    assert any("ADD COLUMN IF NOT EXISTS cleanup VARIANT" in sql for sql in alter_sql)
+    assert 'CREATE OR ALTER TABLE "ANALYTICS"."UTIL"."ICEBERG_SYNC_RUN_LOG"' in create_sql
+    assert "CREATE TABLE IF NOT EXISTS" not in create_sql
+    assert "ADD COLUMN IF NOT EXISTS" not in create_sql
+    for expected_column in [
+        "run_id VARCHAR",
+        "invocation_id VARCHAR",
+        "model_unique_id VARCHAR",
+        "target_view VARCHAR",
+        "internal_iceberg_table VARCHAR",
+        "source_type VARCHAR",
+        "effective_mode VARCHAR",
+        "predicate_json VARIANT",
+        "export_segments VARIANT",
+        "source_job_references VARIANT",
+        "staging_table_reference VARCHAR",
+        "snowflake_query_ids VARIANT",
+        "retry VARIANT",
+        "cleanup VARIANT",
+        "status VARCHAR",
+        "error_message VARCHAR",
+        "started_at TIMESTAMP_LTZ",
+        "finished_at TIMESTAMP_LTZ",
+    ]:
+        assert expected_column in create_sql
 
 
 def test_quote_view_alias_preserves_snowflake_unquoted_folding():

@@ -30,7 +30,7 @@ def test_iceberg_sync_dbt_run_executes_procedure_as_main_statement(
     assert run_result.success
     assert len(main_statements) == 1
     assert main_statements[0]["fetch"] is True
-    assert main_statements[0]["auto_begin"] is True
+    assert main_statements[0]["auto_begin"] is False
     normalized_sql = _normalize_sql(main_statements[0]["sql"])
     assert "call " in normalized_sql
     assert "system$wait" in normalized_sql

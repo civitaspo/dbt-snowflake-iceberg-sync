@@ -90,8 +90,8 @@ def desc_stage_sql(stage_fqn: str) -> str:
     return f"DESC STAGE {stage_fqn}"
 
 
-def create_run_log_table_sql(relation: RelationConfig) -> str:
-    return f"""CREATE TABLE IF NOT EXISTS {relation_sql(relation)} (
+def create_or_alter_run_log_table_sql(relation: RelationConfig) -> str:
+    return f"""CREATE OR ALTER TABLE {relation_sql(relation)} (
   run_id VARCHAR,
   invocation_id VARCHAR,
   model_unique_id VARCHAR,
@@ -111,13 +111,6 @@ def create_run_log_table_sql(relation: RelationConfig) -> str:
   started_at TIMESTAMP_LTZ,
   finished_at TIMESTAMP_LTZ
 )"""
-
-
-def alter_run_log_table_sql(relation: RelationConfig) -> list[str]:
-    return [
-        f"ALTER TABLE {relation_sql(relation)} ADD COLUMN IF NOT EXISTS retry VARIANT",
-        f"ALTER TABLE {relation_sql(relation)} ADD COLUMN IF NOT EXISTS cleanup VARIANT",
-    ]
 
 
 def insert_run_log_sql(relation: RelationConfig, payload: dict[str, Any]) -> str:

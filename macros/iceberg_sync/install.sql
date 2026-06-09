@@ -32,8 +32,8 @@
 
   {%- if run_log_table is not none -%}
     {%- set run_log_relation = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_payload(run_log_table) -%}
-    {% call statement('iceberg_sync_create_run_log_table') -%}
-      CREATE TABLE IF NOT EXISTS {{ run_log_relation }} (
+    {% call statement('iceberg_sync_create_or_alter_run_log_table') -%}
+      CREATE OR ALTER TABLE {{ run_log_relation }} (
         run_id VARCHAR,
         invocation_id VARCHAR,
         model_unique_id VARCHAR,
@@ -53,12 +53,6 @@
         started_at TIMESTAMP_LTZ,
         finished_at TIMESTAMP_LTZ
       )
-    {%- endcall %}
-    {% call statement('iceberg_sync_alter_run_log_retry') -%}
-      ALTER TABLE {{ run_log_relation }} ADD COLUMN IF NOT EXISTS retry VARIANT
-    {%- endcall %}
-    {% call statement('iceberg_sync_alter_run_log_cleanup') -%}
-      ALTER TABLE {{ run_log_relation }} ADD COLUMN IF NOT EXISTS cleanup VARIANT
     {%- endcall %}
   {%- endif -%}
 
