@@ -16,6 +16,7 @@ def test_parse_config_defaults(base_payload):
     assert config.iceberg_table.external_volume == "ICEBERG_EXTERNAL_VOLUME"
     assert config.retry.max_attempts == 3
     assert config.cleanup.created_table_on_failure is True
+    assert config.run_log.fail_on_error is False
 
 
 def test_parse_config_normalizes_only_snowflake_object_identifiers(payload_factory):
@@ -69,6 +70,7 @@ def test_parse_config_normalizes_only_snowflake_object_identifiers(payload_facto
         ({"retry__backoff_multiplier": 0.9}, "backoff"),
         ({"retry__jitter_seconds": -1}, "jitter"),
         ({"cleanup__created_table_on_failure": "not-bool"}, "cleanup_created_table"),
+        ({"run_log__fail_on_error": "not-bool"}, "run_log_fail_on_error"),
         ({"partition_by": ["event_date"]}, "partition_by"),
         ({"cluster_by": ["event_name"]}, "cluster_by"),
     ],
@@ -116,6 +118,7 @@ def test_string_boolean_values_are_coerced(payload_factory):
         bigquery__force_rebuild_staging_table="true",
         iceberg_table__copy_grants="1",
         iceberg_table__enable_data_compaction="0",
+        run_log__fail_on_error="true",
     )
 
     config = parse_config(payload)
@@ -125,6 +128,7 @@ def test_string_boolean_values_are_coerced(payload_factory):
     assert config.bigquery.force_rebuild_staging_table is True
     assert config.iceberg_table.copy_grants is True
     assert config.iceberg_table.enable_data_compaction is False
+    assert config.run_log.fail_on_error is True
 
 
 def _strategy_config_matrix_cases():

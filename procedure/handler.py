@@ -63,7 +63,6 @@ class IcebergSyncRunner:
         view_created = False
 
         try:
-            self.snowflake.ensure_run_log(config.deployment.run_log_table)
             internal_table_existed_before = self.snowflake.table_exists(
                 config.internal_relation
             )
@@ -125,7 +124,7 @@ class IcebergSyncRunner:
                 status="success",
                 error_message=None,
             )
-            self._write_log(
+            run_log_error = self._write_log(
                 config,
                 run_id,
                 effective_mode,
@@ -137,6 +136,8 @@ class IcebergSyncRunner:
                 None,
                 started_at,
             )
+            if run_log_error is not None:
+                result["run_log_error"] = run_log_error
             return result
         except Exception as exc:
             error_message = _sanitize_error_message(exc)
@@ -148,18 +149,21 @@ class IcebergSyncRunner:
                 load_committed=load_committed,
                 view_created=view_created,
             )
-            self._write_log(
-                config,
-                run_id,
-                effective_mode,
-                predicates,
-                export_result,
-                retry,
-                cleanup,
-                "failure",
-                error_message,
-                started_at,
-            )
+            try:
+                self._write_log(
+                    config,
+                    run_id,
+                    effective_mode,
+                    predicates,
+                    export_result,
+                    retry,
+                    cleanup,
+                    "failure",
+                    error_message,
+                    started_at,
+                )
+            except Exception as log_exc:
+                retry["run_log_error_message"] = _sanitize_error_message(log_exc)
             if isinstance(exc, IcebergSyncError):
                 raise
             raise
@@ -214,7 +218,12 @@ class IcebergSyncRunner:
                             "attempt": attempt,
                             "phase": "load_transaction",
                             "error_message": _sanitize_error_message(exc),
-                            "rolled_back": True,
+                            "rolled_back": getattr(
+                                exc, "_iceberg_sync_rolled_back", False
+                            ),
+                            "rollback_error_message": getattr(
+                                exc, "_iceberg_sync_rollback_error_message", None
+                            ),
                             "delay_seconds": delay_seconds,
                         }
                     )
@@ -229,14 +238,27 @@ class IcebergSyncRunner:
         effective_mode: str,
         stage_run_location: str,
     ) -> None:
-        self.snowflake.begin()
+        transaction_started = False
+        transaction_committed = False
         try:
+            self.snowflake.begin()
+            transaction_started = True
             predicate = None if effective_mode == "full_refresh" else config.incremental_predicate
             self.snowflake.delete_from_iceberg(config.internal_relation, predicate)
             self.snowflake.copy_into_iceberg(config.internal_relation, stage_run_location)
             self.snowflake.commit()
-        except Exception:
-            self.snowflake.rollback()
+            transaction_committed = True
+        except Exception as exc:
+            if transaction_started and not transaction_committed:
+                try:
+                    self.snowflake.rollback()
+                    exc._iceberg_sync_rolled_back = True
+                except Exception as rollback_exc:
+                    rollback_error = _sanitize_error_message(rollback_exc)
+                    exc._iceberg_sync_rolled_back = False
+                    exc._iceberg_sync_rollback_error_message = rollback_error
+                    if hasattr(exc, "add_note"):
+                        exc.add_note(f"Rollback failed: {rollback_error}")
             raise
 
     def _cleanup_created_table_on_failure(
@@ -276,9 +298,9 @@ class IcebergSyncRunner:
         status: str,
         error_message: str | None,
         started_at: Any,
-    ) -> None:
+    ) -> str | None:
         if config.deployment.run_log_table is None:
-            return
+            return None
         finished_at = utcnow()
         payload = build_run_log_payload(
             config=config,
@@ -298,7 +320,33 @@ class IcebergSyncRunner:
             started_at=started_at,
             finished_at=finished_at,
         )
-        self.snowflake.write_run_log(config.deployment.run_log_table, payload)
+        for attempt in range(1, config.retry.max_attempts + 1):
+            try:
+                self.snowflake.write_run_log(config.deployment.run_log_table, payload)
+                return None
+            except Exception as exc:
+                error_message = _sanitize_error_message(exc)
+                retry.setdefault("run_log_errors", []).append(
+                    {
+                        "attempt": attempt,
+                        "phase": "run_log",
+                        "error_message": error_message,
+                        "delay_seconds": (
+                            compute_retry_delay(config.retry, attempt, self.jitter)
+                            if is_retryable_run_log_error(exc)
+                            and attempt < config.retry.max_attempts
+                            else 0.0
+                        ),
+                    }
+                )
+                retryable = is_retryable_run_log_error(exc)
+                if retryable and attempt < config.retry.max_attempts:
+                    self.sleep(retry["run_log_errors"][-1]["delay_seconds"])
+                    continue
+                if config.run_log.fail_on_error:
+                    raise
+                return error_message
+        return None
 
 
 def effective_mode_for(
@@ -321,7 +369,22 @@ def is_retryable_snowflake_error(exc: Exception) -> bool:
     if not isinstance(exc, SnowflakeExecutionError):
         return False
     lowered = str(exc).lower()
-    return "sql execution internal error" in lowered or "incident" in lowered
+    return (
+        "sql execution internal error" in lowered
+        or "incident" in lowered
+        or "scoped transaction started in stored procedure is incomplete" in lowered
+    )
+
+
+def is_retryable_run_log_error(exc: Exception) -> bool:
+    if not isinstance(exc, SnowflakeExecutionError):
+        return False
+    lowered = str(exc).lower()
+    return (
+        "000625" in lowered
+        or "locked table" in lowered
+        or "number of waiters" in lowered
+    )
 
 
 def compute_retry_delay(
@@ -341,6 +404,7 @@ def _initial_retry_payload(policy: RetryPolicyConfig) -> dict[str, Any]:
         "max_attempts": policy.max_attempts,
         "attempts": 0,
         "retryable_errors": [],
+        "run_log_errors": [],
     }
 
 

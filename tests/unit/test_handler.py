@@ -3,7 +3,11 @@ from __future__ import annotations
 import pytest
 
 from procedure.errors import ConfigError, SchemaError, SnowflakeExecutionError, SourceError
-from procedure.handler import IcebergSyncRunner, is_retryable_snowflake_error
+from procedure.handler import (
+    IcebergSyncRunner,
+    is_retryable_run_log_error,
+    is_retryable_snowflake_error,
+)
 from procedure.schema import SnowflakeColumn
 from procedure.sources.base import SourceExecutionContext, SourceExportResult
 
@@ -18,7 +22,9 @@ class FakeSnowflake:
         fail_delete=False,
         fail_create_view=False,
         fail_drop=False,
+        fail_rollback=False,
         copy_errors=None,
+        run_log_errors=None,
         existing_columns=None,
     ):
         self.query_ids = []
@@ -28,7 +34,9 @@ class FakeSnowflake:
         self.fail_delete = fail_delete
         self.fail_create_view = fail_create_view
         self.fail_drop = fail_drop
+        self.fail_rollback = fail_rollback
         self.copy_errors = list(copy_errors or [])
+        self.run_log_errors = list(run_log_errors or [])
         self.existing_columns = existing_columns or [SnowflakeColumn("OrderID", "BIGINT")]
         self.calls = []
         self.run_logs = []
@@ -90,6 +98,8 @@ class FakeSnowflake:
 
     def rollback(self):
         self.calls.append(("rollback",))
+        if self.fail_rollback:
+            raise SnowflakeExecutionError("rollback failed")
 
     def create_or_replace_view(self, target, internal, columns):
         self.calls.append(
@@ -100,6 +110,8 @@ class FakeSnowflake:
 
     def write_run_log(self, relation, payload):
         self.calls.append(("write_run_log", payload["status"]))
+        if self.run_log_errors:
+            raise self.run_log_errors.pop(0)
         self.run_logs.append(payload)
 
 
@@ -323,7 +335,22 @@ def test_retryable_snowflake_internal_error_messages_are_classified():
     assert not is_retryable_snowflake_error(
         SnowflakeExecutionError("000603 XX000 300005")
     )
+    assert is_retryable_snowflake_error(
+        SnowflakeExecutionError(
+            "Scoped transaction started in stored procedure is incomplete"
+        )
+    )
     assert not is_retryable_snowflake_error(ConfigError("invalid config"))
+
+
+def test_run_log_lock_contention_errors_are_classified():
+    assert is_retryable_run_log_error(
+        SnowflakeExecutionError("000625 table has locked table ICEBERG_SYNC_RUN_LOG")
+    )
+    assert is_retryable_run_log_error(
+        SnowflakeExecutionError("number of waiters for this lock exceeds the limit")
+    )
+    assert not is_retryable_run_log_error(SnowflakeExecutionError("copy failed"))
 
 
 def test_non_retryable_snowflake_error_is_not_retried(base_payload):
@@ -367,6 +394,32 @@ def test_retry_exhaustion_raises_original_error_and_logs_history(payload_factory
     assert snowflake.calls.count(("rollback",)) == 2
     assert snowflake.run_logs[-1]["retry"]["attempts"] == 2
     assert len(snowflake.run_logs[-1]["retry"]["retryable_errors"]) == 2
+
+
+def test_rollback_failure_preserves_original_copy_error(payload_factory):
+    payload = payload_factory(
+        retry__max_attempts=1,
+        retry__initial_delay_seconds=0,
+        retry__jitter_seconds=0,
+    )
+    snowflake = FakeSnowflake(
+        table_exists=False,
+        fail_rollback=True,
+        copy_errors=[SnowflakeExecutionError("SQL execution internal error incident")],
+    )
+
+    with pytest.raises(SnowflakeExecutionError, match="SQL execution internal error"):
+        IcebergSyncRunner(
+            object(),
+            snowflake_client=snowflake,
+            source_adapters={"bigquery": FakeSource()},
+            sleep_func=lambda seconds: None,
+            jitter_func=lambda start, end: 0,
+        ).run(payload)
+
+    retry_error = snowflake.run_logs[-1]["retry"]["retryable_errors"][0]
+    assert retry_error["rolled_back"] is False
+    assert "rollback failed" in retry_error["rollback_error_message"]
 
 
 def test_config_schema_and_source_errors_are_not_retried(base_payload):
@@ -450,6 +503,92 @@ def test_cleanup_failure_preserves_original_error_and_logs_cleanup_failure(base_
 
     assert snowflake.run_logs[-1]["error_message"] == "SnowflakeExecutionError: copy failed"
     assert "drop failed" in snowflake.run_logs[-1]["cleanup"]["cleanup_error_message"]
+
+
+def test_success_run_log_lock_contention_is_retried_and_does_not_fail(payload_factory):
+    payload = payload_factory(
+        retry__initial_delay_seconds=0,
+        retry__jitter_seconds=0,
+    )
+    snowflake = FakeSnowflake(
+        table_exists=False,
+        run_log_errors=[
+            SnowflakeExecutionError(
+                "000625 locked table ICEBERG_SYNC_RUN_LOG; number of waiters exceeded"
+            )
+        ],
+    )
+
+    result = IcebergSyncRunner(
+        object(),
+        snowflake_client=snowflake,
+        source_adapters={"bigquery": FakeSource()},
+        sleep_func=lambda seconds: None,
+        jitter_func=lambda start, end: 0,
+    ).run(payload)
+
+    assert result["status"] == "success"
+    assert "run_log_error" not in result
+    assert snowflake.calls.count(("write_run_log", "success")) == 2
+    assert len(result["retry"]["run_log_errors"]) == 1
+    assert snowflake.run_logs[-1]["status"] == "success"
+
+
+def test_success_run_log_failure_is_best_effort_by_default(base_payload):
+    snowflake = FakeSnowflake(
+        table_exists=False,
+        run_log_errors=[
+            SnowflakeExecutionError("non-retryable run log write failed")
+        ],
+    )
+
+    result = IcebergSyncRunner(
+        object(),
+        snowflake_client=snowflake,
+        source_adapters={"bigquery": FakeSource()},
+    ).run(base_payload)
+
+    assert result["status"] == "success"
+    assert "run log write failed" in result["run_log_error"]
+    assert snowflake.run_logs == []
+
+
+def test_success_run_log_failure_can_be_strict(payload_factory):
+    payload = payload_factory(run_log__fail_on_error=True)
+    snowflake = FakeSnowflake(
+        table_exists=False,
+        run_log_errors=[
+            SnowflakeExecutionError("non-retryable run log write failed")
+        ],
+    )
+
+    with pytest.raises(SnowflakeExecutionError, match="run log write failed"):
+        IcebergSyncRunner(
+            object(),
+            snowflake_client=snowflake,
+            source_adapters={"bigquery": FakeSource()},
+        ).run(payload)
+
+
+def test_failure_run_log_error_does_not_mask_original_load_error(base_payload):
+    snowflake = FakeSnowflake(
+        table_exists=False,
+        fail_copy=True,
+        run_log_errors=[
+            SnowflakeExecutionError("non-retryable run log write failed")
+        ],
+    )
+
+    with pytest.raises(SnowflakeExecutionError, match="copy failed"):
+        IcebergSyncRunner(
+            object(),
+            snowflake_client=snowflake,
+            source_adapters={"bigquery": FakeSource()},
+            sleep_func=lambda seconds: None,
+            jitter_func=lambda start, end: 0,
+        ).run(base_payload)
+
+    assert snowflake.run_logs == []
 
 
 def test_handler_skips_run_log_when_run_log_table_is_not_configured(payload_factory):

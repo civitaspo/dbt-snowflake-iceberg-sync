@@ -179,14 +179,17 @@
     'model_config': model_config,
     'deployment': deployment,
     'retry': {
-      'max_attempts': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_sync_retry_max_attempts', 3),
-      'initial_delay_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_sync_retry_initial_delay_seconds', 5),
-      'max_delay_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_sync_retry_max_delay_seconds', 60),
-      'backoff_multiplier': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_sync_retry_backoff_multiplier', 2.0),
-      'jitter_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_sync_retry_jitter_seconds', 3)
+      'max_attempts': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 'iceberg_sync_retry_max_attempts', 3, true),
+      'initial_delay_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 'iceberg_sync_retry_initial_delay_seconds', 5),
+      'max_delay_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 'iceberg_sync_retry_max_delay_seconds', 60),
+      'backoff_multiplier': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 'iceberg_sync_retry_backoff_multiplier', 2.0),
+      'jitter_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 'iceberg_sync_retry_jitter_seconds', 3)
     },
     'cleanup': {
       'created_table_on_failure': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_sync_cleanup_created_table_on_failure', true)
+    },
+    'run_log': {
+      'fail_on_error': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_sync_run_log_fail_on_error', false)
     },
     'bigquery': {
       'export_strategy': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_strategy', none) or 'extract',

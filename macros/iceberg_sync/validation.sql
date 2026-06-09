@@ -29,6 +29,59 @@
   {{ return(value) }}
 {%- endmacro %}
 
+{% macro iceberg_sync_number_model_config(model_node, config_name, default, integer=false) -%}
+  {%- set value = dbt_snowflake_iceberg_sync.iceberg_sync_model_config(
+    model_node, config_name, default
+  ) -%}
+  {{ return(dbt_snowflake_iceberg_sync.iceberg_sync_number_config(
+    value, config_name, integer
+  )) }}
+{%- endmacro %}
+
+{% macro iceberg_sync_number_config(value, config_name, integer=false) -%}
+  {%- if value is sameas true or value is sameas false -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      config_name ~ " must be " ~ ("an integer" if integer else "a number")
+    ) -%}
+  {%- elif value is number -%}
+    {%- if integer and value != (value | int) -%}
+      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+        config_name ~ " must be an integer"
+      ) -%}
+    {%- endif -%}
+    {{ return((value | int) if integer else value) }}
+  {%- elif value is string -%}
+    {%- set text = value | trim -%}
+    {%- set unsigned = text -%}
+    {%- if unsigned.startswith("+") or unsigned.startswith("-") -%}
+      {%- set unsigned = unsigned[1:] -%}
+    {%- endif -%}
+    {%- set parts = unsigned.split(".") -%}
+    {%- set validation = namespace(invalid=(
+      text == ""
+      or unsigned == ""
+      or parts | length > 2
+      or "" in parts
+      or (integer and parts | length != 1)
+    )) -%}
+    {%- for part in parts -%}
+      {%- if not part.isdigit() -%}
+        {%- set validation.invalid = true -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- if validation.invalid -%}
+      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+        config_name ~ " must be " ~ ("an integer" if integer else "a number")
+      ) -%}
+    {%- endif -%}
+    {{ return((text | int) if integer else (text | float)) }}
+  {%- else -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      config_name ~ " must be " ~ ("an integer" if integer else "a number")
+    ) -%}
+  {%- endif -%}
+{%- endmacro %}
+
 {% macro iceberg_sync_as_list(value) -%}
   {%- if value is none -%}
     {{ return([]) }}
@@ -79,6 +132,33 @@
   {%- if payload['incremental_strategy'] != 'delete+copy' -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
       "incremental_strategy must be 'delete+copy'"
+    ) -%}
+  {%- endif -%}
+
+  {%- set retry = payload['retry'] -%}
+  {%- if retry['max_attempts'] < 1 -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "iceberg_sync_retry_max_attempts must be at least 1"
+    ) -%}
+  {%- endif -%}
+  {%- if retry['initial_delay_seconds'] < 0 -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "iceberg_sync_retry_initial_delay_seconds must be non-negative"
+    ) -%}
+  {%- endif -%}
+  {%- if retry['max_delay_seconds'] < 0 -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "iceberg_sync_retry_max_delay_seconds must be non-negative"
+    ) -%}
+  {%- endif -%}
+  {%- if retry['backoff_multiplier'] < 1.0 -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "iceberg_sync_retry_backoff_multiplier must be at least 1.0"
+    ) -%}
+  {%- endif -%}
+  {%- if retry['jitter_seconds'] < 0 -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "iceberg_sync_retry_jitter_seconds must be non-negative"
     ) -%}
   {%- endif -%}
 
