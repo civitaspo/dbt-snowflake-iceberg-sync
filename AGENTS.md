@@ -36,8 +36,16 @@ For local unit checks, run:
 ```bash
 uv run ruff check procedure tests
 uv run pytest tests/unit
-uv run dbt parse --profiles-dir tests/ci_profiles --no-version-check --no-partial-parse
+uv run dbt parse --profiles-dir tests/ci_profiles --no-version-check
 ```
+
+For dbt Fusion validation, run:
+
+```bash
+dbtf parse --profiles-dir tests/ci_profiles --no-version-check
+```
+
+Do not pass partial-parse flags to Fusion commands.
 
 For integration behavior, use the opt-in integration tests and keep Snowflake
 access through approved company tooling.
@@ -68,6 +76,12 @@ Run the opt-in suite with:
 ```bash
 uv run pytest -m integration tests/integration
 ```
+
+To run integration tests with dbt Fusion, set
+`DBT_SNOWFLAKE_ICEBERG_SYNC_DBT_EXECUTABLE` to the `dbtf` executable. Use an
+absolute `vars.iceberg_sync.handler_local_path` for Fusion-backed projects so
+Snowflake `PUT file://...` statements do not depend on the CLI working
+directory.
 
 The tests may create temporary Snowflake procedures, views, Iceberg tables, run
 logs, BigQuery extract jobs, and GCS files under generated prefixes. They should

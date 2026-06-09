@@ -2,8 +2,27 @@
   {%- do exceptions.raise_compiler_error("iceberg_sync: " ~ message) -%}
 {%- endmacro %}
 
-{% macro iceberg_sync_required_model_config(config_name) -%}
-  {%- set value = config.get(config_name, none) -%}
+{% macro iceberg_sync_model_meta(model_node) -%}
+  {%- set model_meta = {} -%}
+  {%- if model_node.config is defined and model_node.config.meta is defined and model_node.config.meta is mapping -%}
+    {%- set model_meta = model_node.config.meta -%}
+  {%- endif -%}
+  {%- if model_meta.get('iceberg_sync', none) is mapping -%}
+    {{ return(model_meta.get('iceberg_sync')) }}
+  {%- endif -%}
+  {{ return({}) }}
+{%- endmacro %}
+
+{% macro iceberg_sync_model_config(model_node, config_name, default=none) -%}
+  {%- set model_meta = dbt_snowflake_iceberg_sync.iceberg_sync_model_meta(model_node) -%}
+  {%- if model_meta.get(config_name, none) is not none -%}
+    {{ return(model_meta.get(config_name)) }}
+  {%- endif -%}
+  {{ return(config.get(config_name, default)) }}
+{%- endmacro %}
+
+{% macro iceberg_sync_required_model_config(model_node, config_name) -%}
+  {%- set value = dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, config_name, none) -%}
   {%- if value is none or value == "" -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(config_name ~ " is required") -%}
   {%- endif -%}
@@ -20,7 +39,7 @@
   {%- endif -%}
 {%- endmacro %}
 
-{% macro iceberg_sync_validate_forbidden_model_configs() -%}
+{% macro iceberg_sync_validate_forbidden_model_configs(model_node) -%}
   {%- set forbidden = [
     'credentials',
     'credential',
@@ -33,8 +52,12 @@
     'google_cloud_service_account_secret_alias',
     'google_application_credentials'
   ] -%}
+  {%- set model_meta = dbt_snowflake_iceberg_sync.iceberg_sync_model_meta(model_node) -%}
   {%- for key in forbidden -%}
-    {%- if config.get(key, none) is not none -%}
+    {%- if (
+      config.get(key, none) is not none
+      or model_meta.get(key, none) is not none
+    ) -%}
       {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
         "credential material must not be set in model config: " ~ key
       ) -%}

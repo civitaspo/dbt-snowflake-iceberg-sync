@@ -173,7 +173,6 @@ def _run_dbt_iceberg_sync_model(
             "--profiles-dir",
             str(profiles_dir),
             "--no-version-check",
-            "--no-partial-parse",
         ]
     )
 

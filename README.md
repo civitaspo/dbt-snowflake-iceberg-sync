@@ -9,7 +9,8 @@ Snowflake-only and is named `iceberg_sync`.
 
 ## Supported Versions
 
-- dbt Core: `>=1.8.0`
+- dbt Core: `>=1.10.0,<2.0.0`
+- dbt Fusion Engine: `>=2.0.0,<3.0.0`
 - dbt adapter: `dbt-snowflake`
 - Snowflake Python procedure runtime: Python `3.12`
 - Local package tests: Python `>=3.11`
@@ -46,7 +47,7 @@ Example deployment vars:
 ```yaml
 vars:
   iceberg_sync:
-    handler_local_path: dbt_packages/dbt_snowflake_iceberg_sync/procedure
+    handler_local_path: /absolute/path/to/dbt_packages/dbt_snowflake_iceberg_sync/procedure
 
     external_access_integrations: [BIGQUERY_API]
     google_cloud_service_account_secret_fqdn: ANALYTICS.SECRETS.GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON
@@ -69,7 +70,7 @@ Deployment vars:
 
 | Var | Required | Default | Description |
 | --- | --- | --- | --- |
-| `handler_local_path` | Yes | None | Local path to the package `procedure/` directory uploaded by the installer. |
+| `handler_local_path` | Yes | None | Local path to the package `procedure/` directory uploaded by the installer. Use an absolute path with dbt Fusion. |
 | `google_cloud_service_account_secret_fqdn` | Yes | None | Fully qualified Snowflake secret containing the GCP service account JSON. |
 | `procedure_database` | No | `target.database` | Database where the package procedure and default helper objects are installed. |
 | `procedure_schema` | No | `target.schema` | Schema where the package procedure and default helper objects are installed. |
@@ -129,22 +130,26 @@ native partition decorators.
 {{
   config(
     materialized='iceberg_sync',
-    source_type='bigquery',
-    materialization_strategy='incremental',
+    meta={
+      'iceberg_sync': {
+        'source_type': 'bigquery',
+        'materialization_strategy': 'incremental',
 
-    bigquery_export_strategy='extract',
-    google_cloud_project_id='my-gcp-project',
-    bigquery_dataset_id='analytics',
-    bigquery_table_id='orders',
-    bigquery_location='US',
-    bigquery_export_location='@ANALYTICS.PUBLIC.BQ_EXPORT_STAGE/orders',
-    bigquery_export_predicate_type='auto',
-    bigquery_export_incremental_predicates=["20260530"],
+        'bigquery_export_strategy': 'extract',
+        'google_cloud_project_id': 'my-gcp-project',
+        'bigquery_dataset_id': 'analytics',
+        'bigquery_table_id': 'orders',
+        'bigquery_location': 'US',
+        'bigquery_export_location': '@ANALYTICS.PUBLIC.BQ_EXPORT_STAGE/orders',
+        'bigquery_export_predicate_type': 'auto',
+        'bigquery_export_incremental_predicates': ["20260530"],
 
-    incremental_strategy='delete+copy',
-    incremental_predicate="\"order_date\" = '2026-05-30'",
+        'incremental_strategy': 'delete+copy',
+        'incremental_predicate': "\"order_date\" = '2026-05-30'",
 
-    iceberg_table_external_volume='ICEBERG_EXTERNAL_VOLUME'
+        'iceberg_table_external_volume': 'ICEBERG_EXTERNAL_VOLUME'
+      }
+    }
   )
 }}
 ```
@@ -160,25 +165,29 @@ is BigQuery SQL, not Snowflake SQL.
 {{
   config(
     materialized='iceberg_sync',
-    source_type='bigquery',
+    meta={
+      'iceberg_sync': {
+        'source_type': 'bigquery',
 
-    bigquery_export_strategy='select',
-    google_cloud_project_id='my-gcp-project',
-    bigquery_dataset_id='analytics',
-    bigquery_table_id='orders',
-    bigquery_location='US',
-    bigquery_export_location='@ANALYTICS.PUBLIC.BQ_EXPORT_STAGE/orders_select',
-    bigquery_export_predicate_type='where',
-    bigquery_export_incremental_predicates=["order_date = '2026-05-30'"],
+        'bigquery_export_strategy': 'select',
+        'google_cloud_project_id': 'my-gcp-project',
+        'bigquery_dataset_id': 'analytics',
+        'bigquery_table_id': 'orders',
+        'bigquery_location': 'US',
+        'bigquery_export_location': '@ANALYTICS.PUBLIC.BQ_EXPORT_STAGE/orders_select',
+        'bigquery_export_predicate_type': 'where',
+        'bigquery_export_incremental_predicates': ["order_date = '2026-05-30'"],
 
-    bigquery_staging_dataset_id='dbt_staging',
-    bigquery_staging_table_expiration_hours=24,
-    bigquery_staging_table_reuse=true,
+        'bigquery_staging_dataset_id': 'dbt_staging',
+        'bigquery_staging_table_expiration_hours': 24,
+        'bigquery_staging_table_reuse': true,
 
-    incremental_strategy='delete+copy',
-    incremental_predicate="\"order_date\" = '2026-05-30'",
+        'incremental_strategy': 'delete+copy',
+        'incremental_predicate': "\"order_date\" = '2026-05-30'",
 
-    iceberg_table_external_volume='ICEBERG_EXTERNAL_VOLUME'
+        'iceberg_table_external_volume': 'ICEBERG_EXTERNAL_VOLUME'
+      }
+    }
   )
 }}
 
@@ -192,11 +201,14 @@ as Parquet, and then loads those files into the Snowflake-managed Iceberg table.
 
 ## Materialization Options
 
-All options in this section are dbt model `config()` arguments. The
-materialization separates common options from source-specific options so future
-source types can define their own required fields. In the current release,
-`source_type='bigquery'` is the only supported source type, so every working
-model uses the BigQuery option group below.
+All options in this section are dbt model configs under `meta.iceberg_sync`.
+Keeping package-specific keys under `meta` is required by dbt Fusion. dbt Core
+also accepts the same `meta.iceberg_sync` shape, and this package still reads
+legacy top-level config keys for existing dbt Core projects. The materialization
+separates common options from source-specific options so future source types can
+define their own required fields. In the current release, `source_type='bigquery'`
+is the only supported source type, so every working model uses the BigQuery
+option group below.
 
 Credential material is not a materialization option. Keep service account JSON
 and secret names in Snowflake resources and `vars.iceberg_sync`; model configs
@@ -439,7 +451,14 @@ mise install --locked
 uv sync --frozen
 uv run pytest tests/unit
 uv run ruff check procedure tests
-uv run dbt parse --profiles-dir tests/ci_profiles --no-version-check --no-partial-parse
+uv run dbt parse --profiles-dir tests/ci_profiles --no-version-check
+```
+
+For dbt Fusion validation, run the same package parse with the Fusion CLI and
+do not pass partial-parse flags:
+
+```bash
+dbtf parse --profiles-dir tests/ci_profiles --no-version-check
 ```
 
 ## Local Integration Test Setup

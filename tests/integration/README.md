@@ -10,6 +10,14 @@ variables documented in the root README before running:
 uv run pytest -m integration
 ```
 
+By default, the integration suite uses the `dbt` executable from the active
+Python environment. To run the same tests with dbt Fusion, install the Fusion
+CLI and set `DBT_SNOWFLAKE_ICEBERG_SYNC_DBT_EXECUTABLE` to that executable:
+
+```bash
+DBT_SNOWFLAKE_ICEBERG_SYNC_DBT_EXECUTABLE=/path/to/dbtf uv run pytest -m integration
+```
+
 The integration suite contains separate tests for:
 
 - concrete non-partitioned BigQuery extract with `auto` and explicit `none`

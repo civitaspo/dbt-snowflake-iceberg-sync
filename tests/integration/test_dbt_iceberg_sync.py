@@ -866,7 +866,7 @@ def _write_project(context: IntegrationContext, models: dict[str, str]) -> None:
                 handler_stage_path: procedure
                 handler_import_name: iceberg_sync_procedure_{context.run_id}
                 handler_name: iceberg_sync_procedure_{context.run_id}.handler.main
-                handler_local_path: dbt_packages/dbt_snowflake_iceberg_sync/procedure
+                handler_local_path: {json.dumps(str(context.package_path / "procedure"))}
                 external_access_integrations:
                   - {context.external_access_integration}
                 google_cloud_service_account_secret_fqdn: {context.secret_fqdn}
@@ -923,14 +923,14 @@ def _extract_model_sql(
         )
         incremental_config = textwrap.dedent(
             """
-                incremental_strategy='delete+copy',
-                incremental_predicate=iceberg_sync_incremental_predicate | trim,
+                'incremental_strategy': 'delete+copy',
+                'incremental_predicate': iceberg_sync_incremental_predicate | trim,
             """
         )
     extra_config_sql = ""
     if extra_config:
         extra_config_sql = "".join(
-            f"            {key}={_jinja_value(value)},\n"
+            f"              '{key}': {_jinja_value(value)},\n"
             for key, value in extra_config.items()
         )
     export_location = export_location or f"@{context.export_stage}/{export_prefix}"
@@ -940,21 +940,25 @@ def _extract_model_sql(
         {{{{
           config(
             materialized='iceberg_sync',
-            source_type='bigquery',
-            materialization_strategy={_jstr(materialization_strategy)},
+            meta={{
+              'iceberg_sync': {{
+                'source_type': 'bigquery',
+                'materialization_strategy': {_jstr(materialization_strategy)},
         {textwrap.indent(incremental_config, '    ').rstrip()}
-            bigquery_export_strategy='extract',
-            google_cloud_project_id={_jstr(context.bigquery_project_id)},
-            bigquery_dataset_id={_jstr(dataset_id or context.bigquery_dataset_id)},
-            bigquery_table_id={_jstr(table_id)},
-            bigquery_location={_jstr(context.bigquery_location)},
-            bigquery_export_location={_jstr(export_location)},
-            bigquery_export_predicate_type={_jstr(export_predicate_type)},
-            bigquery_export_full_refresh_predicates={_jlist(full_refresh_predicates or [])},
-            bigquery_export_incremental_predicates={_jlist(incremental_predicates or [])},
-            iceberg_table_external_volume={_jstr(context.external_volume)},
-            iceberg_table_base_location={_jstr(base_location)},
+                'bigquery_export_strategy': 'extract',
+                'google_cloud_project_id': {_jstr(context.bigquery_project_id)},
+                'bigquery_dataset_id': {_jstr(dataset_id or context.bigquery_dataset_id)},
+                'bigquery_table_id': {_jstr(table_id)},
+                'bigquery_location': {_jstr(context.bigquery_location)},
+                'bigquery_export_location': {_jstr(export_location)},
+                'bigquery_export_predicate_type': {_jstr(export_predicate_type)},
+                'bigquery_export_full_refresh_predicates': {_jlist(full_refresh_predicates or [])},
+                'bigquery_export_incremental_predicates': {_jlist(incremental_predicates or [])},
+                'iceberg_table_external_volume': {_jstr(context.external_volume)},
+                'iceberg_table_base_location': {_jstr(base_location)},
 {extra_config_sql.rstrip()}
+              }}
+            }}
           )
         }}}}
         {model_sql}
@@ -976,26 +980,31 @@ def _select_model_sql(
     staging_table_reuse: bool = False,
     force_rebuild_staging_table: bool = False,
 ) -> str:
+    export_location = f"@{context.export_stage}/{export_prefix}"
     return textwrap.dedent(
         f"""
         {{{{
           config(
             materialized='iceberg_sync',
-            source_type='bigquery',
-            materialization_strategy='full_refresh',
-            bigquery_export_strategy='select',
-            google_cloud_project_id={_jstr(context.bigquery_project_id)},
-            bigquery_dataset_id={_jstr(context.bigquery_dataset_id)},
-            bigquery_table_id={_jstr(table_id)},
-            bigquery_location={_jstr(context.bigquery_location)},
-            bigquery_export_location={_jstr('@' + context.export_stage + '/' + export_prefix)},
-            bigquery_export_predicate_type={_jstr(predicate_type)},
-            bigquery_export_full_refresh_predicates={_jlist(predicates)},
-            bigquery_staging_dataset_id={_jinja_value(staging_dataset_id)},
-            bigquery_staging_table_reuse={_jbool(staging_table_reuse)},
-            force_rebuild_staging_table={_jbool(force_rebuild_staging_table)},
-            iceberg_table_external_volume={_jstr(context.external_volume)},
-            iceberg_table_base_location={_jstr(base_location)}
+            meta={{
+              'iceberg_sync': {{
+                'source_type': 'bigquery',
+                'materialization_strategy': 'full_refresh',
+                'bigquery_export_strategy': 'select',
+                'google_cloud_project_id': {_jstr(context.bigquery_project_id)},
+                'bigquery_dataset_id': {_jstr(context.bigquery_dataset_id)},
+                'bigquery_table_id': {_jstr(table_id)},
+                'bigquery_location': {_jstr(context.bigquery_location)},
+                'bigquery_export_location': {_jstr(export_location)},
+                'bigquery_export_predicate_type': {_jstr(predicate_type)},
+                'bigquery_export_full_refresh_predicates': {_jlist(predicates)},
+                'bigquery_staging_dataset_id': {_jinja_value(staging_dataset_id)},
+                'bigquery_staging_table_reuse': {_jbool(staging_table_reuse)},
+                'force_rebuild_staging_table': {_jbool(force_rebuild_staging_table)},
+                'iceberg_table_external_volume': {_jstr(context.external_volume)},
+                'iceberg_table_base_location': {_jstr(base_location)}
+              }}
+            }}
           )
         }}}}
 
@@ -1344,6 +1353,8 @@ def _required_env_list(name: str) -> list[str]:
 
 
 def _dbt_executable() -> str:
+    if executable := os.environ.get("DBT_SNOWFLAKE_ICEBERG_SYNC_DBT_EXECUTABLE"):
+        return executable
     return str(Path(sys.executable).with_name("dbt"))
 
 
