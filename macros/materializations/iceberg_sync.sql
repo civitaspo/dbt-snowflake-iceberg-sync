@@ -10,7 +10,10 @@
   {%- endset -%}
 
   {%- if execute -%}
-    {%- set procedure_table = run_query(call_sql) -%}
+    {%- call statement('main', fetch_result=True) -%}
+      {{ call_sql }}
+    {%- endcall -%}
+    {%- set procedure_table = load_result('main')['table'] -%}
     {%- set result_values = [] -%}
     {%- if procedure_table is not none and (procedure_table.columns | length) > 0 -%}
       {%- set result_values = procedure_table.columns[0].values() -%}
