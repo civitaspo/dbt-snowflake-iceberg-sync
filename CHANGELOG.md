@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 - 2026-06-17
 
 ### Changed
 
@@ -15,6 +15,8 @@
   to the dbt job/orchestrator layer.
 - Documented that uncaught Snowflake statement failures in the dbt-side path
   cannot run Jinja-side rollback, retry, or cleanup SQL.
+- Avoided dbt-side failure cleanup that could drop an internal Iceberg table
+  when ownership cannot be proven under concurrent initial runs.
 
 ## 0.2.3 - 2026-06-09
 
