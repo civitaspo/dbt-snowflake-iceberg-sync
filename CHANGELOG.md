@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Moved Snowflake relation state checks, Iceberg table DDL, additive schema
+  changes, load transaction SQL, target view creation, BigQuery export polling,
+  and success run-log writes to the dbt materialization side.
+- Split the package-managed procedure path so dbt can start and poll BigQuery
+  exports while keeping Google API calls inside Snowflake external access.
+- Removed the dbt-side `EXECUTE IMMEDIATE 'DECLARE ...'` load retry block. The
+  materialization now issues plain `BEGIN`, `DELETE`, `COPY INTO`, and `COMMIT`
+  SQL in the dbt-controlled load path and leaves failed Snowflake load retries
+  to the dbt job/orchestrator layer.
+- Documented that uncaught Snowflake statement failures in the dbt-side path
+  cannot run Jinja-side rollback, retry, or cleanup SQL.
+
 ## 0.2.3 - 2026-06-09
 
 ### Added

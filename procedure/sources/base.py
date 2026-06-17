@@ -38,3 +38,17 @@ class SourceAdapter(Protocol):
 
     def map_schema(self, export_result: SourceExportResult) -> list[SnowflakeColumn]:
         ...
+
+    def start_export(
+        self,
+        config: IcebergSyncConfig,
+        context: SourceExecutionContext,
+    ) -> dict[str, Any]:
+        ...
+
+    def poll_export(
+        self,
+        config: IcebergSyncConfig,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        ...

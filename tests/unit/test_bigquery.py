@@ -44,6 +44,8 @@ class FakeBigQueryClient:
         self.query_jobs = []
         self.extract_jobs = []
         self.patches = []
+        self.jobs = {}
+        self.pending_jobs = set()
         self.fail_extract = fail_extract
         self.fail_query = fail_query
 
@@ -69,6 +71,16 @@ class FakeBigQueryClient:
         ]
 
     def run_query_job(self, project_id, *, location, query, destination_table):
+        job = self.insert_query_job(
+            project_id,
+            location=location,
+            query=query,
+            destination_table=destination_table,
+        )
+        self.get_job(project_id, location=location, job_id=job["jobReference"]["jobId"])
+        return job
+
+    def insert_query_job(self, project_id, *, location, query, destination_table):
         if self.fail_query:
             raise SourceError("query failed")
         self.query_jobs.append((query, destination_table))
@@ -76,9 +88,38 @@ class FakeBigQueryClient:
         self.tables[(project_id, destination_table["datasetId"], table_id)] = {
             "schema": {"fields": [{"name": "OrderID", "type": "INT64"}]}
         }
-        return {"jobReference": {"projectId": project_id, "jobId": "query-job"}}
+        job_id = f"query-job-{len(self.query_jobs)}"
+        job = {
+            "jobReference": {
+                "projectId": project_id,
+                "location": location,
+                "jobId": job_id,
+            },
+            "status": {"state": "DONE"},
+        }
+        self.jobs[job_id] = job
+        return job
 
     def run_extract_job(
+        self,
+        project_id,
+        *,
+        location,
+        source_table,
+        destination_uris,
+        compression,
+    ):
+        job = self.insert_extract_job(
+            project_id,
+            location=location,
+            source_table=source_table,
+            destination_uris=destination_uris,
+            compression=compression,
+        )
+        self.get_job(project_id, location=location, job_id=job["jobReference"]["jobId"])
+        return job
+
+    def insert_extract_job(
         self,
         project_id,
         *,
@@ -90,7 +131,23 @@ class FakeBigQueryClient:
         if self.fail_extract:
             raise SourceError("extract failed")
         self.extract_jobs.append((source_table, destination_uris, compression))
-        return {"jobReference": {"projectId": project_id, "jobId": "extract-job"}}
+        job_id = f"extract-job-{len(self.extract_jobs)}"
+        job = {
+            "jobReference": {
+                "projectId": project_id,
+                "location": location,
+                "jobId": job_id,
+            },
+            "status": {"state": "DONE"},
+        }
+        self.jobs[job_id] = job
+        return job
+
+    def get_job(self, project_id, *, location, job_id):
+        job = self.jobs[job_id]
+        if job_id in self.pending_jobs:
+            return {**job, "status": {"state": "RUNNING"}}
+        return job
 
     def patch_table(self, project_id, dataset_id, table_id, patch):
         self.patches.append((table_id, patch))
@@ -620,6 +677,52 @@ def test_extract_export_uses_configured_compression(payload_factory):
     assert client.extract_jobs[0][2] == "SNAPPY"
 
 
+def test_async_extract_export_returns_success_after_jobs_finish(payload_factory):
+    client = FakeBigQueryClient()
+    config = parse_config(payload_factory(bigquery__export_compression="gzip"))
+
+    result = BigQuerySourceAdapter(client).start_export(
+        config,
+        context=SourceExecutionContext(
+            effective_mode="full_refresh",
+            destination_uri="gcs://bucket/prefix/run",
+        ),
+    )
+
+    assert result["status"] == "success"
+    assert result["schema_fields"] == [{"name": "OrderID", "type": "INT64"}]
+    assert result["segments"] == [
+        {
+            "table_id": "orders",
+            "destination_uri": "gcs://bucket/prefix/run/segment-00000-*.parquet",
+        }
+    ]
+    assert client.extract_jobs[0][2] == "GZIP"
+
+
+def test_async_extract_export_can_be_polled_until_complete(payload_factory):
+    client = FakeBigQueryClient()
+    config = parse_config(payload_factory())
+    adapter = BigQuerySourceAdapter(client)
+
+    client.pending_jobs.add("extract-job-1")
+    running = adapter.start_export(
+        config,
+        context=SourceExecutionContext(
+            effective_mode="full_refresh",
+            destination_uri="gcs://bucket/prefix/run",
+        ),
+    )
+
+    assert running["status"] == "running"
+    client.pending_jobs.clear()
+
+    result = adapter.poll_export(config, running)
+
+    assert result["status"] == "success"
+    assert result["job_references"][0]["jobId"] == "extract-job-1"
+
+
 def test_select_export_re_raises_non_404_staging_lookup_error(payload_factory):
     client = FakeBigQueryClient()
     payload = payload_factory(
@@ -701,17 +804,57 @@ def test_select_export_uses_configured_compression(payload_factory):
     assert client.extract_jobs[0][2] == "GZIP"
 
 
+def test_async_select_export_polls_query_then_submits_extract(payload_factory):
+    client = FakeBigQueryClient()
+    payload = payload_factory(
+        bigquery__export_strategy="select",
+        bigquery__staging_dataset_id="staging",
+        bigquery__staging_table_reuse=False,
+        model__sql="select * from `project.dataset.orders`",
+    )
+    config = parse_config(payload)
+    adapter = BigQuerySourceAdapter(client)
+    client.pending_jobs.add("query-job-1")
+
+    running = adapter.start_export(
+        config,
+        context=SourceExecutionContext(
+            effective_mode="full_refresh",
+            destination_uri="gcs://bucket/prefix/run",
+        ),
+    )
+
+    assert running["status"] == "running"
+    assert len(client.extract_jobs) == 0
+    client.pending_jobs.clear()
+
+    result = adapter.poll_export(config, running)
+
+    assert result["status"] == "success"
+    assert len(client.query_jobs) == 1
+    assert len(client.extract_jobs) == 1
+    assert len(client.patches) == 1
+    assert result["staging_table_reference"].startswith("project.staging.")
+
+
 def test_rest_extract_job_sets_parquet_compression():
     client = object.__new__(BigQueryRestClient)
     captured = {}
 
-    def fake_insert_and_wait(project_id, location, body):
+    def fake_insert_job(project_id, body):
         captured["project_id"] = project_id
-        captured["location"] = location
         captured["body"] = body
-        return {"jobReference": {"projectId": project_id, "jobId": "extract-job"}}
+        return {
+            "jobReference": {
+                "projectId": project_id,
+                "location": "US",
+                "jobId": "extract-job",
+            },
+            "status": {"state": "DONE"},
+        }
 
-    client._insert_and_wait = fake_insert_and_wait
+    client._insert_job = fake_insert_job
+    client._wait_for_job = lambda job: job
 
     client.run_extract_job(
         "project",
@@ -721,6 +864,7 @@ def test_rest_extract_job_sets_parquet_compression():
         compression="ZSTD",
     )
 
+    assert captured["project_id"] == "project"
     assert captured["body"]["configuration"]["extract"] == {
         "sourceTable": {"projectId": "project", "datasetId": "dataset", "tableId": "orders"},
         "destinationUris": ["gs://bucket/path/*.parquet"],

@@ -200,6 +200,21 @@
       "bigquery_export_predicate_type is invalid"
     ) -%}
   {%- endif -%}
+  {%- if bq['export_poll_interval_seconds'] <= 0 -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "bigquery_export_poll_interval_seconds must be positive"
+    ) -%}
+  {%- endif -%}
+  {%- if bq['export_poll_timeout_seconds'] <= 0 -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "bigquery_export_poll_timeout_seconds must be positive"
+    ) -%}
+  {%- endif -%}
+  {%- if bq['export_poll_interval_seconds'] > bq['export_poll_timeout_seconds'] -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "bigquery_export_poll_interval_seconds must not exceed bigquery_export_poll_timeout_seconds"
+    ) -%}
+  {%- endif -%}
   {%- if not bq['export_location'] or not bq['export_location'].startswith('@') -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
       "bigquery_export_location must be a named Snowflake stage location"

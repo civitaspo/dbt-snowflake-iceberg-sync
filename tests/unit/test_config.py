@@ -12,6 +12,8 @@ def test_parse_config_defaults(base_payload):
     assert config.source_type == "bigquery"
     assert config.bigquery.export_strategy == "extract"
     assert config.bigquery.export_compression == "ZSTD"
+    assert config.bigquery.export_poll_interval_seconds == 30
+    assert config.bigquery.export_poll_timeout_seconds == 3600
     assert config.target_relation.identifier == "ORDERS"
     assert config.internal_relation.identifier == "__ORDERS"
     assert config.iceberg_table.external_volume == "ICEBERG_EXTERNAL_VOLUME"
@@ -64,6 +66,15 @@ def test_parse_config_normalizes_only_snowflake_object_identifiers(payload_facto
         ({"bigquery__export_strategy": "load"}, "bigquery_export_strategy"),
         ({"bigquery__export_compression": "brotli"}, "bigquery_export_compression"),
         ({"bigquery__export_predicate_type": "having"}, "bigquery_export_predicate_type"),
+        ({"bigquery__export_poll_interval_seconds": 0}, "export_poll_interval"),
+        ({"bigquery__export_poll_timeout_seconds": 0}, "export_poll_timeout"),
+        (
+            {
+                "bigquery__export_poll_interval_seconds": 10,
+                "bigquery__export_poll_timeout_seconds": 5,
+            },
+            "export_poll_interval",
+        ),
         ({"iceberg_table__iceberg_version": 1}, "iceberg_table_iceberg_version"),
         ({"iceberg_table__storage_serialization_policy": "FAST"}, "storage_serialization_policy"),
         ({"retry__max_attempts": 0}, "iceberg_sync_retry_max_attempts"),

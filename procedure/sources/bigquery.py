@@ -31,6 +31,15 @@ class BigQueryClientProtocol(Protocol):
         destination_table: dict[str, str],
     ) -> dict[str, Any]: ...
 
+    def insert_query_job(
+        self,
+        project_id: str,
+        *,
+        location: str,
+        query: str,
+        destination_table: dict[str, str],
+    ) -> dict[str, Any]: ...
+
     def run_extract_job(
         self,
         project_id: str,
@@ -40,6 +49,18 @@ class BigQueryClientProtocol(Protocol):
         destination_uris: list[str],
         compression: str,
     ) -> dict[str, Any]: ...
+
+    def insert_extract_job(
+        self,
+        project_id: str,
+        *,
+        location: str,
+        source_table: dict[str, str],
+        destination_uris: list[str],
+        compression: str,
+    ) -> dict[str, Any]: ...
+
+    def get_job(self, project_id: str, *, location: str, job_id: str) -> dict[str, Any]: ...
 
     def patch_table(
         self,
@@ -77,6 +98,34 @@ class BigQuerySourceAdapter:
 
     def map_schema(self, export_result: SourceExportResult) -> list[SnowflakeColumn]:
         return map_bigquery_schema(export_result.schema_fields)
+
+    def start_export(
+        self,
+        config: IcebergSyncConfig,
+        context: SourceExecutionContext,
+    ) -> dict[str, Any]:
+        predicates = config.predicates_for_mode(context.effective_mode)
+        predicate_type = resolve_predicate_type(config.bigquery, predicates, self.client)
+        if config.bigquery.export_strategy == "extract":
+            return self._start_extract(
+                config.bigquery,
+                predicate_type,
+                predicates,
+                context.destination_uri,
+            )
+        return self._start_select(config, predicate_type, predicates, context.destination_uri)
+
+    def poll_export(
+        self,
+        config: IcebergSyncConfig,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        phase = state.get("phase")
+        if phase == "query":
+            return self._poll_select_query(config, state)
+        if phase == "extract":
+            return self._poll_extract(state)
+        raise ConfigError("unknown BigQuery export phase")
 
     def _export_extract(
         self,
@@ -183,6 +232,205 @@ class BigQuerySourceAdapter:
             job_references=job_refs,
             staging_table_reference=(f"{bq.project_id}.{bq.staging_dataset_id}.{staging_table_id}"),
         )
+
+    def _start_extract(
+        self,
+        bq: BigQueryConfig,
+        predicate_type: str,
+        predicates: tuple[str, ...],
+        destination_uri: str,
+    ) -> dict[str, Any]:
+        tables = concrete_extract_tables(bq, predicate_type, predicates, self.client)
+        if not tables:
+            raise SourceError("no BigQuery tables matched the extract plan")
+
+        job_refs: list[dict[str, Any]] = []
+        segments: list[dict[str, Any]] = []
+        schema_fields: list[dict[str, Any]] | None = None
+        for index, table_id in enumerate(tables):
+            schema_table_id = schema_table_id_for_extract(predicate_type, table_id)
+            table = self.client.get_table(bq.project_id, bq.dataset_id, schema_table_id)
+            if schema_fields is None:
+                schema_fields = table.get("schema", {}).get("fields", [])
+            segment_uri = f"{destination_uri.rstrip('/')}/segment-{index:05d}-*.parquet"
+            job = self.client.insert_extract_job(
+                bq.project_id,
+                location=bq.location,
+                source_table={
+                    "projectId": bq.project_id,
+                    "datasetId": bq.dataset_id,
+                    "tableId": table_id,
+                },
+                destination_uris=[segment_uri],
+                compression=bq.export_compression,
+            )
+            job_ref = job.get("jobReference", job)
+            job_refs.append(job_ref)
+            segments.append({"table_id": table_id, "destination_uri": segment_uri})
+
+        state = {
+            "status": "running",
+            "phase": "extract",
+            "schema_fields": schema_fields or [],
+            "segments": segments,
+            "job_references": job_refs,
+            "pending_jobs": job_refs,
+            "staging_table_reference": None,
+        }
+        return self._poll_extract(state)
+
+    def _start_select(
+        self,
+        config: IcebergSyncConfig,
+        predicate_type: str,
+        predicates: tuple[str, ...],
+        destination_uri: str,
+    ) -> dict[str, Any]:
+        bq = config.bigquery
+        if predicate_type not in {"none", "where"}:
+            raise ConfigError("select export strategy allows only none or where predicates")
+        assert bq.staging_dataset_id is not None
+        staging_table_id = staging_table_id_for(config, predicates)
+        staging_ref = {
+            "projectId": bq.project_id,
+            "datasetId": bq.staging_dataset_id,
+            "tableId": staging_table_id,
+        }
+        existing = _get_table_or_none(
+            self.client, bq.project_id, bq.staging_dataset_id, staging_table_id
+        )
+        expected_hash = staging_hash(config, predicates)
+        reuse = (
+            bq.staging_table_reuse
+            and not bq.force_rebuild_staging_table
+            and existing is not None
+            and _table_has_hash(existing, expected_hash)
+            and not _table_is_expired(existing)
+        )
+        state = {
+            "status": "running",
+            "phase": "query",
+            "predicate_type": predicate_type,
+            "predicates": list(predicates),
+            "destination_uri": destination_uri,
+            "staging_ref": staging_ref,
+            "staging_table_reference": (
+                f"{bq.project_id}.{bq.staging_dataset_id}.{staging_table_id}"
+            ),
+            "expected_hash": expected_hash,
+            "job_references": [],
+            "pending_jobs": [],
+        }
+        if reuse:
+            return self._submit_select_extract(config, state)
+
+        query = select_sql_with_predicates(config.model.sql, predicate_type, predicates)
+        job = self.client.insert_query_job(
+            bq.project_id,
+            location=bq.location,
+            query=query,
+            destination_table=staging_ref,
+        )
+        job_ref = job.get("jobReference", job)
+        state["query_job_reference"] = job_ref
+        state["job_references"] = [job_ref]
+        state["pending_jobs"] = [job_ref]
+        return self._poll_select_query(config, state)
+
+    def _poll_select_query(
+        self,
+        config: IcebergSyncConfig,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        query_ref = state.get("query_job_reference")
+        if query_ref:
+            job = self._get_job(query_ref)
+            if not _job_done(job):
+                return state
+            _raise_if_job_failed(job)
+
+            bq = config.bigquery
+            expiration = datetime.now(tz=UTC) + timedelta(
+                hours=bq.staging_table_expiration_hours
+            )
+            staging_ref = state["staging_ref"]
+            self.client.patch_table(
+                bq.project_id,
+                staging_ref["datasetId"],
+                staging_ref["tableId"],
+                {
+                    "expirationTime": str(int(expiration.timestamp() * 1000)),
+                    "labels": {
+                        "dbt_iceberg_sync_hash": str(state["expected_hash"])[:63]
+                    },
+                },
+            )
+        return self._submit_select_extract(config, state)
+
+    def _submit_select_extract(
+        self,
+        config: IcebergSyncConfig,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        bq = config.bigquery
+        staging_ref = state["staging_ref"]
+        table = self.client.get_table(
+            bq.project_id,
+            staging_ref["datasetId"],
+            staging_ref["tableId"],
+        )
+        schema_fields = table.get("schema", {}).get("fields", [])
+        segment_uri = f"{str(state['destination_uri']).rstrip('/')}/segment-00000-*.parquet"
+        extract_job = self.client.insert_extract_job(
+            bq.project_id,
+            location=bq.location,
+            source_table=staging_ref,
+            destination_uris=[segment_uri],
+            compression=bq.export_compression,
+        )
+        extract_ref = extract_job.get("jobReference", extract_job)
+        state.update(
+            {
+                "status": "running",
+                "phase": "extract",
+                "schema_fields": schema_fields,
+                "segments": [
+                    {"table_id": staging_ref["tableId"], "destination_uri": segment_uri}
+                ],
+                "job_references": [*state.get("job_references", []), extract_ref],
+                "pending_jobs": [extract_ref],
+            }
+        )
+        state.pop("query_job_reference", None)
+        return self._poll_extract(state)
+
+    def _poll_extract(self, state: dict[str, Any]) -> dict[str, Any]:
+        pending_refs = list(state.get("pending_jobs") or [])
+        remaining = []
+        for job_ref in pending_refs:
+            job = self._get_job(job_ref)
+            if not _job_done(job):
+                remaining.append(job_ref)
+                continue
+            _raise_if_job_failed(job)
+        if remaining:
+            state["pending_jobs"] = remaining
+            return state
+        return {
+            "status": "success",
+            "schema_fields": state.get("schema_fields", []),
+            "segments": state.get("segments", []),
+            "job_references": state.get("job_references", []),
+            "staging_table_reference": state.get("staging_table_reference"),
+        }
+
+    def _get_job(self, job_ref: dict[str, Any]) -> dict[str, Any]:
+        job_id = job_ref.get("jobId")
+        project_id = job_ref.get("projectId")
+        location = job_ref.get("location")
+        if not job_id or not project_id or not location:
+            raise SourceError("BigQuery job reference is missing projectId, location, or jobId")
+        return self.client.get_job(project_id, location=location, job_id=job_id)
 
 
 def resolve_predicate_type(
@@ -352,6 +600,23 @@ class BigQueryRestClient:
         query: str,
         destination_table: dict[str, str],
     ) -> dict[str, Any]:
+        return self._wait_for_job(
+            self.insert_query_job(
+                project_id,
+                location=location,
+                query=query,
+                destination_table=destination_table,
+            )
+        )
+
+    def insert_query_job(
+        self,
+        project_id: str,
+        *,
+        location: str,
+        query: str,
+        destination_table: dict[str, str],
+    ) -> dict[str, Any]:
         body = {
             "jobReference": {"projectId": project_id, "location": location},
             "configuration": {
@@ -363,9 +628,28 @@ class BigQueryRestClient:
                 }
             },
         }
-        return self._insert_and_wait(project_id, location, body)
+        return self._insert_job(project_id, body)
 
     def run_extract_job(
+        self,
+        project_id: str,
+        *,
+        location: str,
+        source_table: dict[str, str],
+        destination_uris: list[str],
+        compression: str,
+    ) -> dict[str, Any]:
+        return self._wait_for_job(
+            self.insert_extract_job(
+                project_id,
+                location=location,
+                source_table=source_table,
+                destination_uris=destination_uris,
+                compression=compression,
+            )
+        )
+
+    def insert_extract_job(
         self,
         project_id: str,
         *,
@@ -385,7 +669,14 @@ class BigQueryRestClient:
                 }
             },
         }
-        return self._insert_and_wait(project_id, location, body)
+        return self._insert_job(project_id, body)
+
+    def get_job(self, project_id: str, *, location: str, job_id: str) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/projects/{quote(project_id)}/jobs/{quote(job_id)}",
+            params={"location": location},
+        )
 
     def patch_table(
         self, project_id: str, dataset_id: str, table_id: str, patch: dict[str, Any]
@@ -396,24 +687,22 @@ class BigQueryRestClient:
             json=patch,
         )
 
-    def _insert_and_wait(
-        self, project_id: str, location: str, body: dict[str, Any]
-    ) -> dict[str, Any]:
-        job = self._request("POST", f"/projects/{quote(project_id)}/jobs", json=body)
+    def _insert_job(self, project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", f"/projects/{quote(project_id)}/jobs", json=body)
+
+    def _wait_for_job(self, job: dict[str, Any]) -> dict[str, Any]:
         ref = job.get("jobReference", {})
         job_id = ref.get("jobId")
+        project_id = ref.get("projectId")
+        location = ref.get("location")
         if not job_id:
             raise SourceError("BigQuery job response did not include jobId")
+        if not project_id or not location:
+            raise SourceError("BigQuery job response did not include projectId or location")
         while True:
-            current = self._request(
-                "GET",
-                f"/projects/{quote(project_id)}/jobs/{quote(job_id)}",
-                params={"location": location},
-            )
-            status = current.get("status", {})
-            if status.get("state") == "DONE":
-                if status.get("errorResult"):
-                    raise SourceError("BigQuery job failed: " + json.dumps(status["errorResult"]))
+            current = self.get_job(project_id, location=location, job_id=job_id)
+            if _job_done(current):
+                _raise_if_job_failed(current)
                 return current
             time.sleep(2)
 
@@ -493,3 +782,13 @@ def _table_is_expired(table: dict[str, Any]) -> bool:
 def _table_id(table: dict[str, Any]) -> str:
     ref = table.get("tableReference") or {}
     return str(ref.get("tableId") or table.get("id", "").split(".")[-1])
+
+
+def _job_done(job: dict[str, Any]) -> bool:
+    return (job.get("status") or {}).get("state") == "DONE"
+
+
+def _raise_if_job_failed(job: dict[str, Any]) -> None:
+    status = job.get("status") or {}
+    if status.get("errorResult"):
+        raise SourceError("BigQuery job failed: " + json.dumps(status["errorResult"]))

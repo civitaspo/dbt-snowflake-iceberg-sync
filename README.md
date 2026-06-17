@@ -233,17 +233,24 @@ and quoted in internal table DDL and exposed view SQL.
 | `incremental_predicate` | Conditional | None | Snowflake SQL predicate used to delete rows from the internal Iceberg table during incremental runs. Required when `bigquery_export_incremental_predicates` is non-empty, and must be absent when that list is empty. |
 | `partition_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. |
 | `cluster_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. |
-| `iceberg_sync_retry_max_attempts` | No | `3` | Maximum attempts for retryable Snowflake load transaction failures. Must be at least `1`. |
-| `iceberg_sync_retry_initial_delay_seconds` | No | `5` | Initial delay before retrying a retryable Snowflake load transaction failure. |
-| `iceberg_sync_retry_max_delay_seconds` | No | `60` | Maximum retry delay after applying exponential backoff and jitter. |
-| `iceberg_sync_retry_backoff_multiplier` | No | `2.0` | Retry delay multiplier. Must be at least `1.0`. |
-| `iceberg_sync_retry_jitter_seconds` | No | `3` | Maximum random jitter added to retry delays. |
-| `iceberg_sync_cleanup_created_table_on_failure` | No | `true` | Drop a newly-created internal Iceberg table after failed initial creation when no target view existed before the run. |
+| `iceberg_sync_retry_max_attempts` | No | `3` | Compatibility retry setting for the legacy full-run procedure path. The dbt-side materialization issues Snowflake load statements directly and does not retry failed `COPY INTO` statements inside Snowflake Scripting. |
+| `iceberg_sync_retry_initial_delay_seconds` | No | `5` | Compatibility retry delay for the legacy full-run procedure path. |
+| `iceberg_sync_retry_max_delay_seconds` | No | `60` | Compatibility maximum retry delay for the legacy full-run procedure path. |
+| `iceberg_sync_retry_backoff_multiplier` | No | `2.0` | Compatibility retry delay multiplier for the legacy full-run procedure path. Must be at least `1.0`. |
+| `iceberg_sync_retry_jitter_seconds` | No | `3` | Compatibility random retry jitter for the legacy full-run procedure path. |
+| `iceberg_sync_cleanup_created_table_on_failure` | No | `true` | Compatibility cleanup setting for the legacy full-run procedure path. In the dbt-side path, uncaught Snowflake statement failures abort the materialization before Jinja can run cleanup SQL, and the materialization does not drop tables after `CREATE ICEBERG TABLE IF NOT EXISTS` because ownership cannot be proven under concurrent runs. |
 | `iceberg_sync_run_log_fail_on_error` | No | `false` | Fail the model when writing the shared run log table fails. The default keeps run-log writes best-effort for high-concurrency runs. |
 
 The effective mode becomes full refresh when dbt is invoked with
 `--full-refresh`, when `materialization_strategy='full_refresh'`, or when the
 internal Iceberg table or exposed target view does not yet exist.
+
+The materialization orchestrates Snowflake work from dbt. BigQuery REST API
+calls still run through the package-managed Snowflake procedure because they
+need the configured external access integration and secret, but dbt now controls
+the wait loop between BigQuery job polls and directly issues Snowflake
+`CREATE ICEBERG TABLE`, additive `ALTER TABLE`, `DELETE`, `COPY INTO`, target
+view creation, and run-log `INSERT` statements.
 
 ### Iceberg Table Options
 
@@ -282,6 +289,8 @@ These options apply when `source_type='bigquery'`.
 | `bigquery_export_predicate_type` | No | `auto` | Predicate planning mode. Supported values are `auto`, `none`, `partition_decorator`, `table_suffix`, and `where`; valid values depend on `bigquery_export_strategy`. |
 | `bigquery_export_full_refresh_predicates` | No | `[]` | Source predicates used only when the effective mode is full refresh. A string is treated as a single-item list. |
 | `bigquery_export_incremental_predicates` | No | `[]` | Source predicates used only when the effective mode is incremental. Must be paired with `incremental_predicate`. A string is treated as a single-item list. |
+| `bigquery_export_poll_interval_seconds` | No | `30` | Seconds dbt waits between BigQuery export job polls. Must be positive. |
+| `bigquery_export_poll_timeout_seconds` | No | `3600` | Maximum dbt-side wait window for BigQuery export completion. Must be positive and at least `bigquery_export_poll_interval_seconds`. |
 
 BigQuery source predicates are interpreted differently by predicate type:
 
@@ -350,17 +359,15 @@ absent.
   predicate window, then copy files.
 - Both absent: copy a complete export after a full-table delete.
 
-The Snowflake transaction begins after export and table DDL. If `DELETE` or
-`COPY INTO` fails, the procedure rolls back the transaction and preserves the
-previous committed table data.
+The Snowflake transaction begins after export and table DDL. dbt issues plain
+SQL statements for `BEGIN`, the delete statement, `COPY INTO`, and `COMMIT`.
+The commit is reached only after both the delete and copy statements succeed.
 
 ## Retry And Cleanup Behavior
 
-The materialization retries transient Snowflake failures at two layers. The dbt
-materialization wraps the outer stored procedure `CALL` in a Snowflake Scripting
-retry block so Snowflake internal errors raised by the `CALL` itself can be
-retried. The procedure also retries transient Snowflake failures raised by the
-load transaction:
+The dbt-side materialization does not wrap Snowflake load work in anonymous
+Snowflake Scripting such as `EXECUTE IMMEDIATE 'DECLARE ...'`. Instead, dbt
+issues the load sequence as individual statements:
 
 ```sql
 BEGIN;
@@ -369,28 +376,28 @@ COPY INTO <internal_iceberg_table> ... LOAD_MODE = ADD_FILES_COPY;
 COMMIT;
 ```
 
-Procedure-level retries reuse the same BigQuery export files and do not rerun
-the BigQuery export job. Outer `CALL` retries may rerun the procedure and create
-a new export prefix. This remains idempotent for full-refresh and `delete+copy`
-incremental runs because each load attempt applies the configured Snowflake
-delete predicate before copying files. Retry classifiers apply only to stable
-Snowflake execution-error text that looks transient, including messages
-containing `SQL execution internal error`, `incident`, or the scoped-transaction
-error text `Scoped transaction started in stored procedure is incomplete`.
+dbt/Jinja cannot catch a failed Snowflake statement and then continue the same
+materialization run with a rollback or retry. For that reason, failed Snowflake
+load statements should be retried by rerunning the dbt model or by using an
+external orchestrator retry policy. This avoids keeping retry sleeps inside a
+long-running Snowflake Scripting block.
 
-The procedure does not retry configuration, schema, predicate validation,
-BigQuery source, permission, or relation-conflict errors.
+The BigQuery export wait is controlled by dbt through `start_export` and
+`poll_export` procedure actions. These actions keep Google API calls inside
+Snowflake external access, while dbt controls the poll cadence.
 
-The stored procedure creates or replaces the exposed dbt view after a successful
-load commit. During initial creation, if the procedure created the internal
-Iceberg table and the run fails before the target view is successfully created,
-the procedure drops that newly-created internal table when
-`iceberg_sync_cleanup_created_table_on_failure=true`. Pre-existing internal
-tables are never dropped by this cleanup path.
+The dbt materialization creates or replaces the exposed dbt view after a
+successful load commit. Because dbt/Jinja cannot catch failed Snowflake
+statements, the dbt-side path cannot guarantee cleanup SQL after an uncaught
+`COPY INTO` or view-creation failure. It also avoids dropping an internal table
+after `CREATE ICEBERG TABLE IF NOT EXISTS`, because a concurrent run may have
+created that table between the initial existence check and the create statement.
+The legacy full-run procedure path keeps the prior
+`iceberg_sync_cleanup_created_table_on_failure` behavior.
 
-The run log and returned procedure result include `retry` and `cleanup` objects
-with attempt counts, retryable error diagnostics, and best-effort cleanup
-outcomes.
+The run log includes `retry` and `cleanup` objects for compatibility with prior
+versions. In the dbt-side load path, `retry.attempts` is `1` because Snowflake
+load retries are not performed inside the materialization.
 
 The run log table is shared by all concurrent models. Run-log writes are
 best-effort by default, and lock-contention failures such as `000625`, `locked

@@ -2,88 +2,89 @@
   {%- set payload = dbt_snowflake_iceberg_sync.iceberg_sync_collect_config(
     sql, this, model, flags.FULL_REFRESH
   ) -%}
-  {%- set procedure_fqn = dbt_snowflake_iceberg_sync.iceberg_sync_procedure_fqn() -%}
-  {%- set call_sql -%}
-    CALL {{ procedure_fqn }}(
-      PARSE_JSON({{ dbt_snowflake_iceberg_sync.iceberg_sync_json_sql_literal(payload) }})
-    )
-  {%- endset -%}
-  {%- set retry_config = payload['retry'] -%}
-  {%- set retry_max_attempts = retry_config.get('max_attempts', 3) -%}
-  {%- set retry_initial_delay_seconds = retry_config.get('initial_delay_seconds', 5) -%}
-  {%- set retry_max_delay_seconds = retry_config.get('max_delay_seconds', 60) -%}
-  {%- set retry_backoff_multiplier = retry_config.get('backoff_multiplier', 2.0) -%}
-  {%- set retry_call_block -%}
-    DECLARE
-      iceberg_sync_attempt INTEGER DEFAULT 1;
-      iceberg_sync_max_attempts INTEGER DEFAULT {{ retry_max_attempts }};
-      iceberg_sync_initial_delay_seconds FLOAT DEFAULT {{ retry_initial_delay_seconds }};
-      iceberg_sync_max_delay_seconds FLOAT DEFAULT {{ retry_max_delay_seconds }};
-      iceberg_sync_backoff_multiplier FLOAT DEFAULT {{ retry_backoff_multiplier }};
-      iceberg_sync_result VARIANT;
-      iceberg_sync_message STRING;
-      iceberg_sync_delay_seconds FLOAT;
-      iceberg_sync_delay_milliseconds INTEGER;
-    BEGIN
-      WHILE (iceberg_sync_attempt <= iceberg_sync_max_attempts) DO
-        BEGIN
-          {{ call_sql }} INTO :iceberg_sync_result;
-          RETURN iceberg_sync_result;
-        EXCEPTION
-          WHEN OTHER THEN
-            iceberg_sync_message := SQLERRM;
-            IF (
-              iceberg_sync_attempt < iceberg_sync_max_attempts
-              AND (
-                POSITION('sql execution internal error' IN LOWER(iceberg_sync_message)) > 0
-                OR POSITION('incident' IN LOWER(iceberg_sync_message)) > 0
-                OR POSITION(
-                  'scoped transaction started in stored procedure is incomplete'
-                  IN LOWER(iceberg_sync_message)
-                ) > 0
-              )
-            ) THEN
-              iceberg_sync_delay_seconds := LEAST(
-                iceberg_sync_max_delay_seconds,
-                iceberg_sync_initial_delay_seconds
-                  * POWER(iceberg_sync_backoff_multiplier, iceberg_sync_attempt - 1)
-              );
-              iceberg_sync_delay_milliseconds := CEIL(iceberg_sync_delay_seconds * 1000);
-              IF (iceberg_sync_delay_milliseconds > 0) THEN
-                CALL SYSTEM$WAIT(:iceberg_sync_delay_milliseconds, 'MILLISECONDS');
-              END IF;
-              iceberg_sync_attempt := iceberg_sync_attempt + 1;
-            ELSE
-              RAISE;
-            END IF;
-        END;
-      END WHILE;
-    END
-  {%- endset -%}
-  {%- set retry_call_sql = "EXECUTE IMMEDIATE " ~ dbt_snowflake_iceberg_sync.iceberg_sync_sql_string_literal(retry_call_block) -%}
+  {%- set target_relation = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_payload(
+    payload['target_relation'], 'view'
+  ) -%}
+  {%- set internal_relation = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_payload(
+    payload['internal_relation']
+  ) -%}
 
   {%- if execute -%}
-    {%- call statement('main', fetch_result=True, auto_begin=False) -%}
-      {{ retry_call_sql }}
+    {%- set existing_internal_relation = adapter.get_relation(
+      database=internal_relation.database,
+      schema=internal_relation.schema,
+      identifier=internal_relation.identifier
+    ) -%}
+    {%- set existing_target_relation = adapter.get_relation(
+      database=target_relation.database,
+      schema=target_relation.schema,
+      identifier=target_relation.identifier
+    ) -%}
+    {%- set internal_table_exists = existing_internal_relation is not none -%}
+    {%- set target_view_exists = (
+      existing_target_relation is not none
+      and (existing_target_relation.type | upper) == 'VIEW'
+    ) -%}
+    {%- set effective_mode = dbt_snowflake_iceberg_sync.iceberg_sync_effective_mode(
+      payload, internal_table_exists, target_view_exists
+    ) -%}
+    {%- set predicates = dbt_snowflake_iceberg_sync.iceberg_sync_predicates_for_mode(
+      payload, effective_mode
+    ) -%}
+    {%- set run_id = dbt_snowflake_iceberg_sync.iceberg_sync_run_id(payload) -%}
+    {%- set stage = dbt_snowflake_iceberg_sync.iceberg_sync_resolve_stage_location(
+      payload['bigquery']['export_location'], run_id
+    ) -%}
+    {%- set export_result = dbt_snowflake_iceberg_sync.iceberg_sync_wait_for_export(
+      payload, effective_mode, stage['gcs_run_uri']
+    ) -%}
+    {%- set desired_columns = export_result['columns'] -%}
+    {%- set cleanup = {
+      'created_internal_table': false,
+      'altered_internal_table_schema': false,
+      'dropped_created_internal_table': false,
+      'cleanup_error_message': none
+    } -%}
+
+    {%- call statement('iceberg_sync_create_internal_table', auto_begin=False) -%}
+      {{ dbt_snowflake_iceberg_sync.iceberg_sync_create_iceberg_table_sql(
+        payload, desired_columns
+      ) }}
     {%- endcall -%}
-    {%- set procedure_table = load_result('main')['table'] -%}
-    {%- set result_values = [] -%}
-    {%- if procedure_table is not none and (procedure_table.columns | length) > 0 -%}
-      {%- set result_values = procedure_table.columns[0].values() -%}
+
+    {%- set before_add_columns = dbt_snowflake_iceberg_sync.iceberg_sync_describe_table_columns(
+      internal_relation
+    ) -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_validate_or_add_columns(
+      internal_relation, desired_columns
+    ) -%}
+    {%- if desired_columns | length > before_add_columns | length -%}
+      {%- do cleanup.update({'altered_internal_table_schema': true}) -%}
     {%- endif -%}
-    {%- if (result_values | length) == 0 or result_values[0] is none or result_values[0] == '' -%}
+
+    {%- set load_result = dbt_snowflake_iceberg_sync.iceberg_sync_run_load(
+      payload, effective_mode, stage['run_stage_location']
+    ) -%}
+    {%- if load_result.get('status') != 'success' -%}
       {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        'procedure returned no result'
+        load_result.get('error_message', 'Iceberg load failed')
       ) -%}
     {%- endif -%}
-    {%- set raw_result = result_values[0] -%}
-    {%- set procedure_result = dbt_snowflake_iceberg_sync.iceberg_sync_parse_procedure_result(raw_result) -%}
-    {%- if procedure_result.get('status') != 'success' -%}
-      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        procedure_result.get('error_message', 'procedure failed')
-      ) -%}
-    {%- endif -%}
+
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_create_view(
+      target_relation, internal_relation, export_result['view_columns']
+    ) -%}
+
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_write_success_log(
+      payload,
+      run_id,
+      effective_mode,
+      predicates,
+      export_result,
+      load_result.get('retry', {}),
+      cleanup
+    ) -%}
   {%- endif -%}
 
-  {{ return({'relations': [this]}) }}
+  {{ return({'relations': [target_relation]}) }}
 {% endmaterialization %}
