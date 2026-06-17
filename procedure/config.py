@@ -73,6 +73,8 @@ class BigQueryConfig:
     staging_table_expiration_hours: int = 24
     staging_table_reuse: bool = True
     force_rebuild_staging_table: bool = False
+    export_poll_interval_seconds: float = 30
+    export_poll_timeout_seconds: float = 3600
 
 
 @dataclass(frozen=True)
@@ -186,6 +188,14 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         force_rebuild_staging_table=_coerce_bool(
             bq_payload.get("force_rebuild_staging_table"),
             False,
+        ),
+        export_poll_interval_seconds=_float(
+            bq_payload.get("export_poll_interval_seconds", 30),
+            "bigquery_export_poll_interval_seconds",
+        ),
+        export_poll_timeout_seconds=_float(
+            bq_payload.get("export_poll_timeout_seconds", 3600),
+            "bigquery_export_poll_timeout_seconds",
         ),
     )
 
@@ -318,6 +328,18 @@ def validate_config(config: IcebergSyncConfig) -> None:
         raise ConfigError("iceberg_sync_retry_jitter_seconds must be non-negative")
     if config.bigquery.export_predicate_type not in PREDICATE_TYPES:
         raise ConfigError("bigquery_export_predicate_type is invalid")
+    if config.bigquery.export_poll_interval_seconds <= 0:
+        raise ConfigError("bigquery_export_poll_interval_seconds must be positive")
+    if config.bigquery.export_poll_timeout_seconds <= 0:
+        raise ConfigError("bigquery_export_poll_timeout_seconds must be positive")
+    if (
+        config.bigquery.export_poll_interval_seconds
+        > config.bigquery.export_poll_timeout_seconds
+    ):
+        raise ConfigError(
+            "bigquery_export_poll_interval_seconds must not exceed "
+            "bigquery_export_poll_timeout_seconds"
+        )
     if config.partition_by:
         raise ConfigError("partition_by is not supported by iceberg_sync in the first scope")
     if config.cluster_by:

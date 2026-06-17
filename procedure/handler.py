@@ -28,6 +28,13 @@ def main(session: Any, config: Any) -> dict[str, Any]:
 
     payload = parse_json_maybe(config)
     runner = IcebergSyncRunner(session)
+    action = payload.get("action", "run") if isinstance(payload, dict) else "run"
+    if action == "start_export":
+        return runner.start_export(payload)
+    if action == "poll_export":
+        return runner.poll_export(payload)
+    if action != "run":
+        raise IcebergSyncError(f"unknown procedure action: {action}")
     return runner.run(payload)
 
 
@@ -167,6 +174,65 @@ class IcebergSyncRunner:
             if isinstance(exc, IcebergSyncError):
                 raise
             raise
+
+    def start_export(self, payload: dict[str, Any]) -> dict[str, Any]:
+        config = parse_config(payload.get("config", {}))
+        effective_mode = str(payload.get("effective_mode") or "")
+        destination_uri = str(payload.get("destination_uri") or "")
+        if effective_mode not in {"full_refresh", "incremental"}:
+            raise IcebergSyncError("effective_mode must be full_refresh or incremental")
+        if not destination_uri.startswith("gs://"):
+            raise IcebergSyncError("destination_uri must be a gs:// URI")
+
+        source = self._source_adapter(config)
+        state = source.start_export(
+            config,
+            SourceExecutionContext(
+                effective_mode=effective_mode,
+                destination_uri=destination_uri,
+            ),
+        )
+        return self._export_action_result(source, state)
+
+    def poll_export(self, payload: dict[str, Any]) -> dict[str, Any]:
+        config = parse_config(payload.get("config", {}))
+        state = payload.get("export_state") or {}
+        if not isinstance(state, dict):
+            raise IcebergSyncError("export_state must be an object")
+        source = self._source_adapter(config)
+        next_state = source.poll_export(config, state)
+        return self._export_action_result(source, next_state)
+
+    def _export_action_result(
+        self,
+        source: SourceAdapter,
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        if state.get("status") != "success":
+            return {
+                "status": "running",
+                "export_state": state,
+            }
+        export_result = SourceExportResult(
+            schema_fields=state.get("schema_fields", []),
+            segments=state.get("segments", []),
+            job_references=state.get("job_references", []),
+            staging_table_reference=state.get("staging_table_reference"),
+        )
+        columns = source.map_schema(export_result)
+        return {
+            "status": "success",
+            "export_result": {
+                "schema_fields": export_result.schema_fields,
+                "segments": export_result.segments,
+                "job_references": export_result.job_references,
+                "staging_table_reference": export_result.staging_table_reference,
+                "columns": [asdict(column) | {"ddl": column.ddl} for column in columns],
+                "view_columns": [
+                    asdict(column) for column in view_columns(columns)
+                ],
+            },
+        }
 
     def _source_adapter(self, config: IcebergSyncConfig) -> SourceAdapter:
         adapter = self.source_adapters.get(config.source_type)

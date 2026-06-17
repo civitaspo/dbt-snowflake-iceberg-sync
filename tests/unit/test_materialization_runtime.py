@@ -11,33 +11,38 @@ from dbt.cli.main import dbtRunner
 from dbt_common.clients.agate_helper import empty_table
 
 
-def test_iceberg_sync_dbt_run_executes_procedure_as_main_statement(
+def test_iceberg_sync_dbt_run_orchestrates_snowflake_work_in_dbt(
     tmp_path: Path,
     monkeypatch,
 ):
     run_result, executed_sql = _run_dbt_iceberg_sync_model(
         tmp_path,
         monkeypatch,
-        {"status": "success"},
+        [
+            {"status": "running", "export_state": {"phase": "extract"}},
+            _successful_export_result(),
+        ],
     )
 
-    main_statements = [
-        call
-        for call in executed_sql
-        if _normalize_sql(call["sql"]).startswith("execute immediate ")
-    ]
+    normalized_statements = [_normalize_sql(call["sql"]) for call in executed_sql]
 
     assert run_result.success
-    assert len(main_statements) == 1
-    assert main_statements[0]["fetch"] is True
-    assert main_statements[0]["auto_begin"] is False
-    normalized_sql = _normalize_sql(main_statements[0]["sql"])
-    assert "call " in normalized_sql
-    assert "system$wait" in normalized_sql
-    assert "sql execution internal error" in normalized_sql
-    assert "000603" not in normalized_sql
-    assert "300005" not in normalized_sql
-    assert "scoped transaction started in stored procedure is incomplete" in normalized_sql
+    assert any(sql.startswith("call ") for sql in normalized_statements)
+    assert any("system$wait" in sql for sql in normalized_statements)
+    assert any("create iceberg table if not exists" in sql for sql in normalized_statements)
+    assert any(sql.startswith("describe table") for sql in normalized_statements)
+    assert not any(sql.startswith("drop iceberg table") for sql in normalized_statements)
+    assert not any(sql.startswith("execute immediate ") for sql in normalized_statements)
+    assert any("begin; delete from" in sql for sql in normalized_statements)
+    assert any("copy into" in sql for sql in normalized_statements)
+    assert any("commit;" in sql for sql in normalized_statements)
+    assert any("load_mode = add_files_copy" in sql for sql in normalized_statements)
+    assert any("create or replace view" in sql for sql in normalized_statements)
+    assert any(
+        "insert into" in sql and "iceberg_sync_run_log" in sql
+        for sql in normalized_statements
+    )
+    assert not any("000603" in sql or "300005" in sql for sql in normalized_statements)
 
 
 def test_iceberg_sync_dbt_run_surfaces_procedure_failure(
@@ -47,7 +52,7 @@ def test_iceberg_sync_dbt_run_surfaces_procedure_failure(
     run_result, _ = _run_dbt_iceberg_sync_model(
         tmp_path,
         monkeypatch,
-        {"status": "failure", "error_message": "procedure exploded"},
+        [{"status": "failure", "error_message": "procedure exploded"}],
     )
 
     message = run_result.result.results[0].message
@@ -78,7 +83,7 @@ def test_iceberg_sync_dbt_run_rejects_invalid_outer_retry_number(
 def _run_dbt_iceberg_sync_model(
     tmp_path: Path,
     monkeypatch,
-    procedure_result: dict[str, object],
+    procedure_results: list[dict[str, object]],
     *,
     model_config_extra: str = "",
 ):
@@ -173,6 +178,8 @@ def _run_dbt_iceberg_sync_model(
         connection.handle = FakeHandle()
         return connection
 
+    procedure_queue = list(procedure_results)
+
     def fake_execute(self, sql, auto_begin=False, fetch=False, limit=None):
         executed_sql.append(
             {
@@ -184,8 +191,15 @@ def _run_dbt_iceberg_sync_model(
         )
         normalized = _normalize_sql(sql)
         response = AdapterResponse(_message="SUCCESS", code="SUCCESS", rows_affected=1)
-        if normalized.startswith("execute immediate "):
-            return response, agate.Table([[json.dumps(procedure_result)]], ["RESULT"])
+        if normalized.startswith("desc stage"):
+            return response, _desc_stage_table()
+        if normalized.startswith("describe table"):
+            return response, _describe_internal_table()
+        if normalized.startswith("call system$wait"):
+            return response, empty_table()
+        if normalized.startswith("call "):
+            result = procedure_queue.pop(0)
+            return response, agate.Table([[json.dumps(result)]], ["RESULT"])
         if normalized.startswith("show objects"):
             return response, _show_objects_table()
         if normalized.startswith("show terse schemas"):
@@ -220,6 +234,42 @@ def _show_objects_table() -> agate.Table:
         [["TEST_DATABASE", "TEST_SCHEMA", "UNRELATED", "TABLE", "N", "N"]],
         ["database_name", "schema_name", "name", "kind", "is_dynamic", "is_iceberg"],
     )
+
+
+def _desc_stage_table() -> agate.Table:
+    return agate.Table(
+        [["URL", "gcs://bucket/dbt"]],
+        ["property", "property_value"],
+    )
+
+
+def _describe_internal_table() -> agate.Table:
+    return agate.Table(
+        [["OrderID", "NUMBER(19,0)", "COLUMN", "Y"]],
+        ["name", "type", "kind", "null?"],
+    )
+
+
+def _successful_export_result() -> dict[str, object]:
+    return {
+        "status": "success",
+        "export_result": {
+            "schema_fields": [{"name": "OrderID", "type": "INT64"}],
+            "segments": [{"destination_uri": "gs://bucket/dbt/run/segment-*.parquet"}],
+            "job_references": [{"projectId": "project", "location": "US", "jobId": "job"}],
+            "staging_table_reference": None,
+            "columns": [
+                {
+                    "source_name": "OrderID",
+                    "snowflake_type": "BIGINT",
+                    "nullable": True,
+                    "fields": [],
+                    "ddl": '"OrderID" BIGINT',
+                }
+            ],
+            "view_columns": [{"source_name": "OrderID", "alias": "order_id"}],
+        },
+    }
 
 
 def _normalize_sql(sql: str) -> str:
