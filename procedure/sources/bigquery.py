@@ -803,12 +803,48 @@ def _get_table_or_none(
 
 
 def _should_skip_missing_extract_table(bq: BigQueryConfig, exc: SourceError) -> bool:
-    return bq.export_strategy == "extract" and bq.skip_missing_tables and _is_not_found(exc)
+    return (
+        bq.export_strategy == "extract"
+        and bq.skip_missing_tables
+        and _is_missing_table_not_found(exc)
+    )
 
 
-def _is_not_found(exc: SourceError) -> bool:
+def _is_missing_table_not_found(exc: SourceError) -> bool:
     status_code = exc.status_code or getattr(exc, "http_status", None)
-    return status_code == 404
+    if status_code != 404:
+        return False
+
+    payload = _bigquery_error_payload(exc)
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            messages = [error.get("message")]
+            errors = error.get("errors")
+            if isinstance(errors, list):
+                messages.extend(
+                    item.get("message") for item in errors if isinstance(item, dict)
+                )
+            return any(_is_missing_table_message(message) for message in messages)
+
+    return _is_missing_table_message(str(exc))
+
+
+def _bigquery_error_payload(exc: SourceError) -> dict[str, Any] | None:
+    message = str(exc)
+    json_start = message.find("{")
+    if json_start < 0:
+        return None
+    try:
+        parsed = json.loads(message[json_start:])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _is_missing_table_message(message: Any) -> bool:
+    normalized = " ".join(str(message or "").split()).lower()
+    return "not found: table " in normalized
 
 
 def _skipped_export_result(
