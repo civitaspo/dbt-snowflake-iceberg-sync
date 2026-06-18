@@ -206,6 +206,7 @@
       'staging_table_expiration_hours': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_staging_table_expiration_hours', 24),
       'staging_table_reuse': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_staging_table_reuse', true),
       'force_rebuild_staging_table': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'force_rebuild_staging_table', false),
+      'skip_missing_tables': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_extract_skip_missing_tables', false),
       'export_poll_interval_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 'bigquery_export_poll_interval_seconds', 30),
       'export_poll_timeout_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 'bigquery_export_poll_timeout_seconds', 3600)
     },

@@ -62,6 +62,41 @@ def test_iceberg_sync_dbt_run_surfaces_procedure_failure(
     assert "main is not being called during running model" not in message
 
 
+def test_iceberg_sync_dbt_run_skips_when_export_is_skipped(
+    tmp_path: Path,
+    monkeypatch,
+):
+    run_result, executed_sql = _run_dbt_iceberg_sync_model(
+        tmp_path,
+        monkeypatch,
+        [
+            {
+                "status": "skipped",
+                "skip_reason": "BigQuery extract source table was not found",
+                "export_result": {
+                    "schema_fields": [],
+                    "segments": [],
+                    "job_references": [],
+                    "staging_table_reference": None,
+                    "columns": [],
+                    "view_columns": [],
+                },
+            }
+        ],
+        model_config_extra="bigquery_extract_skip_missing_tables=true",
+    )
+
+    normalized_statements = [_normalize_sql(call["sql"]) for call in executed_sql]
+
+    assert run_result.success
+    assert any('"skip_missing_tables": true' in call["sql"] for call in executed_sql)
+    assert any("insert into" in sql and "'skipped'" in sql for sql in normalized_statements)
+    assert not any("system$wait" in sql for sql in normalized_statements)
+    assert not any("create iceberg table" in sql for sql in normalized_statements)
+    assert not any("copy into" in sql for sql in normalized_statements)
+    assert not any("create or replace view" in sql for sql in normalized_statements)
+
+
 def test_iceberg_sync_dbt_run_rejects_invalid_outer_retry_number(
     tmp_path: Path,
     monkeypatch,

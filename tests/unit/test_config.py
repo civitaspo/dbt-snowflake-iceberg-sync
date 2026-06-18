@@ -12,6 +12,7 @@ def test_parse_config_defaults(base_payload):
     assert config.source_type == "bigquery"
     assert config.bigquery.export_strategy == "extract"
     assert config.bigquery.export_compression == "ZSTD"
+    assert config.bigquery.skip_missing_tables is False
     assert config.bigquery.export_poll_interval_seconds == 30
     assert config.bigquery.export_poll_timeout_seconds == 3600
     assert config.target_relation.identifier == "ORDERS"
@@ -84,6 +85,7 @@ def test_parse_config_normalizes_only_snowflake_object_identifiers(payload_facto
         ({"retry__jitter_seconds": -1}, "jitter"),
         ({"cleanup__created_table_on_failure": "not-bool"}, "cleanup_created_table"),
         ({"run_log__fail_on_error": "not-bool"}, "run_log_fail_on_error"),
+        ({"bigquery__skip_missing_tables": "not-bool"}, "skip_missing_tables"),
         ({"partition_by": ["event_date"]}, "partition_by"),
         ({"cluster_by": ["event_name"]}, "cluster_by"),
     ],
@@ -157,6 +159,25 @@ def test_bigquery_export_compression_is_normalized(payload_factory, value, expec
     config = parse_config(payload_factory(bigquery__export_compression=value))
 
     assert config.bigquery.export_compression == expected
+
+
+@pytest.mark.parametrize("value", [True, "true", "1", "yes"])
+def test_bigquery_extract_skip_missing_tables_accepts_true_values(payload_factory, value):
+    config = parse_config(payload_factory(bigquery__skip_missing_tables=value))
+
+    assert config.bigquery.skip_missing_tables is True
+
+
+def test_bigquery_extract_skip_missing_tables_rejects_select_strategy(payload_factory):
+    payload = payload_factory(
+        bigquery__export_strategy="select",
+        bigquery__staging_dataset_id="staging",
+        bigquery__skip_missing_tables=True,
+        model__sql="select * from `project.dataset.orders`",
+    )
+
+    with pytest.raises(ConfigError, match="skip_missing_tables"):
+        parse_config(payload)
 
 
 def _strategy_config_matrix_cases():

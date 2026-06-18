@@ -190,6 +190,11 @@
       "bigquery_export_strategy must be 'extract' or 'select'"
     ) -%}
   {%- endif -%}
+  {%- if bq['export_strategy'] != 'extract' and bq['skip_missing_tables'] -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "bigquery_extract_skip_missing_tables is supported only with extract export strategy"
+    ) -%}
+  {%- endif -%}
   {%- if bq['export_compression'] not in ['GZIP', 'NONE', 'SNAPPY', 'ZSTD'] -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
       "bigquery_export_compression must be one of GZIP, NONE, SNAPPY, or ZSTD"

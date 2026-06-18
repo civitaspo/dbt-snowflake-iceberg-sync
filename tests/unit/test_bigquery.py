@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from procedure.config import ConfigError, parse_config
@@ -15,6 +17,26 @@ from procedure.sources.bigquery import (
     staging_hash,
     staging_table_id_for,
 )
+
+
+def _bigquery_not_found(resource: str) -> str:
+    message = f"Not found: {resource}"
+    return "BigQuery API error 404: " + json.dumps(
+        {
+            "error": {
+                "code": 404,
+                "message": message,
+                "errors": [
+                    {
+                        "message": message,
+                        "domain": "global",
+                        "reason": "notFound",
+                    }
+                ],
+                "status": "NOT_FOUND",
+            }
+        }
+    )
 
 
 class FakeBigQueryClient:
@@ -52,7 +74,10 @@ class FakeBigQueryClient:
     def get_table(self, project_id, dataset_id, table_id):
         key = (project_id, dataset_id, table_id)
         if key not in self.tables:
-            raise SourceError("not found", status_code=404)
+            raise SourceError(
+                _bigquery_not_found(f"Table {project_id}:{dataset_id}.{table_id}"),
+                status_code=404,
+            )
         table = dict(self.tables[key])
         table["tableReference"] = {
             "projectId": project_id,
@@ -458,6 +483,109 @@ def test_extract_non_partitioned_table_runs_direct_extract(base_payload):
     ]
 
 
+def test_extract_missing_table_raises_by_default(payload_factory):
+    config = parse_config(payload_factory(bigquery__table_id="missing"))
+
+    with pytest.raises(SourceError, match="Not found"):
+        BigQuerySourceAdapter(FakeBigQueryClient()).export(
+            config,
+            context=SourceExecutionContext(
+                effective_mode="full_refresh",
+                destination_uri="gcs://bucket/prefix/run",
+            ),
+        )
+
+
+def test_extract_missing_table_can_be_skipped(payload_factory):
+    client = FakeBigQueryClient()
+    config = parse_config(
+        payload_factory(
+            bigquery__table_id="missing",
+            bigquery__skip_missing_tables=True,
+        )
+    )
+
+    result = BigQuerySourceAdapter(client).export(
+        config,
+        context=SourceExecutionContext(
+            effective_mode="full_refresh",
+            destination_uri="gcs://bucket/prefix/run",
+        ),
+    )
+
+    assert result.skipped is True
+    assert result.skip_reason == "BigQuery extract source table was not found"
+    assert result.segments == []
+    assert client.extract_jobs == []
+
+
+def test_extract_skip_missing_tables_does_not_skip_unrelated_404(payload_factory):
+    class MissingJobClient(FakeBigQueryClient):
+        def insert_extract_job(
+            self,
+            project_id,
+            *,
+            location,
+            source_table,
+            destination_uris,
+            compression,
+        ):
+            raise SourceError(
+                _bigquery_not_found(f"Job {project_id}:{location}.extract-job"),
+                status_code=404,
+            )
+
+    config = parse_config(payload_factory(bigquery__skip_missing_tables=True))
+
+    with pytest.raises(SourceError, match="Not found: Job"):
+        BigQuerySourceAdapter(MissingJobClient()).export(
+            config,
+            context=SourceExecutionContext(
+                effective_mode="full_refresh",
+                destination_uri="gcs://bucket/prefix/run",
+            ),
+        )
+
+
+def test_extract_skip_missing_tables_keeps_existing_suffixes(payload_factory):
+    client = FakeBigQueryClient()
+    config = parse_config(
+        payload_factory(
+            bigquery__table_id="events_*",
+            bigquery__export_predicate_type="table_suffix",
+            bigquery__full_refresh_predicates=["20260101", "20260103"],
+            bigquery__skip_missing_tables=True,
+        )
+    )
+
+    result = BigQuerySourceAdapter(client).export(
+        config,
+        context=SourceExecutionContext(
+            effective_mode="full_refresh",
+            destination_uri="gcs://bucket/prefix/run",
+        ),
+    )
+
+    assert result.skipped is False
+    assert result.segments == [
+        {
+            "table_id": "events_20260101",
+            "destination_uri": "gcs://bucket/prefix/run/segment-00000-*.parquet",
+        }
+    ]
+    assert client.extract_jobs == [
+        (
+            {
+                "projectId": "project",
+                "datasetId": "dataset",
+                "tableId": "events_20260101",
+            },
+            ["gcs://bucket/prefix/run/segment-00000-*.parquet"],
+            "ZSTD",
+        )
+    ]
+
+
 def test_table_suffix_requires_wildcard(base_payload):
     config = parse_config(base_payload)
 
@@ -700,6 +828,36 @@ def test_async_extract_export_returns_success_after_jobs_finish(payload_factory)
     assert client.extract_jobs[0][2] == "GZIP"
 
 
+def test_async_extract_missing_table_can_be_skipped(payload_factory):
+    client = FakeBigQueryClient()
+    config = parse_config(
+        payload_factory(
+            bigquery__table_id="missing",
+            bigquery__skip_missing_tables=True,
+        )
+    )
+
+    result = BigQuerySourceAdapter(client).start_export(
+        config,
+        context=SourceExecutionContext(
+            effective_mode="full_refresh",
+            destination_uri="gcs://bucket/prefix/run",
+        ),
+    )
+
+    assert result == {
+        "status": "skipped",
+        "phase": "extract",
+        "schema_fields": [],
+        "segments": [],
+        "job_references": [],
+        "pending_jobs": [],
+        "staging_table_reference": None,
+        "skip_reason": "BigQuery extract source table was not found",
+    }
+    assert client.extract_jobs == []
+
+
 def test_async_extract_export_can_be_polled_until_complete(payload_factory):
     client = FakeBigQueryClient()
     config = parse_config(payload_factory())
@@ -891,6 +1049,30 @@ def test_extract_export_raises_when_no_tables_match(payload_factory):
                 destination_uri="gcs://bucket/prefix/run",
             ),
         )
+
+
+def test_extract_export_skips_when_no_tables_match(payload_factory):
+    client = FakeBigQueryClient()
+    client.tables = {}
+    config = parse_config(
+        payload_factory(
+            bigquery__table_id="events_*",
+            bigquery__export_predicate_type="none",
+            bigquery__skip_missing_tables=True,
+        )
+    )
+
+    result = BigQuerySourceAdapter(client).export(
+        config,
+        context=SourceExecutionContext(
+            effective_mode="full_refresh",
+            destination_uri="gcs://bucket/prefix/run",
+        ),
+    )
+
+    assert result.skipped is True
+    assert result.skip_reason == "no BigQuery tables matched the extract plan"
+    assert client.extract_jobs == []
 
 
 def test_extract_export_propagates_bigquery_extract_failure(base_payload):

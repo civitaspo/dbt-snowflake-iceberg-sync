@@ -21,6 +21,8 @@ class SourceExportResult:
     segments: list[dict[str, Any]]
     job_references: list[dict[str, Any]]
     staging_table_reference: str | None = None
+    skipped: bool = False
+    skip_reason: str | None = None
 
 
 class SourceAdapter(Protocol):

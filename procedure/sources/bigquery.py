@@ -86,7 +86,12 @@ class BigQuerySourceAdapter:
         context: SourceExecutionContext,
     ) -> SourceExportResult:
         predicates = config.predicates_for_mode(context.effective_mode)
-        predicate_type = resolve_predicate_type(config.bigquery, predicates, self.client)
+        try:
+            predicate_type = resolve_predicate_type(config.bigquery, predicates, self.client)
+        except SourceError as exc:
+            if _should_skip_missing_extract_table(config.bigquery, exc):
+                return _skipped_export_result()
+            raise
         if config.bigquery.export_strategy == "extract":
             return self._export_extract(
                 config.bigquery,
@@ -105,7 +110,12 @@ class BigQuerySourceAdapter:
         context: SourceExecutionContext,
     ) -> dict[str, Any]:
         predicates = config.predicates_for_mode(context.effective_mode)
-        predicate_type = resolve_predicate_type(config.bigquery, predicates, self.client)
+        try:
+            predicate_type = resolve_predicate_type(config.bigquery, predicates, self.client)
+        except SourceError as exc:
+            if _should_skip_missing_extract_table(config.bigquery, exc):
+                return _skipped_export_state()
+            raise
         if config.bigquery.export_strategy == "extract":
             return self._start_extract(
                 config.bigquery,
@@ -136,30 +146,46 @@ class BigQuerySourceAdapter:
     ) -> SourceExportResult:
         tables = concrete_extract_tables(bq, predicate_type, predicates, self.client)
         if not tables:
+            if bq.skip_missing_tables:
+                return _skipped_export_result("no BigQuery tables matched the extract plan")
             raise SourceError("no BigQuery tables matched the extract plan")
 
         job_refs: list[dict[str, Any]] = []
         segments: list[dict[str, Any]] = []
         schema_fields: list[dict[str, Any]] | None = None
-        for index, table_id in enumerate(tables):
+        for table_id in tables:
             schema_table_id = schema_table_id_for_extract(predicate_type, table_id)
-            table = self.client.get_table(bq.project_id, bq.dataset_id, schema_table_id)
+            try:
+                table = self.client.get_table(bq.project_id, bq.dataset_id, schema_table_id)
+            except SourceError as exc:
+                if _should_skip_missing_extract_table(bq, exc):
+                    continue
+                raise
             if schema_fields is None:
                 schema_fields = table.get("schema", {}).get("fields", [])
-            segment_uri = f"{destination_uri.rstrip('/')}/segment-{index:05d}-*.parquet"
-            job = self.client.run_extract_job(
-                bq.project_id,
-                location=bq.location,
-                source_table={
-                    "projectId": bq.project_id,
-                    "datasetId": bq.dataset_id,
-                    "tableId": table_id,
-                },
-                destination_uris=[segment_uri],
-                compression=bq.export_compression,
+            segment_uri = (
+                f"{destination_uri.rstrip('/')}/segment-{len(segments):05d}-*.parquet"
             )
+            try:
+                job = self.client.run_extract_job(
+                    bq.project_id,
+                    location=bq.location,
+                    source_table={
+                        "projectId": bq.project_id,
+                        "datasetId": bq.dataset_id,
+                        "tableId": table_id,
+                    },
+                    destination_uris=[segment_uri],
+                    compression=bq.export_compression,
+                )
+            except SourceError as exc:
+                if _should_skip_missing_extract_table(bq, exc):
+                    continue
+                raise
             job_refs.append(job.get("jobReference", job))
             segments.append({"table_id": table_id, "destination_uri": segment_uri})
+        if not segments and bq.skip_missing_tables:
+            return _skipped_export_result()
         return SourceExportResult(
             schema_fields=schema_fields or [],
             segments=segments,
@@ -242,32 +268,48 @@ class BigQuerySourceAdapter:
     ) -> dict[str, Any]:
         tables = concrete_extract_tables(bq, predicate_type, predicates, self.client)
         if not tables:
+            if bq.skip_missing_tables:
+                return _skipped_export_state("no BigQuery tables matched the extract plan")
             raise SourceError("no BigQuery tables matched the extract plan")
 
         job_refs: list[dict[str, Any]] = []
         segments: list[dict[str, Any]] = []
         schema_fields: list[dict[str, Any]] | None = None
-        for index, table_id in enumerate(tables):
+        for table_id in tables:
             schema_table_id = schema_table_id_for_extract(predicate_type, table_id)
-            table = self.client.get_table(bq.project_id, bq.dataset_id, schema_table_id)
+            try:
+                table = self.client.get_table(bq.project_id, bq.dataset_id, schema_table_id)
+            except SourceError as exc:
+                if _should_skip_missing_extract_table(bq, exc):
+                    continue
+                raise
             if schema_fields is None:
                 schema_fields = table.get("schema", {}).get("fields", [])
-            segment_uri = f"{destination_uri.rstrip('/')}/segment-{index:05d}-*.parquet"
-            job = self.client.insert_extract_job(
-                bq.project_id,
-                location=bq.location,
-                source_table={
-                    "projectId": bq.project_id,
-                    "datasetId": bq.dataset_id,
-                    "tableId": table_id,
-                },
-                destination_uris=[segment_uri],
-                compression=bq.export_compression,
+            segment_uri = (
+                f"{destination_uri.rstrip('/')}/segment-{len(segments):05d}-*.parquet"
             )
+            try:
+                job = self.client.insert_extract_job(
+                    bq.project_id,
+                    location=bq.location,
+                    source_table={
+                        "projectId": bq.project_id,
+                        "datasetId": bq.dataset_id,
+                        "tableId": table_id,
+                    },
+                    destination_uris=[segment_uri],
+                    compression=bq.export_compression,
+                )
+            except SourceError as exc:
+                if _should_skip_missing_extract_table(bq, exc):
+                    continue
+                raise
             job_ref = job.get("jobReference", job)
             job_refs.append(job_ref)
             segments.append({"table_id": table_id, "destination_uri": segment_uri})
 
+        if not segments and bq.skip_missing_tables:
+            return _skipped_export_state()
         state = {
             "status": "running",
             "phase": "extract",
@@ -758,6 +800,78 @@ def _get_table_or_none(
         if status_code == 404:
             return None
         raise
+
+
+def _should_skip_missing_extract_table(bq: BigQueryConfig, exc: SourceError) -> bool:
+    return (
+        bq.export_strategy == "extract"
+        and bq.skip_missing_tables
+        and _is_missing_table_not_found(exc)
+    )
+
+
+def _is_missing_table_not_found(exc: SourceError) -> bool:
+    status_code = exc.status_code or getattr(exc, "http_status", None)
+    if status_code != 404:
+        return False
+
+    payload = _bigquery_error_payload(exc)
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            messages = [error.get("message")]
+            errors = error.get("errors")
+            if isinstance(errors, list):
+                messages.extend(
+                    item.get("message") for item in errors if isinstance(item, dict)
+                )
+            return any(_is_missing_table_message(message) for message in messages)
+
+    return _is_missing_table_message(str(exc))
+
+
+def _bigquery_error_payload(exc: SourceError) -> dict[str, Any] | None:
+    message = str(exc)
+    json_start = message.find("{")
+    if json_start < 0:
+        return None
+    try:
+        parsed = json.loads(message[json_start:])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _is_missing_table_message(message: Any) -> bool:
+    normalized = " ".join(str(message or "").split()).lower()
+    return "not found: table " in normalized
+
+
+def _skipped_export_result(
+    reason: str = "BigQuery extract source table was not found",
+) -> SourceExportResult:
+    return SourceExportResult(
+        schema_fields=[],
+        segments=[],
+        job_references=[],
+        skipped=True,
+        skip_reason=reason,
+    )
+
+
+def _skipped_export_state(
+    reason: str = "BigQuery extract source table was not found",
+) -> dict[str, Any]:
+    return {
+        "status": "skipped",
+        "phase": "extract",
+        "schema_fields": [],
+        "segments": [],
+        "job_references": [],
+        "pending_jobs": [],
+        "staging_table_reference": None,
+        "skip_reason": reason,
+    }
 
 
 def _table_has_hash(table: dict[str, Any], expected_hash: str) -> bool:

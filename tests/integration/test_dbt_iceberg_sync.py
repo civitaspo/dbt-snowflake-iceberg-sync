@@ -79,6 +79,32 @@ def test_dbt_extract_smoke(tmp_path: Path):
         _cleanup(context, [model_name])
 
 
+def test_dbt_extract_skips_missing_table(tmp_path: Path):
+    context = _integration_context(tmp_path, "extract_skip_missing")
+    model_name = f"iceberg_sync_extract_skip_missing_{context.run_id}"
+    missing_table_id = f"missing_{context.run_id}"
+    export_prefix = _export_prefix(context, model_name)
+    models = {
+        model_name: _extract_model_sql(
+            context,
+            model_name=model_name,
+            table_id=missing_table_id,
+            export_predicate_type="none",
+            base_location=export_prefix,
+            export_prefix=export_prefix,
+            extra_config={"bigquery_extract_skip_missing_tables": True},
+        )
+    }
+
+    _write_project(context, models)
+    try:
+        _run_dbt(context, "deps")
+        _run_dbt(context, "run", "--select", model_name)
+        _assert_skipped_model(context, model_name)
+    finally:
+        _cleanup(context, [model_name])
+
+
 def test_dbt_extract_datetime(tmp_path: Path):
     context = _integration_context(tmp_path, "datetime")
     model_name = f"iceberg_sync_datetime_{context.run_id}"
@@ -1102,6 +1128,30 @@ def _assert_models(context: IntegrationContext, models: list[dict[str, Any]]) ->
     )
 
 
+def _assert_skipped_model(context: IntegrationContext, model_name: str) -> None:
+    _run_dbt(
+        context,
+        "run-operation",
+        "assert_iceberg_sync_skipped",
+        "--args",
+        json.dumps(
+            {
+                "model": {
+                    "database": context.snowflake_database,
+                    "schema": context.snowflake_schema,
+                    "identifier": model_name,
+                    "target_view": _quoted_relation(
+                        context.snowflake_database,
+                        context.snowflake_schema,
+                        model_name,
+                    ),
+                },
+                "run_log_relation": context.run_log_relation,
+            }
+        ),
+    )
+
+
 def _cleanup(context: IntegrationContext, model_names: list[str]) -> None:
     objects = [
         {
@@ -1284,7 +1334,46 @@ def _assertion_macros() -> str:
                 {{ exceptions.raise_compiler_error(message) }}
               {% endif %}
             {% endif %}
-          {% endfor %}
+            {% endfor %}
+        {% endmacro %}
+
+        {% macro assert_iceberg_sync_skipped(model, run_log_relation) %}
+          {% set view_relation = adapter.get_relation(
+            database=model['database'],
+            schema=model['schema'],
+            identifier=model['identifier']
+          ) %}
+          {% if view_relation is not none %}
+            {{ exceptions.raise_compiler_error(model['identifier'] ~ ' view was created') }}
+          {% endif %}
+
+          {% set internal_relation = adapter.get_relation(
+            database=model['database'],
+            schema=model['schema'],
+            identifier='__' ~ model['identifier']
+          ) %}
+          {% if internal_relation is not none %}
+            {% set message = model['identifier'] ~ ' internal table was created' %}
+            {{ exceptions.raise_compiler_error(message) }}
+          {% endif %}
+
+          {% set skipped_sql %}
+            select
+              count_if(status = 'skipped') as skipped_count,
+              count_if(status = 'success') as success_count
+            from {{ run_log_relation }}
+            where target_view = '{{ model['target_view'] | replace("'", "''") }}'
+          {% endset %}
+          {% set skipped_rows = run_query(skipped_sql) %}
+          {% set skipped_count = skipped_rows.rows[0][0] | int %}
+          {% set success_count = skipped_rows.rows[0][1] | int %}
+          {% if skipped_count != 1 or success_count != 0 %}
+            {% set message %}
+              {{ model['identifier'] }} expected one skipped run-log row and no success rows,
+              got skipped={{ skipped_count }}, success={{ success_count }}
+            {% endset %}
+            {{ exceptions.raise_compiler_error(message) }}
+          {% endif %}
         {% endmacro %}
 
         {% macro cleanup_iceberg_sync_integration(

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added `bigquery_extract_skip_missing_tables` for extract exports that should
+  succeed without loading data when planned BigQuery source tables are missing.
+
 ## 0.3.1 - 2026-06-18
 
 ### Fixed
