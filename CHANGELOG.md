@@ -9,6 +9,11 @@
 - Added `bigquery_extract_skip_missing_tables` for extract exports that should
   succeed without loading data when planned BigQuery source tables are missing.
 
+### Fixed
+
+- Restricted missing BigQuery extract skips to table-not-found API errors so
+  unrelated BigQuery 404 responses still fail.
+
 ## 0.3.1 - 2026-06-18
 
 ### Fixed
