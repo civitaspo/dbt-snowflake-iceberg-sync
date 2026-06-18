@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.2 - 2026-06-18
+
 ### Added
 
 - Added `bigquery_extract_skip_missing_tables` for extract exports that should
