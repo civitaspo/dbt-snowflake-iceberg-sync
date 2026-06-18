@@ -159,13 +159,17 @@ def test_schema_compatibility_normalizes_structured_type_field_names():
         [
             SnowflakeColumn(
                 "event_params",
-                "ARRAY(OBJECT(KEY VARCHAR(134217728), VALUE OBJECT(DOUBLE_VALUE DOUBLE)))",
+                "ARRAY(OBJECT(KEY VARCHAR(134217728), "
+                "VALUE OBJECT(STRING_VALUE VARCHAR(134217728), "
+                "INT_VALUE NUMBER(19,0), FLOAT_VALUE FLOAT, DOUBLE_VALUE FLOAT)))",
             )
         ],
         [
             SnowflakeColumn(
                 "event_params",
-                'ARRAY(OBJECT("key" VARCHAR, "value" OBJECT("double_value" DOUBLE)))',
+                'ARRAY(OBJECT("key" VARCHAR, '
+                '"value" OBJECT("string_value" VARCHAR, "int_value" BIGINT, '
+                '"float_value" DOUBLE, "double_value" DOUBLE)))',
             )
         ],
     )

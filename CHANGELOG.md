@@ -8,6 +8,8 @@
   dbt-side schema compatibility check so BigQuery `RECORD`/`STRUCT` columns,
   including Google Analytics `event_params`, do not fail false incompatible type
   change checks.
+- Kept Python-side structured type normalization from rewriting nested field
+  identifiers that contain `STRING` or `TEXT`.
 
 ## 0.3.0 - 2026-06-17
 
