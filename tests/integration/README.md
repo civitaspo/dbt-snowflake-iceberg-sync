@@ -26,6 +26,7 @@ The integration suite contains separate tests for:
 - native time-partitioned extract with `auto` and explicit partition decorators
 - native integer range-partitioned extract with `auto` and explicit partition decorators
 - sharded table extract with all-shard and suffix-filtered plans
+- skipped extract behavior when planned BigQuery tables are missing
 - query execution export with `auto`, `none`, and `where`
 - staging table reuse and forced rebuild behavior
 - incremental `delete+copy` over three dbt runs: create, incremental, repeat

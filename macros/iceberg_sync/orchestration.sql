@@ -136,6 +136,13 @@
   {%- for attempt in range(max_polls) -%}
     {%- if ns.result.get('status') == 'success' -%}
       {{ return(ns.result['export_result']) }}
+    {%- elif ns.result.get('status') == 'skipped' -%}
+      {%- set skipped_result = ns.result.get('export_result', {}) -%}
+      {%- do skipped_result.update({
+        'skipped': true,
+        'skip_reason': ns.result.get('skip_reason')
+      }) -%}
+      {{ return(skipped_result) }}
     {%- elif ns.result.get('status') != 'running' -%}
       {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
         ns.result.get('error_message', 'BigQuery export failed')
@@ -363,6 +370,24 @@ SELECT
     {%- call statement('iceberg_sync_write_run_log', auto_begin=False) -%}
       {{ dbt_snowflake_iceberg_sync.iceberg_sync_insert_run_log_sql(
         payload, run_id, effective_mode, predicates, export_result, retry, cleanup, 'success', none
+      ) }}
+    {%- endcall -%}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro iceberg_sync_write_skipped_log(payload, run_id, effective_mode, predicates, export_result, retry, cleanup) -%}
+  {%- if payload['deployment']['run_log_table'] is not none -%}
+    {%- call statement('iceberg_sync_write_skipped_run_log', auto_begin=False) -%}
+      {{ dbt_snowflake_iceberg_sync.iceberg_sync_insert_run_log_sql(
+        payload,
+        run_id,
+        effective_mode,
+        predicates,
+        export_result,
+        retry,
+        cleanup,
+        'skipped',
+        export_result.get('skip_reason')
       ) }}
     {%- endcall -%}
   {%- endif -%}

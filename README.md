@@ -289,6 +289,7 @@ These options apply when `source_type='bigquery'`.
 | `bigquery_export_predicate_type` | No | `auto` | Predicate planning mode. Supported values are `auto`, `none`, `partition_decorator`, `table_suffix`, and `where`; valid values depend on `bigquery_export_strategy`. |
 | `bigquery_export_full_refresh_predicates` | No | `[]` | Source predicates used only when the effective mode is full refresh. A string is treated as a single-item list. |
 | `bigquery_export_incremental_predicates` | No | `[]` | Source predicates used only when the effective mode is incremental. Must be paired with `incremental_predicate`. A string is treated as a single-item list. |
+| `bigquery_extract_skip_missing_tables` | No | `false` | For `extract` only. When `true`, missing planned BigQuery tables are skipped instead of failing the model. If every planned table is missing, dbt reports the model as successful without creating, loading, or replacing Snowflake objects. |
 | `bigquery_export_poll_interval_seconds` | No | `30` | Seconds dbt waits between BigQuery export job polls. Must be positive. |
 | `bigquery_export_poll_timeout_seconds` | No | `3600` | Maximum dbt-side wait window for BigQuery export completion. Must be positive and at least `bigquery_export_poll_interval_seconds`. |
 
@@ -314,6 +315,12 @@ testing calls for a different codec.
 
 `extract` does not use BigQuery staging table options. Its required fields are
 the common BigQuery source fields plus `iceberg_table_external_volume`.
+
+By default, missing BigQuery source tables fail the model. Set
+`bigquery_extract_skip_missing_tables=true` when a scheduled shard or partition
+may not exist yet and the model should leave existing Snowflake objects unchanged
+instead of failing. If some planned tables exist and others are missing, only the
+existing tables are exported.
 
 ### BigQuery Select/Staging Requirements
 

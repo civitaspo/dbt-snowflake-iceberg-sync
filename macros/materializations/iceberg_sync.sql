@@ -38,52 +38,67 @@
     {%- set export_result = dbt_snowflake_iceberg_sync.iceberg_sync_wait_for_export(
       payload, effective_mode, stage['gcs_run_uri']
     ) -%}
-    {%- set desired_columns = export_result['columns'] -%}
     {%- set cleanup = {
       'created_internal_table': false,
       'altered_internal_table_schema': false,
       'dropped_created_internal_table': false,
       'cleanup_error_message': none
     } -%}
+    {%- if export_result.get('skipped') -%}
+      {%- call statement('main', auto_begin=False) -%}
+        SELECT 1
+      {%- endcall -%}
+      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_write_skipped_log(
+        payload,
+        run_id,
+        effective_mode,
+        predicates,
+        export_result,
+        {},
+        cleanup
+      ) -%}
+    {%- else -%}
+      {%- set desired_columns = export_result['columns'] -%}
 
-    {%- call statement('iceberg_sync_create_internal_table', auto_begin=False) -%}
-      {{ dbt_snowflake_iceberg_sync.iceberg_sync_create_iceberg_table_sql(
-        payload, desired_columns
-      ) }}
-    {%- endcall -%}
+      {%- call statement('iceberg_sync_create_internal_table', auto_begin=False) -%}
+        {{ dbt_snowflake_iceberg_sync.iceberg_sync_create_iceberg_table_sql(
+          payload, desired_columns
+        ) }}
+      {%- endcall -%}
 
-    {%- set before_add_columns = dbt_snowflake_iceberg_sync.iceberg_sync_describe_table_columns(
-      internal_relation
-    ) -%}
-    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_validate_or_add_columns(
-      internal_relation, desired_columns
-    ) -%}
-    {%- if desired_columns | length > before_add_columns | length -%}
-      {%- do cleanup.update({'altered_internal_table_schema': true}) -%}
-    {%- endif -%}
+      {%- set before_add_columns = dbt_snowflake_iceberg_sync.iceberg_sync_describe_table_columns(
+        internal_relation
+      ) -%}
+      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_validate_or_add_columns(
+        internal_relation, desired_columns
+      ) -%}
+      {%- if desired_columns | length > before_add_columns | length -%}
+        {%- do cleanup.update({'altered_internal_table_schema': true}) -%}
+      {%- endif -%}
 
-    {%- set load_result = dbt_snowflake_iceberg_sync.iceberg_sync_run_load(
-      payload, effective_mode, stage['run_stage_location']
-    ) -%}
-    {%- if load_result.get('status') != 'success' -%}
-      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        load_result.get('error_message', 'Iceberg load failed')
+      {%- set load_result = dbt_snowflake_iceberg_sync.iceberg_sync_run_load(
+        payload, effective_mode, stage['run_stage_location']
+      ) -%}
+      {%- if load_result.get('status') != 'success' -%}
+        {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+          load_result.get('error_message', 'Iceberg load failed')
+        ) -%}
+      {%- endif -%}
+
+      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_create_view(
+        target_relation, internal_relation, export_result['view_columns']
+      ) -%}
+
+      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_write_success_log(
+        payload,
+        run_id,
+        effective_mode,
+        predicates,
+        export_result,
+        load_result.get('retry', {}),
+        cleanup
       ) -%}
     {%- endif -%}
-
-    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_create_view(
-      target_relation, internal_relation, export_result['view_columns']
-    ) -%}
-
-    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_write_success_log(
-      payload,
-      run_id,
-      effective_mode,
-      predicates,
-      export_result,
-      load_result.get('retry', {}),
-      cleanup
-    ) -%}
   {%- endif -%}
 
   {{ return({'relations': [target_relation]}) }}

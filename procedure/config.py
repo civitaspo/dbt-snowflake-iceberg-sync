@@ -73,6 +73,7 @@ class BigQueryConfig:
     staging_table_expiration_hours: int = 24
     staging_table_reuse: bool = True
     force_rebuild_staging_table: bool = False
+    skip_missing_tables: bool = False
     export_poll_interval_seconds: float = 30
     export_poll_timeout_seconds: float = 3600
 
@@ -189,6 +190,11 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
             bq_payload.get("force_rebuild_staging_table"),
             False,
         ),
+        skip_missing_tables=_coerce_bool_strict(
+            bq_payload.get("skip_missing_tables"),
+            False,
+            "bigquery_extract_skip_missing_tables",
+        ),
         export_poll_interval_seconds=_float(
             bq_payload.get("export_poll_interval_seconds", 30),
             "bigquery_export_poll_interval_seconds",
@@ -299,6 +305,10 @@ def validate_config(config: IcebergSyncConfig) -> None:
         raise ConfigError("incremental_strategy must be 'delete+copy'")
     if config.bigquery.export_strategy not in BIGQUERY_EXPORT_STRATEGIES:
         raise ConfigError("bigquery_export_strategy must be 'extract' or 'select'")
+    if config.bigquery.export_strategy != "extract" and config.bigquery.skip_missing_tables:
+        raise ConfigError(
+            "bigquery_extract_skip_missing_tables is supported only with extract export strategy"
+        )
     if config.bigquery.export_compression not in BIGQUERY_PARQUET_EXPORT_COMPRESSIONS:
         raise ConfigError(
             "bigquery_export_compression must be one of GZIP, NONE, SNAPPY, or ZSTD"

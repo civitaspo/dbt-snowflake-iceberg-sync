@@ -95,6 +95,34 @@ class IcebergSyncRunner:
                     destination_uri=stage.gcs_run_uri,
                 ),
             )
+            if export_result.skipped:
+                result = _result_payload(
+                    config=config,
+                    run_id=run_id,
+                    effective_mode=effective_mode,
+                    columns=[],
+                    export_result=export_result,
+                    snowflake_query_ids=self.snowflake.query_ids,
+                    retry=retry,
+                    cleanup=cleanup,
+                    status="skipped",
+                    error_message=export_result.skip_reason,
+                )
+                run_log_error = self._write_log(
+                    config,
+                    run_id,
+                    effective_mode,
+                    predicates,
+                    export_result,
+                    retry,
+                    cleanup,
+                    "skipped",
+                    export_result.skip_reason,
+                    started_at,
+                )
+                if run_log_error is not None:
+                    result["run_log_error"] = run_log_error
+                return result
             desired_columns = source.map_schema(export_result)
 
             created_internal_table, altered_schema = self._create_or_validate_table(
@@ -209,6 +237,22 @@ class IcebergSyncRunner:
         state: dict[str, Any],
     ) -> dict[str, Any]:
         if state.get("status") != "success":
+            if state.get("status") == "skipped":
+                skip_reason = state.get("skip_reason")
+                return {
+                    "status": "skipped",
+                    "skip_reason": skip_reason,
+                    "export_result": {
+                        "schema_fields": [],
+                        "segments": [],
+                        "job_references": [],
+                        "staging_table_reference": None,
+                        "columns": [],
+                        "view_columns": [],
+                        "skipped": True,
+                        "skip_reason": skip_reason,
+                    },
+                }
             return {
                 "status": "running",
                 "export_state": state,

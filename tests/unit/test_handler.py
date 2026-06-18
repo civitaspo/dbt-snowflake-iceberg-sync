@@ -118,9 +118,10 @@ class FakeSnowflake:
 class FakeSource:
     source_type = "bigquery"
 
-    def __init__(self, *, fail_export=False, columns=None):
+    def __init__(self, *, fail_export=False, skip_export=False, columns=None):
         self.calls = []
         self.fail_export = fail_export
+        self.skip_export = skip_export
         self.columns = columns or [SnowflakeColumn("OrderID", "BIGINT")]
 
     def export_location(self, config):
@@ -131,6 +132,14 @@ class FakeSource:
         self.calls.append((context.effective_mode, context.destination_uri))
         if self.fail_export:
             raise SourceError("export failed")
+        if self.skip_export:
+            return SourceExportResult(
+                schema_fields=[],
+                segments=[],
+                job_references=[],
+                skipped=True,
+                skip_reason="BigQuery extract source table was not found",
+            )
         return SourceExportResult(
             schema_fields=[{"name": "OrderID", "type": "INT64"}],
             segments=[{"destination_uri": context.destination_uri + "/segment-*.parquet"}],
@@ -230,6 +239,27 @@ def test_handler_writes_failure_log_when_source_export_fails(base_payload):
     assert ("begin",) not in snowflake.calls
     assert ("write_run_log", "failure") in snowflake.calls
     assert snowflake.run_logs[-1]["error_message"] == "SourceError: export failed"
+
+
+def test_handler_skips_when_source_export_is_skipped(base_payload):
+    snowflake = FakeSnowflake(table_exists=False, target_view_exists=False)
+    source = FakeSource(skip_export=True)
+
+    result = IcebergSyncRunner(
+        object(),
+        snowflake_client=snowflake,
+        source_adapters={"bigquery": source},
+    ).run(base_payload)
+
+    assert result["status"] == "skipped"
+    assert result["error_message"] == "BigQuery extract source table was not found"
+    assert ("create_iceberg_table", []) not in snowflake.calls
+    assert not any(
+        call[0] in {"begin", "copy", "commit", "create_or_replace_view"}
+        for call in snowflake.calls
+    )
+    assert ("write_run_log", "skipped") in snowflake.calls
+    assert snowflake.run_logs[-1]["status"] == "skipped"
 
 
 def test_handler_sanitizes_failure_log_error_message(base_payload):
