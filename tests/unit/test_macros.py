@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -168,6 +169,23 @@ def test_install_macro_uses_create_or_alter_for_run_log_table():
     assert "CREATE OR ALTER TABLE" in macro_source
     assert "CREATE TABLE IF NOT EXISTS" not in macro_source
     assert "ADD COLUMN IF NOT EXISTS" not in macro_source
+
+
+def test_type_normalization_accepts_snowflake_structured_type_canonicalization():
+    existing = (
+        "ARRAY(OBJECT(KEY VARCHAR(134217728), "
+        "VALUE OBJECT(STRING_VALUE VARCHAR(134217728), INT_VALUE NUMBER(19,0), "
+        "FLOAT_VALUE FLOAT, DOUBLE_VALUE FLOAT)))"
+    )
+    desired = (
+        'ARRAY(OBJECT("key" VARCHAR, '
+        '"value" OBJECT("string_value" VARCHAR, "int_value" BIGINT, '
+        '"float_value" DOUBLE, "double_value" DOUBLE)))'
+    )
+
+    assert _render_normalized_snowflake_type(existing) == _render_normalized_snowflake_type(
+        desired
+    )
 
 
 def test_deployment_config_honors_explicit_procedure_overrides():
@@ -348,6 +366,22 @@ def _render_procedure_fqn(
         }
     )
     return rendered.strip()
+
+
+def _render_normalized_snowflake_type(value: str) -> str:
+    macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/orchestration.sql"
+    template = Environment(extensions=["jinja2.ext.do"]).from_string(
+        macro_path.read_text(encoding="utf-8")
+        + "\n{{ iceberg_sync_normalized_snowflake_type(value) }}"
+    )
+
+    return template.render(
+        {
+            "modules": SimpleNamespace(re=re),
+            "return": lambda item: item,
+            "value": value,
+        }
+    ).strip()
 
 
 def _defaulted_var(vars_dict: dict[str, object], key: str, default: object) -> object:

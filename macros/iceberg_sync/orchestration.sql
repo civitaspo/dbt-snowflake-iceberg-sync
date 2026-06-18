@@ -214,14 +214,11 @@ COPY GRANTS
 
 {% macro iceberg_sync_normalized_snowflake_type(value) -%}
   {%- set result = value | string | upper | replace('"', '') -%}
-  {%- set result = result | replace('TEXT', 'VARCHAR') | replace('STRING', 'VARCHAR') -%}
-  {%- if result.startswith('VARCHAR(') -%}
-    {{ return('VARCHAR') }}
-  {%- elif result == 'NUMBER(19,0)' -%}
-    {{ return('BIGINT') }}
-  {%- elif result == 'FLOAT' -%}
-    {{ return('DOUBLE') }}
-  {%- endif -%}
+  {%- set result = modules.re.sub('\\b(VARCHAR|TEXT|STRING)\\(\\d+\\)', 'VARCHAR', result) -%}
+  {%- set result = modules.re.sub('\\bNUMBER\\(19,0\\)', 'BIGINT', result) -%}
+  {%- set result = modules.re.sub('\\bFLOAT\\b', 'DOUBLE', result) -%}
+  {%- set result = modules.re.sub('\\bTEXT\\b', 'VARCHAR', result) -%}
+  {%- set result = modules.re.sub('\\bSTRING\\b', 'VARCHAR', result) -%}
   {{ return(result) }}
 {%- endmacro %}
 

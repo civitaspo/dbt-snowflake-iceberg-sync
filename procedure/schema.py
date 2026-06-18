@@ -117,7 +117,8 @@ def _normalized_type(snowflake_type: str) -> str:
     result = re.sub(r"\b(VARCHAR|TEXT|STRING)\(\d+\)", "VARCHAR", result)
     result = re.sub(r"\bNUMBER\(19,0\)", "BIGINT", result)
     result = re.sub(r"\bFLOAT\b", "DOUBLE", result)
-    result = result.replace("TEXT", "VARCHAR").replace("STRING", "VARCHAR")
+    result = re.sub(r"\bTEXT\b", "VARCHAR", result)
+    result = re.sub(r"\bSTRING\b", "VARCHAR", result)
     result = result.replace('"', "")
     return result
 
