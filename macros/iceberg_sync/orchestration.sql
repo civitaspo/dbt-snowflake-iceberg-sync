@@ -256,7 +256,7 @@ COPY GRANTS
   {%- endfor -%}
   {%- for column in desired_columns[existing_columns | length:] -%}
     {%- call statement('iceberg_sync_add_column_' ~ loop.index, auto_begin=False) -%}
-      ALTER TABLE {{ internal_relation }} ADD COLUMN {{ column['ddl'] }}
+      ALTER ICEBERG TABLE {{ internal_relation }} ADD COLUMN {{ column['ddl'] }}
     {%- endcall -%}
   {%- endfor -%}
 {%- endmacro %}

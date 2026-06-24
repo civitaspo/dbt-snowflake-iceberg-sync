@@ -249,8 +249,8 @@ The materialization orchestrates Snowflake work from dbt. BigQuery REST API
 calls still run through the package-managed Snowflake procedure because they
 need the configured external access integration and secret, but dbt now controls
 the wait loop between BigQuery job polls and directly issues Snowflake
-`CREATE ICEBERG TABLE`, additive `ALTER TABLE`, `DELETE`, `COPY INTO`, target
-view creation, and run-log `INSERT` statements.
+`CREATE ICEBERG TABLE`, additive `ALTER ICEBERG TABLE`, `DELETE`, `COPY INTO`,
+target view creation, and run-log `INSERT` statements.
 
 ### Iceberg Table Options
 

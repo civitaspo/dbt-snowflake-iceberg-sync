@@ -3,6 +3,7 @@ from __future__ import annotations
 from procedure.config import parse_config
 from procedure.schema import SnowflakeColumn, ViewColumn
 from procedure.sql import (
+    alter_table_add_columns_sql,
     copy_into_sql,
     create_iceberg_table_sql,
     create_or_alter_run_log_table_sql,
@@ -48,6 +49,21 @@ def test_create_iceberg_table_renders_datetime_column(base_payload):
     )
 
     assert '"some_datetime" TIMESTAMP_NTZ(6)' in sql
+
+
+def test_add_columns_uses_alter_iceberg_table(base_payload):
+    config = parse_config(base_payload)
+
+    statements = alter_table_add_columns_sql(
+        config.internal_relation,
+        [SnowflakeColumn("CustomerName", "VARCHAR")],
+    )
+
+    assert statements == [
+        'ALTER ICEBERG TABLE "ANALYTICS"."PUBLIC"."__ORDERS" '
+        'ADD COLUMN "CustomerName" VARCHAR'
+    ]
+    assert not statements[0].startswith("ALTER TABLE ")
 
 
 def test_create_view_preserves_source_case_and_aliases_lower_snake(base_payload):

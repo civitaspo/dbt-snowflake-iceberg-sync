@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Used `ALTER ICEBERG TABLE` for additive internal Iceberg table schema changes.
+
 ## 0.3.2 - 2026-06-18
 
 ### Added

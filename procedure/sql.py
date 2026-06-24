@@ -47,7 +47,10 @@ def create_iceberg_table_sql(config: IcebergSyncConfig, columns: list[SnowflakeC
 def alter_table_add_columns_sql(
     relation: RelationConfig, columns: list[SnowflakeColumn]
 ) -> list[str]:
-    return [f"ALTER TABLE {relation_sql(relation)} ADD COLUMN {column.ddl}" for column in columns]
+    return [
+        f"ALTER ICEBERG TABLE {relation_sql(relation)} ADD COLUMN {column.ddl}"
+        for column in columns
+    ]
 
 
 def delete_sql(relation: RelationConfig, predicate: str | None) -> str:
