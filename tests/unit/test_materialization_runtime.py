@@ -97,6 +97,27 @@ def test_iceberg_sync_dbt_run_skips_when_export_is_skipped(
     assert not any("create or replace view" in sql for sql in normalized_statements)
 
 
+def test_iceberg_sync_dbt_run_adds_columns_with_alter_iceberg_table(
+    tmp_path: Path,
+    monkeypatch,
+):
+    run_result, executed_sql = _run_dbt_iceberg_sync_model(
+        tmp_path,
+        monkeypatch,
+        [_successful_export_result(include_customer=True)],
+    )
+
+    normalized_statements = [_normalize_sql(call["sql"]) for call in executed_sql]
+
+    assert run_result.success
+    assert any(
+        sql.startswith('alter iceberg table "test_database"."test_schema"."__model"')
+        and 'add column "customername" varchar' in sql
+        for sql in normalized_statements
+    )
+    assert not any(sql.startswith("alter table ") for sql in normalized_statements)
+
+
 def test_iceberg_sync_dbt_run_rejects_invalid_outer_retry_number(
     tmp_path: Path,
     monkeypatch,
@@ -285,7 +306,29 @@ def _describe_internal_table() -> agate.Table:
     )
 
 
-def _successful_export_result() -> dict[str, object]:
+def _successful_export_result(*, include_customer: bool = False) -> dict[str, object]:
+    columns: list[dict[str, object]] = [
+        {
+            "source_name": "OrderID",
+            "snowflake_type": "BIGINT",
+            "nullable": True,
+            "fields": [],
+            "ddl": '"OrderID" BIGINT',
+        }
+    ]
+    view_columns = [{"source_name": "OrderID", "alias": "order_id"}]
+    if include_customer:
+        columns.append(
+            {
+                "source_name": "CustomerName",
+                "snowflake_type": "VARCHAR",
+                "nullable": True,
+                "fields": [],
+                "ddl": '"CustomerName" VARCHAR',
+            }
+        )
+        view_columns.append({"source_name": "CustomerName", "alias": "customer_name"})
+
     return {
         "status": "success",
         "export_result": {
@@ -293,16 +336,8 @@ def _successful_export_result() -> dict[str, object]:
             "segments": [{"destination_uri": "gs://bucket/dbt/run/segment-*.parquet"}],
             "job_references": [{"projectId": "project", "location": "US", "jobId": "job"}],
             "staging_table_reference": None,
-            "columns": [
-                {
-                    "source_name": "OrderID",
-                    "snowflake_type": "BIGINT",
-                    "nullable": True,
-                    "fields": [],
-                    "ddl": '"OrderID" BIGINT',
-                }
-            ],
-            "view_columns": [{"source_name": "OrderID", "alias": "order_id"}],
+            "columns": columns,
+            "view_columns": view_columns,
         },
     }
 
