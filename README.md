@@ -39,7 +39,11 @@ BigQuery:
 - A Snowflake-managed Iceberg external volume.
 - A GCS-backed Snowflake stage used as the BigQuery export destination.
 - A network rule and external access integration for BigQuery API calls.
-- A Snowflake secret containing the GCP service account JSON.
+- A Snowflake secret for GCP auth:
+  - a generic secret containing the GCP service account JSON when
+    `gcp_auth_method=service_account_key` (default), or
+  - a workload identity federation secret when
+    `gcp_auth_method=workload_identity_federation`.
 - A database/schema where the package procedure can be installed.
 
 Example deployment vars:
@@ -80,7 +84,12 @@ Deployment vars:
 | `handler_import_name` | No | `iceberg_sync_procedure` | Import directory name mounted into the Snowflake Python runtime. |
 | `handler_name` | No | `<handler_import_name>.handler.main` | Python procedure entry point. |
 | `external_access_integrations` | No | `[]` | External access integrations granted to the procedure. |
-| `google_cloud_service_account_secret_alias` | No | `google_cloud_service_account_credentials_json` | Secret alias read by the Python handler. |
+| `gcp_auth_method` | No | `service_account_key` | GCP auth mode. Supported values are `service_account_key` and `workload_identity_federation`. |
+| `google_cloud_service_account_secret_fqdn` | Yes for `service_account_key` | None | Fully qualified Snowflake secret containing the GCP service account JSON. |
+| `google_cloud_service_account_secret_alias` | No | `google_cloud_service_account_credentials_json` | Secret alias read by the Python handler for `service_account_key`. |
+| `gcp_wif_secret_fqdn` | Yes for `workload_identity_federation` | None | Three-part name of the Snowflake workload identity federation secret used by `SYSTEM$ISSUE_WORKLOAD_IDENTITY_FEDERATION_TOKEN`. |
+| `gcp_wif_audience` | Yes for `workload_identity_federation` | None | GCP workload identity provider resource name, for example `//iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool_id>/providers/<provider_id>`. |
+| `gcp_service_account_impersonation` | No | None | Optional GCP service account email to impersonate after the STS token exchange. |
 | `run_log_table` | No | `<procedure_database>.<procedure_schema>.ICEBERG_SYNC_RUN_LOG` | Three-part relation used for procedure run logs. |
 
 ## Required GCP IAM Setup
@@ -96,6 +105,33 @@ The GCP service account stored in the Snowflake secret needs permissions to:
 
 Exact IAM bindings depend on your project layout. Keep the permissions scoped to
 the datasets and bucket prefixes used by the package.
+
+## Workload Identity Federation
+
+To use Snowflake outbound workload identity federation instead of a static
+service account key, set:
+
+```yaml
+vars:
+  iceberg_sync:
+    handler_local_path: /absolute/path/to/dbt_packages/dbt_snowflake_iceberg_sync/procedure
+    external_access_integrations: [BIGQUERY_API]
+    gcp_auth_method: workload_identity_federation
+    gcp_wif_secret_fqdn: ANALYTICS.SECRETS.GCP_WIF
+    gcp_wif_audience: //iam.googleapis.com/projects/000000000000/locations/global/workloadIdentityPools/example-pool/providers/example-provider
+    gcp_service_account_impersonation: sync@example-project.iam.gserviceaccount.com
+```
+
+In this mode the procedure issues a short-lived JWT with
+`SYSTEM$ISSUE_WORKLOAD_IDENTITY_FEDERATION_TOKEN`, exchanges it through
+`google-auth` identity-pool credentials, and optionally impersonates a service
+account. The installer does not bind a `SECRETS = (...)` clause for WIF auth.
+
+Per-target overrides can be passed as top-level dbt vars such as
+`iceberg_sync_gcp_auth_method`, `iceberg_sync_gcp_wif_secret_fqdn`, and
+`iceberg_sync_gcp_wif_audience`. This is useful when a shared project file keeps
+common package settings under `vars.iceberg_sync` but each target needs a
+different workload identity provider or secret.
 
 ## Procedure Installation
 
@@ -121,6 +157,9 @@ EXTERNAL_ACCESS_INTEGRATIONS = (...)
 SECRETS = ('<alias>' = <secret_fqdn>)
 EXECUTE AS CALLER
 ```
+
+When `gcp_auth_method='workload_identity_federation'`, the procedure omits the
+`SECRETS = (...)` clause and issues the Snowflake federation token at runtime.
 
 ## BigQuery Extract Model
 
@@ -524,6 +563,9 @@ DBT_SNOWFLAKE_ICEBERG_SYNC_PROCEDURE_SCHEMA
 DBT_SNOWFLAKE_ICEBERG_SYNC_SECRET_FQDN
 DBT_SNOWFLAKE_ICEBERG_SYNC_SECRET_ALIAS
 DBT_SNOWFLAKE_ICEBERG_SYNC_EXTERNAL_ACCESS_INTEGRATION
+DBT_SNOWFLAKE_ICEBERG_SYNC_WIF_SECRET_FQDN
+DBT_SNOWFLAKE_ICEBERG_SYNC_WIF_AUDIENCE
+DBT_SNOWFLAKE_ICEBERG_SYNC_WIF_SERVICE_ACCOUNT_IMPERSONATION
 DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_PROJECT_ID
 DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_LOCATION
 DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATASET_ID

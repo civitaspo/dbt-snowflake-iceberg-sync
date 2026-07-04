@@ -590,17 +590,13 @@ class BigQueryRestClient:
 
     def __init__(
         self,
-        google_cloud_service_account_info: dict[str, Any],
+        credentials: Any,
         requests_session: Any | None = None,
     ):
         import requests
         from google.auth.transport.requests import Request
-        from google.oauth2 import service_account
 
-        self.credentials = service_account.Credentials.from_service_account_info(
-            google_cloud_service_account_info,
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
+        self.credentials = _coerce_google_credentials(credentials)
         self.auth_request = Request()
         self.requests = requests_session or requests.Session()
 
@@ -768,6 +764,18 @@ class BigQueryRestClient:
                 status_code=response.status_code,
             )
         return response.json() if response.text else {}
+
+
+def _coerce_google_credentials(credentials: Any) -> Any:
+    if hasattr(credentials, "refresh") and hasattr(credentials, "valid"):
+        return credentials
+
+    from google.oauth2 import service_account
+
+    return service_account.Credentials.from_service_account_info(
+        credentials,
+        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+    )
 
 
 def _validate_predicate_type(

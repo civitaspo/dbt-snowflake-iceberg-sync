@@ -16,6 +16,7 @@ dependencies = []
 dev = [
   "dbt-core>=1.10,<1.11",
   "dbt-snowflake>=1.10,<1.11",
+  "google-auth>=2.29",
   "packaging>=24",
   "pytest>=8",
   "PyYAML>=6",
@@ -24,6 +25,7 @@ dev = [
 
 [project.optional-dependencies]
 dev = [
+  "google-auth>=2.29",
   "packaging>=24",
   "pytest>=8",
   "PyYAML>=6",
@@ -32,6 +34,7 @@ dev = [
 integration = [
   "dbt-core>=1.10,<1.11",
   "dbt-snowflake>=1.10,<1.11",
+  "google-auth>=2.29",
 ]
 
 [tool.setuptools]

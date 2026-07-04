@@ -15,6 +15,7 @@ BIGQUERY_PARQUET_EXPORT_COMPRESSIONS = {"GZIP", "NONE", "SNAPPY", "ZSTD"}
 PREDICATE_TYPES = {"auto", "none", "partition_decorator", "table_suffix", "where"}
 INCREMENTAL_STRATEGIES = {"delete+copy"}
 STORAGE_SERIALIZATION_POLICIES = {"COMPATIBLE", "OPTIMIZED"}
+GCP_AUTH_METHODS = {"service_account_key", "workload_identity_federation"}
 FORBIDDEN_MODEL_CONFIG_KEYS = {
     "credentials",
     "credential",
@@ -26,6 +27,10 @@ FORBIDDEN_MODEL_CONFIG_KEYS = {
     "google_cloud_service_account_secret_fqdn",
     "google_cloud_service_account_secret_alias",
     "google_application_credentials",
+    "gcp_auth_method",
+    "gcp_wif_secret_fqdn",
+    "gcp_wif_audience",
+    "gcp_service_account_impersonation",
 }
 
 
@@ -55,6 +60,10 @@ class DeploymentConfig:
     procedure_name: str | None = None
     run_log_table: RelationConfig | None = None
     google_cloud_service_account_secret_alias: str | None = None
+    gcp_auth_method: str = "service_account_key"
+    gcp_wif_secret_fqdn: str | None = None
+    gcp_wif_audience: str | None = None
+    gcp_service_account_impersonation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -168,6 +177,12 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         run_log_table=_optional_relation(deployment_payload.get("run_log_table"), "run_log_table"),
         google_cloud_service_account_secret_alias=deployment_payload.get(
             "google_cloud_service_account_secret_alias"
+        ),
+        gcp_auth_method=_defaulted(deployment_payload, "gcp_auth_method", "service_account_key"),
+        gcp_wif_secret_fqdn=_optional_secret_fqdn(deployment_payload.get("gcp_wif_secret_fqdn")),
+        gcp_wif_audience=_optional_string(deployment_payload.get("gcp_wif_audience")),
+        gcp_service_account_impersonation=_optional_string(
+            deployment_payload.get("gcp_service_account_impersonation")
         ),
     )
 
@@ -313,6 +328,22 @@ def validate_config(config: IcebergSyncConfig) -> None:
         raise ConfigError(
             "bigquery_export_compression must be one of GZIP, NONE, SNAPPY, or ZSTD"
         )
+    if config.deployment.gcp_auth_method not in GCP_AUTH_METHODS:
+        raise ConfigError(
+            "gcp_auth_method must be 'service_account_key' or "
+            "'workload_identity_federation'"
+        )
+    if config.deployment.gcp_auth_method == "workload_identity_federation":
+        missing_wif_fields = []
+        if not config.deployment.gcp_wif_secret_fqdn:
+            missing_wif_fields.append("gcp_wif_secret_fqdn")
+        if not config.deployment.gcp_wif_audience:
+            missing_wif_fields.append("gcp_wif_audience")
+        if missing_wif_fields:
+            raise ConfigError(
+                "gcp_auth_method='workload_identity_federation' requires "
+                + ", ".join(missing_wif_fields)
+            )
     if (
         config.iceberg_table.storage_serialization_policy
         not in STORAGE_SERIALIZATION_POLICIES
@@ -418,6 +449,21 @@ def _optional_object_identifier(value: Any) -> str | None:
     if value in (None, ""):
         return None
     return normalize_snowflake_object_identifier(str(value))
+
+
+def _optional_secret_fqdn(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    parts = [str(part).strip() for part in str(value).split(".")]
+    if len(parts) != 3 or any(part == "" for part in parts):
+        raise ConfigError("gcp_wif_secret_fqdn must be a three-part Snowflake object name")
+    return ".".join(normalize_snowflake_object_identifier(part) for part in parts)
+
+
+def _optional_string(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    return str(value)
 
 
 def _required(value: dict[str, Any], key: str, field_name: str) -> str:

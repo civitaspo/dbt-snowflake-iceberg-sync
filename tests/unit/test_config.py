@@ -10,6 +10,7 @@ def test_parse_config_defaults(base_payload):
     config = parse_config(base_payload)
 
     assert config.source_type == "bigquery"
+    assert config.deployment.gcp_auth_method == "service_account_key"
     assert config.bigquery.export_strategy == "extract"
     assert config.bigquery.export_compression == "ZSTD"
     assert config.bigquery.skip_missing_tables is False
@@ -86,6 +87,7 @@ def test_parse_config_normalizes_only_snowflake_object_identifiers(payload_facto
         ({"cleanup__created_table_on_failure": "not-bool"}, "cleanup_created_table"),
         ({"run_log__fail_on_error": "not-bool"}, "run_log_fail_on_error"),
         ({"bigquery__skip_missing_tables": "not-bool"}, "skip_missing_tables"),
+        ({"deployment__gcp_auth_method": "oidc"}, "gcp_auth_method"),
         ({"partition_by": ["event_date"]}, "partition_by"),
         ({"cluster_by": ["event_name"]}, "cluster_by"),
     ],
@@ -103,6 +105,24 @@ def test_rejects_secret_material_in_model_config(payload_factory):
             "google_cloud_service_account_secret_fqdn": "DB.SECRET.JSON",
         }
     )
+
+    with pytest.raises(ConfigError, match="credential material"):
+        parse_config(payload)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "gcp_auth_method",
+        "gcp_wif_secret_fqdn",
+        "gcp_wif_audience",
+        "gcp_service_account_impersonation",
+    ],
+)
+def test_rejects_workload_identity_federation_material_in_model_config(
+    payload_factory, key
+):
+    payload = payload_factory(model_config={key: "value"})
 
     with pytest.raises(ConfigError, match="credential material"):
         parse_config(payload)
@@ -178,6 +198,54 @@ def test_bigquery_extract_skip_missing_tables_rejects_select_strategy(payload_fa
 
     with pytest.raises(ConfigError, match="skip_missing_tables"):
         parse_config(payload)
+
+
+def test_workload_identity_federation_requires_secret_and_audience(payload_factory):
+    payload = payload_factory(deployment__gcp_auth_method="workload_identity_federation")
+
+    with pytest.raises(
+        ConfigError,
+        match="gcp_wif_secret_fqdn, gcp_wif_audience",
+    ):
+        parse_config(payload)
+
+
+def test_workload_identity_federation_secret_fqdn_must_be_three_part_name(payload_factory):
+    payload = payload_factory(
+        deployment__gcp_auth_method="workload_identity_federation",
+        deployment__gcp_wif_secret_fqdn="DB.SECRET",
+        deployment__gcp_wif_audience=(
+            "//iam.googleapis.com/projects/000000000000/locations/global/"
+            "workloadIdentityPools/example-pool/providers/example-provider"
+        ),
+    )
+
+    with pytest.raises(ConfigError, match="three-part Snowflake object name"):
+        parse_config(payload)
+
+
+def test_parse_config_accepts_workload_identity_federation(payload_factory):
+    payload = payload_factory(
+        deployment__gcp_auth_method="workload_identity_federation",
+        deployment__gcp_wif_secret_fqdn="db.auth.gcp_wif_secret",
+        deployment__gcp_wif_audience=(
+            "//iam.googleapis.com/projects/000000000000/locations/global/"
+            "workloadIdentityPools/example-pool/providers/example-provider"
+        ),
+        deployment__gcp_service_account_impersonation=(
+            "sync@example-project.iam.gserviceaccount.com"
+        ),
+    )
+
+    config = parse_config(payload)
+
+    assert config.deployment.gcp_auth_method == "workload_identity_federation"
+    assert config.deployment.gcp_wif_secret_fqdn == "DB.AUTH.GCP_WIF_SECRET"
+    assert config.deployment.gcp_wif_audience.startswith("//iam.googleapis.com/")
+    assert (
+        config.deployment.gcp_service_account_impersonation
+        == "sync@example-project.iam.gserviceaccount.com"
+    )
 
 
 def _strategy_config_matrix_cases():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -1029,6 +1030,16 @@ def test_rest_extract_job_sets_parquet_compression():
         "destinationFormat": "PARQUET",
         "compression": "ZSTD",
     }
+
+
+def test_rest_client_accepts_injected_google_credentials():
+    credentials = SimpleNamespace(valid=True, token="token", refresh=lambda request: None)
+    requests_session = object()
+
+    client = BigQueryRestClient(credentials, requests_session=requests_session)
+
+    assert client.credentials is credentials
+    assert client.requests is requests_session
 
 
 def test_extract_export_raises_when_no_tables_match(payload_factory):

@@ -282,7 +282,7 @@ class IcebergSyncRunner:
         adapter = self.source_adapters.get(config.source_type)
         if adapter is not None:
             return adapter
-        return create_source_adapter(config)
+        return create_source_adapter(config, session=self.session)
 
     def _create_or_validate_table(
         self,

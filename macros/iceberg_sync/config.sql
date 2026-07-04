@@ -14,6 +14,18 @@
   {{ return(vars_dict.get(key)) }}
 {%- endmacro %}
 
+{% macro iceberg_sync_deployment_var(vars_dict, key, default=none) -%}
+  {%- set override = var('iceberg_sync_' ~ key, none) -%}
+  {%- if override is not none and override != "" -%}
+    {{ return(override) }}
+  {%- endif -%}
+  {{ return(dbt_snowflake_iceberg_sync.iceberg_sync_defaulted_var(
+    vars_dict,
+    key,
+    default
+  )) }}
+{%- endmacro %}
+
 {% macro iceberg_sync_deployment_config() -%}
   {%- set vars_dict = var('iceberg_sync', {}) -%}
   {%- set procedure_database = dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
@@ -72,21 +84,73 @@
     vars_dict,
     'handler_local_path'
   ) -%}
-  {%- set google_cloud_service_account_secret_fqdn = (
-    dbt_snowflake_iceberg_sync.iceberg_sync_object_fqn(
-      dbt_snowflake_iceberg_sync.iceberg_sync_required_var(
-        vars_dict,
-        'google_cloud_service_account_secret_fqdn'
-      ),
-      'vars.iceberg_sync.google_cloud_service_account_secret_fqdn',
-      3,
-      3
-    )
+  {%- set gcp_auth_method = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_var(
+    vars_dict,
+    'gcp_auth_method',
+    'service_account_key'
   ) -%}
+  {%- if gcp_auth_method not in ['service_account_key', 'workload_identity_federation'] -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "vars.iceberg_sync.gcp_auth_method (or top-level var iceberg_sync_gcp_auth_method) must be "
+      ~ "'service_account_key' or 'workload_identity_federation'"
+    ) -%}
+  {%- endif -%}
+  {%- set google_cloud_service_account_secret_fqdn = none -%}
   {%- set google_cloud_service_account_secret_alias = vars_dict.get(
     'google_cloud_service_account_secret_alias',
     'google_cloud_service_account_credentials_json'
   ) -%}
+  {%- set gcp_wif_secret_fqdn = none -%}
+  {%- set gcp_wif_audience = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_var(
+    vars_dict,
+    'gcp_wif_audience',
+    none
+  ) -%}
+  {%- set gcp_service_account_impersonation = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_var(
+    vars_dict,
+    'gcp_service_account_impersonation',
+    none
+  ) -%}
+  {%- if gcp_auth_method == 'service_account_key' -%}
+    {%- set google_cloud_service_account_secret_fqdn = (
+      dbt_snowflake_iceberg_sync.iceberg_sync_object_fqn(
+        dbt_snowflake_iceberg_sync.iceberg_sync_required_var(
+          vars_dict,
+          'google_cloud_service_account_secret_fqdn'
+        ),
+        'vars.iceberg_sync.google_cloud_service_account_secret_fqdn',
+        3,
+        3
+      )
+    ) -%}
+  {%- else -%}
+    {%- set raw_gcp_wif_secret_fqdn = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_var(
+      vars_dict,
+      'gcp_wif_secret_fqdn',
+      none
+    ) -%}
+    {%- if raw_gcp_wif_secret_fqdn is none or raw_gcp_wif_secret_fqdn == "" -%}
+      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+        "vars.iceberg_sync.gcp_wif_secret_fqdn (or top-level var iceberg_sync_gcp_wif_secret_fqdn) is required when gcp_auth_method='workload_identity_federation'"
+      ) -%}
+    {%- endif -%}
+    {%- if gcp_wif_audience is none or gcp_wif_audience == "" -%}
+      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+        "vars.iceberg_sync.gcp_wif_audience (or top-level var iceberg_sync_gcp_wif_audience) is required when gcp_auth_method='workload_identity_federation'"
+      ) -%}
+    {%- endif -%}
+    {%- set gcp_wif_secret_relation = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_fqn(
+      raw_gcp_wif_secret_fqdn,
+      'gcp_wif_secret_fqdn'
+    ) -%}
+    {%- set gcp_wif_secret_fqdn = (
+      gcp_wif_secret_relation['database']
+      ~ '.'
+      ~ gcp_wif_secret_relation['schema']
+      ~ '.'
+      ~ gcp_wif_secret_relation['identifier']
+    ) -%}
+  {%- endif -%}
   {%- set external_access_integrations = [] -%}
   {%- for integration in dbt_snowflake_iceberg_sync.iceberg_sync_as_list(
     vars_dict.get('external_access_integrations', [])
@@ -119,7 +183,11 @@
     'external_access_integrations': external_access_integrations,
     'run_log_table': run_log_table,
     'google_cloud_service_account_secret_fqdn': google_cloud_service_account_secret_fqdn,
-    'google_cloud_service_account_secret_alias': google_cloud_service_account_secret_alias
+    'google_cloud_service_account_secret_alias': google_cloud_service_account_secret_alias,
+    'gcp_auth_method': gcp_auth_method,
+    'gcp_wif_secret_fqdn': gcp_wif_secret_fqdn,
+    'gcp_wif_audience': gcp_wif_audience,
+    'gcp_service_account_impersonation': gcp_service_account_impersonation
   }) }}
 {%- endmacro %}
 

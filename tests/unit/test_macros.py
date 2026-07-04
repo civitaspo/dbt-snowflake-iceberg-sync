@@ -264,6 +264,48 @@ def test_deployment_config_quotes_secret_fqdn():
     )
 
 
+def test_deployment_config_accepts_workload_identity_federation_vars():
+    vars_dict = _minimal_deployment_vars()
+    vars_dict.pop("google_cloud_service_account_secret_fqdn")
+    vars_dict["gcp_auth_method"] = "workload_identity_federation"
+    vars_dict["gcp_wif_secret_fqdn"] = "analytics.auth.gcp_wif_secret"
+    vars_dict["gcp_wif_audience"] = (
+        "//iam.googleapis.com/projects/000000000000/locations/global/"
+        "workloadIdentityPools/example-pool/providers/example-provider"
+    )
+    vars_dict["gcp_service_account_impersonation"] = (
+        "sync@example-project.iam.gserviceaccount.com"
+    )
+
+    config = _render_deployment_config(vars_dict)
+
+    assert config["gcp_auth_method"] == "workload_identity_federation"
+    assert config["google_cloud_service_account_secret_fqdn"] is None
+    assert config["gcp_wif_secret_fqdn"] == "ANALYTICS.AUTH.GCP_WIF_SECRET"
+    assert config["gcp_wif_audience"].startswith("//iam.googleapis.com/")
+    assert (
+        config["gcp_service_account_impersonation"]
+        == "sync@example-project.iam.gserviceaccount.com"
+    )
+
+
+def test_deployment_config_honors_top_level_workload_identity_federation_overrides():
+    vars_dict = _minimal_deployment_vars()
+    top_level_vars = {
+        "iceberg_sync_gcp_auth_method": "workload_identity_federation",
+        "iceberg_sync_gcp_wif_secret_fqdn": "analytics.auth.top_level_secret",
+        "iceberg_sync_gcp_wif_audience": (
+            "//iam.googleapis.com/projects/000000000000/locations/global/"
+            "workloadIdentityPools/example-pool/providers/example-provider"
+        ),
+    }
+
+    config = _render_deployment_config(vars_dict, top_level_vars=top_level_vars)
+
+    assert config["gcp_auth_method"] == "workload_identity_federation"
+    assert config["gcp_wif_secret_fqdn"] == "ANALYTICS.AUTH.TOP_LEVEL_SECRET"
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -316,19 +358,31 @@ def _render_deployment_config(
     *,
     target_database: str = "analytics",
     target_schema: str = "dbt_user",
+    top_level_vars: dict[str, object] | None = None,
 ) -> dict[str, object]:
     macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/config.sql"
     template = Environment(extensions=["jinja2.ext.do"]).from_string(
         macro_path.read_text(encoding="utf-8") + "\n{{ iceberg_sync_deployment_config() }}"
     )
 
+    top_level_vars = top_level_vars or {}
     rendered = template.render(
         {
-            "var": lambda name, default=None: vars_dict if name == "iceberg_sync" else default,
+            "var": lambda name, default=None: (
+                vars_dict
+                if name == "iceberg_sync"
+                else top_level_vars.get(name, default)
+            ),
             "target": SimpleNamespace(database=target_database, schema=target_schema),
             "dbt_snowflake_iceberg_sync": SimpleNamespace(
                 iceberg_sync_as_list=_as_list,
                 iceberg_sync_defaulted_var=_defaulted_var,
+                iceberg_sync_deployment_var=lambda current_vars, key, default=None: _deployment_var(
+                    top_level_vars,
+                    current_vars,
+                    key,
+                    default,
+                ),
                 iceberg_sync_normalize_object_identifier=_normalize_object_identifier,
                 iceberg_sync_object_fqn=_object_fqn,
                 iceberg_sync_quote_object_identifier=_quote_object_identifier,
@@ -389,6 +443,15 @@ def _defaulted_var(vars_dict: dict[str, object], key: str, default: object) -> o
     if value is None or value == "":
         return default
     return value
+
+
+def _deployment_var(
+    top_level_vars: dict[str, object],
+    vars_dict: dict[str, object],
+    key: str,
+    default: object,
+) -> object:
+    return top_level_vars.get(f"iceberg_sync_{key}", _defaulted_var(vars_dict, key, default))
 
 
 def _required_var(vars_dict: dict[str, object], key: str) -> object:
