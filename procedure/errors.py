@@ -1,25 +1,19 @@
-"""Package-specific exception types."""
-
-
 class IcebergSyncError(Exception):
-    """Base error for user-visible sync failures."""
+    """Base exception for procedure-visible sync failures."""
 
 
 class ConfigError(IcebergSyncError):
-    """Raised when dbt or procedure configuration is invalid."""
+    """Raised when the dbt-provided config is invalid."""
 
 
 class SourceError(IcebergSyncError):
-    """Raised when the external source cannot be planned or exported."""
-
-    def __init__(self, message: str, *, status_code: int | None = None):
-        super().__init__(message)
-        self.status_code = status_code
+    """Raised when source planning or export fails."""
 
 
 class SchemaError(IcebergSyncError):
-    """Raised when schema mapping or compatibility checks fail."""
+    """Raised when source and target schemas are incompatible."""
 
 
-class SnowflakeExecutionError(IcebergSyncError):
-    """Raised when Snowflake execution fails."""
+class SnowflakeSyncError(IcebergSyncError):
+    """Raised when Snowflake DDL or DML fails."""
+

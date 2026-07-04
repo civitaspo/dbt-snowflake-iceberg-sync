@@ -1,34 +1,18 @@
-from __future__ import annotations
+from procedure.config import IcebergSyncConfig
+from procedure.run_log import run_log_relation
 
-from procedure.config import parse_config
-from procedure.run_log import build_run_log_payload
-from procedure.utils import utcnow
+from .test_config import base_config
 
 
-def test_run_log_payload_contains_required_fields(base_payload):
-    config = parse_config(base_payload)
-    now = utcnow()
+def test_run_log_relation_uses_procedure_schema_when_enabled():
+    config = IcebergSyncConfig.from_dict(base_config())
 
-    payload = build_run_log_payload(
-        config=config,
-        run_id="run-1",
-        effective_mode="full_refresh",
-        predicates=(),
-        export_segments=[{"destination_uri": "gcs://bucket/run/*.parquet"}],
-        source_job_references=[{"jobId": "job-1"}],
-        staging_table_reference=None,
-        snowflake_query_ids=["query-1"],
-        retry={"max_attempts": 3, "attempts": 1, "retryable_errors": []},
-        cleanup={"created_internal_table": True},
-        status="success",
-        error_message=None,
-        started_at=now,
-        finished_at=now,
+    assert run_log_relation(config) == '"DB"."UTIL"."ICEBERG_SYNC_RUN_LOG"'
+
+
+def test_run_log_relation_can_be_disabled():
+    config = IcebergSyncConfig.from_dict(
+        base_config(deployment={"procedure_database": "DB", "procedure_schema": "UTIL", "run_log_enabled": False})
     )
 
-    assert payload["run_id"] == "run-1"
-    assert payload["target_view"] == '"ANALYTICS"."PUBLIC"."ORDERS"'
-    assert payload["internal_iceberg_table"] == '"ANALYTICS"."PUBLIC"."__ORDERS"'
-    assert payload["source_job_references"] == [{"jobId": "job-1"}]
-    assert payload["retry"]["attempts"] == 1
-    assert payload["cleanup"]["created_internal_table"] is True
+    assert run_log_relation(config) is None

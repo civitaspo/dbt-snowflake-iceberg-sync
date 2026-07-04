@@ -1,52 +1,28 @@
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "dbt-snowflake-iceberg-sync"
-version = "0.3.3"
-description = "dbt materialization for syncing external data into Snowflake-managed Iceberg tables."
-readme = "README.md"
-requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
-authors = [{ name = "dbt-snowflake-iceberg-sync contributors" }]
-dependencies = []
+name = "dbt-snowflake-iceberg-sync-tests"
+version = "0.1.0"
+description = "Test tooling for dbt-snowflake-iceberg-sync"
+requires-python = ">=3.10"
+dependencies = [
+    "dbt-core>=1.10,<2.0",
+    "dbt-duckdb>=1.10,<2.0",
+    "google-auth>=2.29",
+    "pytest>=8.0",
+    "requests>=2.0",
+]
 
 [dependency-groups]
-dev = [
-  "dbt-core>=1.10,<1.11",
-  "dbt-snowflake>=1.10,<1.11",
-  "packaging>=24",
-  "pytest>=8",
-  "PyYAML>=6",
-  "ruff>=0.5",
-]
-
-[project.optional-dependencies]
-dev = [
-  "packaging>=24",
-  "pytest>=8",
-  "PyYAML>=6",
-  "ruff>=0.5",
-]
+# Only needed for live integration tests that open a real Snowflake session.
+# Install with: uv sync --group integration
 integration = [
-  "dbt-core>=1.10,<1.11",
-  "dbt-snowflake>=1.10,<1.11",
+    "snowflake-snowpark-python>=1.20",
 ]
 
-[tool.setuptools]
-packages = ["procedure", "procedure.sources"]
+[tool.uv]
+package = false
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/unit", "tests/integration"]
 markers = [
-  "integration: tests requiring live Snowflake, BigQuery, and GCS resources",
+    "integration: tests that require live Snowflake, BigQuery, and GCS resources",
 ]
-addopts = "-ra"
-
-[tool.ruff]
-line-length = 100
-target-version = "py311"
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM"]

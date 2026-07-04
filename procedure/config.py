@@ -1,31 +1,34 @@
-"""Config parsing and validation for the Iceberg sync procedure."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from .errors import ConfigError
-from .utils import normalize_snowflake_object_identifier
+from .utils import as_bool, ensure_list
 
-SUPPORTED_SOURCE_TYPES = {"bigquery"}
-MATERIALIZATION_STRATEGIES = {"full_refresh", "incremental"}
-BIGQUERY_EXPORT_STRATEGIES = {"extract", "select"}
-BIGQUERY_PARQUET_EXPORT_COMPRESSIONS = {"GZIP", "NONE", "SNAPPY", "ZSTD"}
-PREDICATE_TYPES = {"auto", "none", "partition_decorator", "table_suffix", "where"}
-INCREMENTAL_STRATEGIES = {"delete+copy"}
-STORAGE_SERIALIZATION_POLICIES = {"COMPATIBLE", "OPTIMIZED"}
+SourceType = Literal["bigquery"]
+MaterializationStrategy = Literal["full_refresh", "incremental"]
+ExportStrategy = Literal["extract", "select"]
+PredicateType = Literal["auto", "none", "partition_decorator", "table_suffix", "where"]
+EffectiveMode = Literal["full_refresh", "incremental"]
+
+GCP_AUTH_METHODS = {"service_account_key", "workload_identity_federation"}
+
+
 FORBIDDEN_MODEL_CONFIG_KEYS = {
-    "credentials",
-    "credential",
-    "password",
-    "private_key",
-    "service_account",
-    "service_account_json",
-    "google_cloud_service_account_json",
-    "google_cloud_service_account_secret_fqdn",
-    "google_cloud_service_account_secret_alias",
+    "gcp_sa_secret_fqdn",
+    "gcp_sa_secret_alias",
+    "gcp_auth_method",
+    "gcp_wif_secret_fqdn",
+    "gcp_wif_audience",
+    "gcp_service_account_impersonation",
     "google_application_credentials",
+    "google_credentials",
+    "gcp_service_account_json",
+    "service_account_json",
+    "private_key",
+    "password",
+    "secret",
 }
 
 
@@ -34,18 +37,19 @@ class RelationConfig:
     database: str
     schema: str
     identifier: str
+    rendered: str | None = None
 
-    @property
-    def fqn(self) -> str:
-        return f"{self.database}.{self.schema}.{self.identifier}"
-
-
-@dataclass(frozen=True)
-class ModelConfig:
-    unique_id: str
-    name: str
-    sql: str
-    invocation_id: str | None = None
+    @classmethod
+    def from_dict(cls, value: dict[str, Any], name: str) -> "RelationConfig":
+        try:
+            return cls(
+                database=str(value["database"]),
+                schema=str(value["schema"]),
+                identifier=str(value["identifier"]),
+                rendered=value.get("rendered"),
+            )
+        except KeyError as exc:
+            raise ConfigError(f"{name} relation is missing {exc.args[0]}") from exc
 
 
 @dataclass(frozen=True)
@@ -53,439 +57,240 @@ class DeploymentConfig:
     procedure_database: str | None = None
     procedure_schema: str | None = None
     procedure_name: str | None = None
-    run_log_table: RelationConfig | None = None
-    google_cloud_service_account_secret_alias: str | None = None
+    run_log_table: str = "ICEBERG_SYNC_RUN_LOG"
+    run_log_enabled: bool = True
+    gcp_auth_method: str = "service_account_key"
+    gcp_sa_secret_alias: str = "gcp_sa_credentials_json"
+    gcp_wif_secret_fqdn: str | None = None
+    gcp_wif_audience: str | None = None
+    gcp_service_account_impersonation: str | None = None
 
+    @classmethod
+    def from_dict(cls, value: dict[str, Any] | None) -> "DeploymentConfig":
+        value = value or {}
+        config = cls(
+            procedure_database=value.get("procedure_database"),
+            procedure_schema=value.get("procedure_schema"),
+            procedure_name=value.get("procedure_name"),
+            run_log_table=value.get("run_log_table", "ICEBERG_SYNC_RUN_LOG"),
+            run_log_enabled=as_bool(value.get("run_log_enabled"), True),
+            gcp_auth_method=value.get("gcp_auth_method") or "service_account_key",
+            gcp_sa_secret_alias=value.get("gcp_sa_secret_alias", "gcp_sa_credentials_json"),
+            gcp_wif_secret_fqdn=value.get("gcp_wif_secret_fqdn"),
+            gcp_wif_audience=value.get("gcp_wif_audience"),
+            gcp_service_account_impersonation=value.get("gcp_service_account_impersonation"),
+        )
+        config.validate()
+        return config
 
-@dataclass(frozen=True)
-class BigQueryConfig:
-    export_strategy: str
-    project_id: str
-    dataset_id: str
-    table_id: str
-    location: str
-    export_location: str
-    export_compression: str = "ZSTD"
-    export_predicate_type: str = "auto"
-    full_refresh_predicates: tuple[str, ...] = field(default_factory=tuple)
-    incremental_predicates: tuple[str, ...] = field(default_factory=tuple)
-    staging_dataset_id: str | None = None
-    staging_table_expiration_hours: int = 24
-    staging_table_reuse: bool = True
-    force_rebuild_staging_table: bool = False
-    skip_missing_tables: bool = False
-    export_poll_interval_seconds: float = 30
-    export_poll_timeout_seconds: float = 3600
-
-
-@dataclass(frozen=True)
-class IcebergTableConfig:
-    external_volume: str
-    base_location: str | None = None
-    target_file_size: str = "AUTO"
-    storage_serialization_policy: str = "COMPATIBLE"
-    data_retention_time_in_days: int = 7
-    max_data_extension_time_in_days: int | None = None
-    change_tracking: bool = True
-    copy_grants: bool = False
-    error_logging: bool = False
-    iceberg_version: int = 3
-    enable_iceberg_merge_on_read: bool = True
-    enable_data_compaction: bool = True
-
-
-@dataclass(frozen=True)
-class RetryPolicyConfig:
-    max_attempts: int = 3
-    initial_delay_seconds: float = 5
-    max_delay_seconds: float = 60
-    backoff_multiplier: float = 2.0
-    jitter_seconds: float = 3
-
-
-@dataclass(frozen=True)
-class CleanupConfig:
-    created_table_on_failure: bool = True
-
-
-@dataclass(frozen=True)
-class RunLogConfig:
-    fail_on_error: bool = False
+    def validate(self) -> None:
+        if self.gcp_auth_method not in GCP_AUTH_METHODS:
+            raise ConfigError(
+                "gcp_auth_method must be 'service_account_key' or 'workload_identity_federation'."
+            )
+        wif_keys = {
+            "gcp_wif_secret_fqdn": self.gcp_wif_secret_fqdn,
+            "gcp_wif_audience": self.gcp_wif_audience,
+            "gcp_service_account_impersonation": self.gcp_service_account_impersonation,
+        }
+        if self.gcp_auth_method == "workload_identity_federation":
+            required = ("gcp_wif_secret_fqdn", "gcp_wif_audience")
+            missing = [key for key in required if wif_keys[key] in {None, ""}]
+            if missing:
+                raise ConfigError(
+                    "gcp_auth_method='workload_identity_federation' requires: "
+                    + ", ".join(missing)
+                )
+        else:
+            unexpected = [key for key, val in wif_keys.items() if val not in {None, ""}]
+            if unexpected:
+                raise ConfigError(
+                    ", ".join(sorted(unexpected))
+                    + " are only valid with gcp_auth_method='workload_identity_federation'."
+                )
 
 
 @dataclass(frozen=True)
 class IcebergSyncConfig:
-    source_type: str
-    materialization_strategy: str
-    incremental_strategy: str
-    incremental_predicate: str | None
-    target_relation: RelationConfig
-    internal_relation: RelationConfig
-    model: ModelConfig
-    deployment: DeploymentConfig
-    bigquery: BigQueryConfig
-    iceberg_table: IcebergTableConfig
-    retry: RetryPolicyConfig = field(default_factory=RetryPolicyConfig)
-    cleanup: CleanupConfig = field(default_factory=CleanupConfig)
-    run_log: RunLogConfig = field(default_factory=RunLogConfig)
-    partition_by: tuple[str, ...] = field(default_factory=tuple)
-    cluster_by: tuple[str, ...] = field(default_factory=tuple)
+    source_type: SourceType = "bigquery"
+    materialization_strategy: MaterializationStrategy = "incremental"
+    bigquery_export_strategy: ExportStrategy = "extract"
+    google_cloud_project_id: str | None = None
+    bigquery_dataset_id: str | None = None
+    bigquery_table_id: str | None = None
+    bigquery_location: str | None = None
+    bigquery_export_location: str | None = None
+    bigquery_export_predicate_type: PredicateType = "auto"
+    bigquery_export_full_refresh_predicates: list[str] = field(default_factory=list)
+    bigquery_export_incremental_predicates: list[str] = field(default_factory=list)
+    bigquery_staging_dataset_id: str | None = None
+    bigquery_staging_table_expiration_hours: int = 24
+    bigquery_staging_table_reuse: bool = True
+    force_rebuild_staging_table: bool = False
+    incremental_strategy: str = "delete+copy"
+    incremental_predicate: str | None = None
+    iceberg_table_external_volume: str | None = None
+    iceberg_table_base_location: str | None = None
+    iceberg_table_target_file_size: str = "AUTO"
+    iceberg_table_storage_serialization_policy: str = "COMPATIBLE"
+    iceberg_table_data_retention_time_in_days: int = 7
+    iceberg_table_max_data_extension_time_in_days: int | None = None
+    iceberg_table_change_tracking: bool = False
+    iceberg_table_copy_grants: bool = False
+    iceberg_table_error_logging: bool = True
+    iceberg_table_iceberg_version: int = 3
+    iceberg_table_enable_iceberg_merge_on_read: bool = True
+    iceberg_table_enable_data_compaction: bool = True
+    partition_by: list[str] = field(default_factory=list)
+    cluster_by: list[str] = field(default_factory=list)
+    target_relation: RelationConfig | None = None
+    internal_relation: RelationConfig | None = None
+    model_sql: str = ""
+    model_unique_id: str | None = None
+    invocation_id: str | None = None
     dbt_full_refresh: bool = False
+    deployment: DeploymentConfig = field(default_factory=DeploymentConfig)
 
-    def predicates_for_mode(self, effective_mode: str) -> tuple[str, ...]:
-        if effective_mode == "full_refresh":
-            return self.bigquery.full_refresh_predicates
-        return self.bigquery.incremental_predicates
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "IcebergSyncConfig":
+        forbidden = [key for key in FORBIDDEN_MODEL_CONFIG_KEYS if value.get(key) is not None]
+        if forbidden:
+            joined = ", ".join(sorted(forbidden))
+            raise ConfigError(
+                "Credential material and Snowflake secret bindings must not be present "
+                f"in model config: {joined}"
+            )
 
-
-def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
-    payload = dict(payload or {})
-    _reject_forbidden_model_config(payload.get("model_config", {}))
-
-    target = _relation(payload.get("target_relation"), "target_relation")
-    internal_payload = payload.get("internal_relation") or {
-        "database": target.database,
-        "schema": target.schema,
-        "identifier": f"__{target.identifier}",
-    }
-    internal = _relation(internal_payload, "internal_relation")
-
-    model_payload = payload.get("model", {})
-    model = ModelConfig(
-        unique_id=_required(model_payload, "unique_id", "model.unique_id"),
-        name=_required(model_payload, "name", "model.name"),
-        sql=str(model_payload.get("sql") or ""),
-        invocation_id=model_payload.get("invocation_id"),
-    )
-
-    deployment_payload = payload.get("deployment", {})
-    deployment = DeploymentConfig(
-        procedure_database=_optional_object_identifier(
-            deployment_payload.get("procedure_database")
-        ),
-        procedure_schema=_optional_object_identifier(deployment_payload.get("procedure_schema")),
-        procedure_name=_optional_object_identifier(deployment_payload.get("procedure_name")),
-        run_log_table=_optional_relation(deployment_payload.get("run_log_table"), "run_log_table"),
-        google_cloud_service_account_secret_alias=deployment_payload.get(
-            "google_cloud_service_account_secret_alias"
-        ),
-    )
-
-    bq_payload = payload.get("bigquery", {})
-    bigquery = BigQueryConfig(
-        export_strategy=_defaulted(bq_payload, "export_strategy", "extract"),
-        project_id=_required(bq_payload, "project_id", "bigquery.project_id"),
-        dataset_id=_required(bq_payload, "dataset_id", "bigquery.dataset_id"),
-        table_id=_required(bq_payload, "table_id", "bigquery.table_id"),
-        location=_required(bq_payload, "location", "bigquery.location"),
-        export_location=_required(bq_payload, "export_location", "bigquery.export_location"),
-        export_compression=str(_defaulted(bq_payload, "export_compression", "ZSTD")).upper(),
-        export_predicate_type=_defaulted(bq_payload, "export_predicate_type", "auto"),
-        full_refresh_predicates=tuple(bq_payload.get("full_refresh_predicates") or ()),
-        incremental_predicates=tuple(bq_payload.get("incremental_predicates") or ()),
-        staging_dataset_id=bq_payload.get("staging_dataset_id"),
-        staging_table_expiration_hours=int(bq_payload.get("staging_table_expiration_hours", 24)),
-        staging_table_reuse=_coerce_bool(bq_payload.get("staging_table_reuse"), True),
-        force_rebuild_staging_table=_coerce_bool(
-            bq_payload.get("force_rebuild_staging_table"),
-            False,
-        ),
-        skip_missing_tables=_coerce_bool_strict(
-            bq_payload.get("skip_missing_tables"),
-            False,
-            "bigquery_extract_skip_missing_tables",
-        ),
-        export_poll_interval_seconds=_float(
-            bq_payload.get("export_poll_interval_seconds", 30),
-            "bigquery_export_poll_interval_seconds",
-        ),
-        export_poll_timeout_seconds=_float(
-            bq_payload.get("export_poll_timeout_seconds", 3600),
-            "bigquery_export_poll_timeout_seconds",
-        ),
-    )
-
-    iceberg_payload = payload.get("iceberg_table", {})
-    iceberg_table = IcebergTableConfig(
-        external_volume=_required(
-            iceberg_payload, "external_volume", "iceberg_table.external_volume"
-        ),
-        base_location=iceberg_payload.get("base_location"),
-        target_file_size=_defaulted(iceberg_payload, "target_file_size", "AUTO"),
-        storage_serialization_policy=_defaulted(
-            iceberg_payload, "storage_serialization_policy", "COMPATIBLE"
-        ),
-        data_retention_time_in_days=int(iceberg_payload.get("data_retention_time_in_days", 7)),
-        max_data_extension_time_in_days=_optional_int(
-            iceberg_payload.get("max_data_extension_time_in_days")
-        ),
-        change_tracking=_coerce_bool(iceberg_payload.get("change_tracking"), True),
-        copy_grants=_coerce_bool(iceberg_payload.get("copy_grants"), False),
-        error_logging=_coerce_bool(iceberg_payload.get("error_logging"), False),
-        iceberg_version=int(iceberg_payload.get("iceberg_version", 3)),
-        enable_iceberg_merge_on_read=_coerce_bool(
-            iceberg_payload.get("enable_iceberg_merge_on_read"),
-            True,
-        ),
-        enable_data_compaction=_coerce_bool(
-            iceberg_payload.get("enable_data_compaction"),
-            True,
-        ),
-    )
-
-    retry_payload = payload.get("retry", {})
-    retry = RetryPolicyConfig(
-        max_attempts=_int(
-            retry_payload.get("max_attempts", 3), "iceberg_sync_retry_max_attempts"
-        ),
-        initial_delay_seconds=_float(
-            retry_payload.get("initial_delay_seconds", 5),
-            "iceberg_sync_retry_initial_delay_seconds",
-        ),
-        max_delay_seconds=_float(
-            retry_payload.get("max_delay_seconds", 60),
-            "iceberg_sync_retry_max_delay_seconds",
-        ),
-        backoff_multiplier=_float(
-            retry_payload.get("backoff_multiplier", 2.0),
-            "iceberg_sync_retry_backoff_multiplier",
-        ),
-        jitter_seconds=_float(
-            retry_payload.get("jitter_seconds", 3),
-            "iceberg_sync_retry_jitter_seconds",
-        ),
-    )
-
-    cleanup_payload = payload.get("cleanup", {})
-    cleanup = CleanupConfig(
-        created_table_on_failure=_coerce_bool_strict(
-            cleanup_payload.get("created_table_on_failure"),
-            True,
-            "iceberg_sync_cleanup_created_table_on_failure",
+        config = cls(
+            source_type=value.get("source_type", "bigquery"),
+            materialization_strategy=value.get("materialization_strategy", "incremental"),
+            bigquery_export_strategy=value.get("bigquery_export_strategy", "extract"),
+            google_cloud_project_id=value.get("google_cloud_project_id"),
+            bigquery_dataset_id=value.get("bigquery_dataset_id"),
+            bigquery_table_id=value.get("bigquery_table_id"),
+            bigquery_location=value.get("bigquery_location"),
+            bigquery_export_location=value.get("bigquery_export_location"),
+            bigquery_export_predicate_type=value.get("bigquery_export_predicate_type", "auto"),
+            bigquery_export_full_refresh_predicates=[
+                str(item) for item in ensure_list(value.get("bigquery_export_full_refresh_predicates"))
+            ],
+            bigquery_export_incremental_predicates=[
+                str(item) for item in ensure_list(value.get("bigquery_export_incremental_predicates"))
+            ],
+            bigquery_staging_dataset_id=value.get("bigquery_staging_dataset_id"),
+            bigquery_staging_table_expiration_hours=int(
+                value.get("bigquery_staging_table_expiration_hours", 24)
+            ),
+            bigquery_staging_table_reuse=as_bool(value.get("bigquery_staging_table_reuse"), True),
+            force_rebuild_staging_table=as_bool(value.get("force_rebuild_staging_table"), False),
+            incremental_strategy=value.get("incremental_strategy", "delete+copy"),
+            incremental_predicate=value.get("incremental_predicate"),
+            iceberg_table_external_volume=value.get("iceberg_table_external_volume"),
+            iceberg_table_base_location=value.get("iceberg_table_base_location"),
+            iceberg_table_target_file_size=value.get("iceberg_table_target_file_size", "AUTO"),
+            iceberg_table_storage_serialization_policy=value.get(
+                "iceberg_table_storage_serialization_policy", "COMPATIBLE"
+            ),
+            iceberg_table_data_retention_time_in_days=int(
+                value.get("iceberg_table_data_retention_time_in_days", 7)
+            ),
+            iceberg_table_max_data_extension_time_in_days=value.get(
+                "iceberg_table_max_data_extension_time_in_days"
+            ),
+            iceberg_table_change_tracking=as_bool(value.get("iceberg_table_change_tracking"), False),
+            iceberg_table_copy_grants=as_bool(value.get("iceberg_table_copy_grants"), False),
+            iceberg_table_error_logging=as_bool(value.get("iceberg_table_error_logging"), True),
+            iceberg_table_iceberg_version=int(value.get("iceberg_table_iceberg_version", 3)),
+            iceberg_table_enable_iceberg_merge_on_read=as_bool(
+                value.get("iceberg_table_enable_iceberg_merge_on_read"), True
+            ),
+            iceberg_table_enable_data_compaction=as_bool(
+                value.get("iceberg_table_enable_data_compaction"), True
+            ),
+            partition_by=[str(item) for item in ensure_list(value.get("partition_by"))],
+            cluster_by=[str(item) for item in ensure_list(value.get("cluster_by"))],
+            target_relation=RelationConfig.from_dict(value["target_relation"], "target"),
+            internal_relation=RelationConfig.from_dict(value["internal_relation"], "internal"),
+            model_sql=value.get("model_sql") or "",
+            model_unique_id=value.get("model_unique_id"),
+            invocation_id=value.get("invocation_id"),
+            dbt_full_refresh=as_bool(value.get("dbt_full_refresh"), False),
+            deployment=DeploymentConfig.from_dict(value.get("deployment")),
         )
-    )
+        config.validate()
+        return config
 
-    run_log_payload = payload.get("run_log", {})
-    run_log = RunLogConfig(
-        fail_on_error=_coerce_bool_strict(
-            run_log_payload.get("fail_on_error"),
-            False,
-            "iceberg_sync_run_log_fail_on_error",
-        )
-    )
-
-    config = IcebergSyncConfig(
-        source_type=_defaulted(payload, "source_type", "bigquery"),
-        materialization_strategy=_defaulted(payload, "materialization_strategy", "incremental"),
-        incremental_strategy=_defaulted(payload, "incremental_strategy", "delete+copy"),
-        incremental_predicate=payload.get("incremental_predicate"),
-        target_relation=target,
-        internal_relation=internal,
-        model=model,
-        deployment=deployment,
-        bigquery=bigquery,
-        iceberg_table=iceberg_table,
-        retry=retry,
-        cleanup=cleanup,
-        run_log=run_log,
-        partition_by=tuple(payload.get("partition_by") or ()),
-        cluster_by=tuple(payload.get("cluster_by") or ()),
-        dbt_full_refresh=_coerce_bool(payload.get("dbt_full_refresh"), False),
-    )
-    validate_config(config)
-    return config
-
-
-def validate_config(config: IcebergSyncConfig) -> None:
-    if config.source_type not in SUPPORTED_SOURCE_TYPES:
-        raise ConfigError("source_type must be 'bigquery'")
-    if config.materialization_strategy not in MATERIALIZATION_STRATEGIES:
-        raise ConfigError("materialization_strategy must be 'full_refresh' or 'incremental'")
-    if config.incremental_strategy not in INCREMENTAL_STRATEGIES:
-        raise ConfigError("incremental_strategy must be 'delete+copy'")
-    if config.bigquery.export_strategy not in BIGQUERY_EXPORT_STRATEGIES:
-        raise ConfigError("bigquery_export_strategy must be 'extract' or 'select'")
-    if config.bigquery.export_strategy != "extract" and config.bigquery.skip_missing_tables:
-        raise ConfigError(
-            "bigquery_extract_skip_missing_tables is supported only with extract export strategy"
-        )
-    if config.bigquery.export_compression not in BIGQUERY_PARQUET_EXPORT_COMPRESSIONS:
-        raise ConfigError(
-            "bigquery_export_compression must be one of GZIP, NONE, SNAPPY, or ZSTD"
-        )
-    if (
-        config.iceberg_table.storage_serialization_policy
-        not in STORAGE_SERIALIZATION_POLICIES
-    ):
-        raise ConfigError(
-            "iceberg_table_storage_serialization_policy must be COMPATIBLE or OPTIMIZED"
-        )
-    if config.iceberg_table.iceberg_version not in {2, 3}:
-        raise ConfigError("iceberg_table_iceberg_version must be 2 or 3")
-    if config.iceberg_table.iceberg_version == 3 and not config.iceberg_table.change_tracking:
-        raise ConfigError("iceberg_table_change_tracking must be true for Iceberg V3 tables")
-    if config.iceberg_table.error_logging:
-        raise ConfigError("iceberg_table_error_logging is not supported for Iceberg COPY INTO")
-    if config.retry.max_attempts < 1:
-        raise ConfigError("iceberg_sync_retry_max_attempts must be at least 1")
-    if config.retry.initial_delay_seconds < 0:
-        raise ConfigError("iceberg_sync_retry_initial_delay_seconds must be non-negative")
-    if config.retry.max_delay_seconds < 0:
-        raise ConfigError("iceberg_sync_retry_max_delay_seconds must be non-negative")
-    if config.retry.backoff_multiplier < 1.0:
-        raise ConfigError("iceberg_sync_retry_backoff_multiplier must be at least 1.0")
-    if config.retry.jitter_seconds < 0:
-        raise ConfigError("iceberg_sync_retry_jitter_seconds must be non-negative")
-    if config.bigquery.export_predicate_type not in PREDICATE_TYPES:
-        raise ConfigError("bigquery_export_predicate_type is invalid")
-    if config.bigquery.export_poll_interval_seconds <= 0:
-        raise ConfigError("bigquery_export_poll_interval_seconds must be positive")
-    if config.bigquery.export_poll_timeout_seconds <= 0:
-        raise ConfigError("bigquery_export_poll_timeout_seconds must be positive")
-    if (
-        config.bigquery.export_poll_interval_seconds
-        > config.bigquery.export_poll_timeout_seconds
-    ):
-        raise ConfigError(
-            "bigquery_export_poll_interval_seconds must not exceed "
-            "bigquery_export_poll_timeout_seconds"
-        )
-    if config.partition_by:
-        raise ConfigError("partition_by is not supported by iceberg_sync in the first scope")
-    if config.cluster_by:
-        raise ConfigError("cluster_by is not supported by iceberg_sync in the first scope")
-    if config.bigquery.export_strategy == "select" and not config.bigquery.staging_dataset_id:
-        raise ConfigError("bigquery_staging_dataset_id is required for select export strategy")
-    if config.bigquery.export_strategy == "select" and not config.model.sql.strip():
-        raise ConfigError("model SQL is required for bigquery_export_strategy='select'")
-    if (
-        config.bigquery.export_strategy == "select"
-        and config.bigquery.export_predicate_type
-        not in {
+    def validate(self) -> None:
+        if self.source_type != "bigquery":
+            raise ConfigError("source_type='bigquery' is the only supported source type.")
+        if self.materialization_strategy not in {"full_refresh", "incremental"}:
+            raise ConfigError("materialization_strategy must be 'full_refresh' or 'incremental'.")
+        if self.bigquery_export_strategy not in {"extract", "select"}:
+            raise ConfigError("bigquery_export_strategy must be 'extract' or 'select'.")
+        if self.bigquery_export_predicate_type not in {
+            "auto",
+            "none",
+            "partition_decorator",
+            "table_suffix",
+            "where",
+        }:
+            raise ConfigError("Unsupported bigquery_export_predicate_type.")
+        if self.bigquery_export_strategy == "extract" and self.bigquery_export_predicate_type == "where":
+            raise ConfigError("bigquery_export_strategy='extract' does not support where predicates.")
+        if self.bigquery_export_strategy == "select" and self.bigquery_export_predicate_type not in {
             "auto",
             "none",
             "where",
+        }:
+            raise ConfigError("bigquery_export_strategy='select' supports only none, where, or auto.")
+        if self.incremental_strategy != "delete+copy":
+            raise ConfigError("Only incremental_strategy='delete+copy' is supported.")
+        if self.partition_by:
+            raise ConfigError("partition_by is not supported in the first scope.")
+        if self.cluster_by:
+            raise ConfigError("cluster_by is not supported in the first scope.")
+
+        required = {
+            "google_cloud_project_id": self.google_cloud_project_id,
+            "bigquery_dataset_id": self.bigquery_dataset_id,
+            "bigquery_table_id": self.bigquery_table_id,
+            "bigquery_location": self.bigquery_location,
+            "bigquery_export_location": self.bigquery_export_location,
+            "iceberg_table_external_volume": self.iceberg_table_external_volume,
         }
-    ):
-        raise ConfigError("select export strategy allows only auto, none, or where predicates")
-    if (
-        config.bigquery.export_strategy == "extract"
-        and config.bigquery.export_predicate_type == "where"
-    ):
-        raise ConfigError("extract export strategy does not support where predicates")
-    if config.bigquery.export_strategy == "extract" and config.model.sql.strip():
-        # The model SQL is harmless, but it often means the author intended select mode.
-        # Keep this as a validation error to avoid silently ignoring model logic.
-        raise ConfigError("model SQL is only supported with bigquery_export_strategy='select'")
-    has_incremental_bq_predicates = bool(config.bigquery.incremental_predicates)
-    has_incremental_snowflake_predicate = bool(config.incremental_predicate)
-    if has_incremental_bq_predicates != has_incremental_snowflake_predicate:
-        raise ConfigError(
-            "incremental BigQuery predicates and incremental_predicate must be both present "
-            "or both absent"
-        )
-    if not config.bigquery.export_location.startswith("@"):
-        raise ConfigError("bigquery_export_location must be a named Snowflake stage location")
-    if config.bigquery.export_location.startswith(("@~", "@%")):
-        raise ConfigError(
-            "bigquery_export_location must be a named Snowflake stage, not a user or table stage"
-        )
+        missing = [key for key, val in required.items() if val in {None, ""}]
+        if missing:
+            raise ConfigError("Missing required model config: " + ", ".join(missing))
 
+        if self.bigquery_export_strategy == "select":
+            if not self.bigquery_staging_dataset_id:
+                raise ConfigError(
+                    "bigquery_staging_dataset_id is required when bigquery_export_strategy='select'."
+                )
+            if not self.model_sql.strip():
+                raise ConfigError("Model SQL is required when bigquery_export_strategy='select'.")
 
-def _relation(value: Any, field_name: str) -> RelationConfig:
-    if not isinstance(value, dict):
-        raise ConfigError(f"{field_name} must be an object")
-    return RelationConfig(
-        database=normalize_snowflake_object_identifier(
-            _required(value, "database", f"{field_name}.database")
-        ),
-        schema=normalize_snowflake_object_identifier(
-            _required(value, "schema", f"{field_name}.schema")
-        ),
-        identifier=normalize_snowflake_object_identifier(
-            _required(value, "identifier", f"{field_name}.identifier")
-        ),
-    )
+    def effective_mode(self, internal_table_exists: bool) -> EffectiveMode:
+        if self.dbt_full_refresh:
+            return "full_refresh"
+        if self.materialization_strategy == "full_refresh":
+            return "full_refresh"
+        if not internal_table_exists:
+            return "full_refresh"
+        return "incremental"
 
+    def predicates_for_mode(self, mode: EffectiveMode) -> list[str]:
+        if mode == "full_refresh":
+            return self.bigquery_export_full_refresh_predicates
+        return self.bigquery_export_incremental_predicates
 
-def _optional_relation(value: Any, field_name: str) -> RelationConfig | None:
-    if value in (None, ""):
-        return None
-    return _relation(value, field_name)
-
-
-def _optional_object_identifier(value: Any) -> str | None:
-    if value in (None, ""):
-        return None
-    return normalize_snowflake_object_identifier(str(value))
-
-
-def _required(value: dict[str, Any], key: str, field_name: str) -> str:
-    result = value.get(key)
-    if result is None or result == "":
-        raise ConfigError(f"{field_name} is required")
-    return str(result)
-
-
-def _defaulted(value: dict[str, Any], key: str, default: str) -> str:
-    result = value.get(key, default)
-    return str(result if result is not None else default)
-
-
-def _optional_int(value: Any) -> int | None:
-    if value in (None, ""):
-        return None
-    return int(value)
-
-
-def _int(value: Any, field_name: str) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError) as exc:
-        raise ConfigError(f"{field_name} must be an integer") from exc
-
-
-def _float(value: Any, field_name: str) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError) as exc:
-        raise ConfigError(f"{field_name} must be a number") from exc
-
-
-def _coerce_bool(value: Any, default: bool) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "1", "yes"}:
-            return True
-        if normalized in {"false", "0", "no"}:
-            return False
-    return bool(value)
-
-
-def _coerce_bool_strict(value: Any, default: bool, field_name: str) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "1", "yes"}:
-            return True
-        if normalized in {"false", "0", "no"}:
-            return False
-    raise ConfigError(f"{field_name} must be a boolean")
-
-
-def _reject_forbidden_model_config(model_config: Any) -> None:
-    if not isinstance(model_config, dict):
-        return
-    lowered = {str(key).lower() for key in model_config}
-    forbidden = sorted(lowered & FORBIDDEN_MODEL_CONFIG_KEYS)
-    if forbidden:
-        raise ConfigError(
-            "credential material must not be configured on dbt models: " + ", ".join(forbidden)
-        )
+    def validate_incremental_pairing(self, mode: EffectiveMode) -> None:
+        if mode != "incremental":
+            return
+        has_bigquery_predicates = bool(self.bigquery_export_incremental_predicates)
+        has_snowflake_predicate = bool(self.incremental_predicate)
+        if has_bigquery_predicates != has_snowflake_predicate:
+            raise ConfigError(
+                "Incremental mode requires BigQuery predicates and incremental_predicate "
+                "to be both present or both absent."
+            )

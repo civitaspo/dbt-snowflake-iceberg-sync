@@ -7,90 +7,44 @@ on:
       - main
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  DBT_FUSION_VERSION: "2.0.0-preview.186"
-  DBT_FUSION_TARGET: "x86_64-unknown-linux-gnu"
-
 jobs:
-  tests:
-    name: Tests (Python ${{ matrix.python-version }})
+  unit-tests:
+    name: Unit tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    timeout-minutes: 20
 
     strategy:
       fail-fast: false
       matrix:
         python-version:
-          - "3.11"
+          - "3.10"
           - "3.13"
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Set up mise
-        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
         with:
-          version: "2026.5.15"
-          install_args: "--locked"
-          cache: true
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: uv sync --frozen
-
-      - name: Run Python lint
-        run: uv run ruff check procedure tests
 
       - name: Run unit tests
         run: uv run pytest tests/unit
-
-      - name: Parse dbt package
-        run: uv run dbt parse --profiles-dir tests/ci_profiles --no-version-check
-
-  fusion-parse:
-    name: dbt Fusion parse
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    timeout-minutes: 10
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          persist-credentials: false
-
-      - name: Install dbt Fusion
-        env:
-          DBT_FUSION_ARCHIVE: ${{ runner.temp }}/dbt-fusion.tar.gz
-          DBT_FUSION_BIN_DIR: ${{ runner.temp }}/dbt-fusion/bin
-          DBT_FUSION_EXTRACT_DIR: ${{ runner.temp }}/dbt-fusion/extract
-        run: |
-          mkdir -p "$DBT_FUSION_BIN_DIR" "$DBT_FUSION_EXTRACT_DIR"
-          curl --fail --location --retry 3 --retry-all-errors --connect-timeout 10 --max-time 300 \
-            --output "$DBT_FUSION_ARCHIVE" \
-            "https://public.cdn.getdbt.com/fs/cli/fs-v${DBT_FUSION_VERSION}-${DBT_FUSION_TARGET}.tar.gz"
-          tar -xzf "$DBT_FUSION_ARCHIVE" -C "$DBT_FUSION_EXTRACT_DIR"
-          install -m 755 "$DBT_FUSION_EXTRACT_DIR/dbt" "$DBT_FUSION_BIN_DIR/dbtf"
-          echo "$DBT_FUSION_BIN_DIR" >> "$GITHUB_PATH"
-
-      - name: Show dbt Fusion version
-        run: dbtf --version
-
-      - name: Parse dbt package with dbt Fusion
-        run: dbtf parse --profiles-dir tests/ci_profiles --no-version-check

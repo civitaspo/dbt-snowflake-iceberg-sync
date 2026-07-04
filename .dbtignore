@@ -1,6 +1,1 @@
-.github/
-docs/
-mise.lock
-mise.toml
-tests/
-uv.lock
+tests/dbt_compile/

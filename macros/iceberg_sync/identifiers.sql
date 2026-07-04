@@ -1,75 +1,53 @@
-{% macro iceberg_sync_normalize_object_identifier(value) -%}
-  {{ return((value | string | trim | replace('"', '') | upper)) }}
-{%- endmacro %}
+{% macro iceberg_sync_quote_identifier(identifier) %}
+  {{ return('"' ~ (identifier | string | replace('"', '""')) ~ '"') }}
+{% endmacro %}
 
-{% macro iceberg_sync_quote_object_identifier(value) -%}
-  {%- set trimmed = value | string | trim -%}
-  {%- if trimmed | length >= 2 and trimmed[0] == '"' and trimmed[-1] == '"' -%}
-    {%- set identifier = trimmed[1:-1] | replace('""', '"') -%}
-  {%- else -%}
-    {%- set identifier = trimmed -%}
-  {%- endif -%}
-  {{ return('"' ~ (identifier | upper | replace('"', '""')) ~ '"') }}
-{%- endmacro %}
+{% macro iceberg_sync_unstage(stage_name) %}
+  {% set clean = stage_name | string %}
+  {% if clean.startswith('@') %}
+    {% set clean = clean[1:] %}
+  {% endif %}
+  {{ return(clean) }}
+{% endmacro %}
 
-{% macro iceberg_sync_object_fqn(value, field_name, min_parts=1, max_parts=3) -%}
-  {%- set parts = (value | string).split('.') -%}
-  {%- if parts | length < min_parts or parts | length > max_parts -%}
-    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      field_name ~ " must have between " ~ min_parts ~ " and " ~ max_parts ~ " parts"
-    ) -%}
-  {%- endif -%}
-  {%- set quoted_parts = [] -%}
-  {%- for part in parts -%}
-    {%- set trimmed = part | string | trim -%}
-    {%- if trimmed == "" -%}
-      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        field_name ~ " contains an empty identifier"
-      ) -%}
-    {%- endif -%}
-    {%- do quoted_parts.append(
-      dbt_snowflake_iceberg_sync.iceberg_sync_quote_object_identifier(part)
-    ) -%}
-  {%- endfor -%}
-  {{ return(quoted_parts | join('.')) }}
-{%- endmacro %}
+{% macro iceberg_sync_stage_reference(stage_name) %}
+  {{ return('@' ~ dbt_snowflake_iceberg_sync.iceberg_sync_unstage(stage_name)) }}
+{% endmacro %}
 
-{% macro iceberg_sync_internal_identifier(target_relation) -%}
-  {{ return(dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
-    "__" ~ target_relation.identifier
-  )) }}
-{%- endmacro %}
+{% macro iceberg_sync_required_var(config, key) %}
+  {% set value = config.get(key) %}
+  {% if value is none or value == '' %}
+    {{ exceptions.raise_compiler_error("Missing required vars.iceberg_sync." ~ key) }}
+  {% endif %}
+  {{ return(value) }}
+{% endmacro %}
 
-{% macro iceberg_sync_relation_payload(relation) -%}
-  {{ return({
-    'database': dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
-      relation.database
-    ),
-    'schema': dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
-      relation.schema
-    ),
-    'identifier': dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
-      relation.identifier
-    )
-  }) }}
-{%- endmacro %}
+{#
+  Resolve a deployment value that may be overridden by a dedicated top-level
+  dbt var named 'iceberg_sync_<key>'. dbt renders jinja only in top-level
+  string vars, never inside the nested vars.iceberg_sync map, so per-target
+  values (for example a per-environment WIF audience) must come from a
+  top-level var. Precedence: top-level var if set and non-empty, else the
+  nested vars.iceberg_sync entry, else the default.
+#}
+{% macro iceberg_sync_deployment_var(deployment, key, default=none) %}
+  {% set top_level = var('iceberg_sync_' ~ key, none) %}
+  {% if top_level is not none and top_level != '' %}
+    {{ return(top_level) }}
+  {% endif %}
+  {% set nested = deployment.get(key) %}
+  {% if nested is not none and nested != '' %}
+    {{ return(nested) }}
+  {% endif %}
+  {{ return(default) }}
+{% endmacro %}
 
-{% macro iceberg_sync_relation_from_fqn(value, field_name) -%}
-  {%- set parts = (value | string).split('.') -%}
-  {%- if parts | length != 3 -%}
-    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      field_name ~ " must be a three-part relation name"
-    ) -%}
-  {%- endif -%}
-  {{ return({
-    'database': dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
-      parts[0]
-    ),
-    'schema': dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
-      parts[1]
-    ),
-    'identifier': dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
-      parts[2]
-    )
-  }) }}
-{%- endmacro %}
+{% macro iceberg_sync_required_deployment_var(deployment, key) %}
+  {% set value = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_var(deployment, key) %}
+  {% if value is none or value == '' %}
+    {{ exceptions.raise_compiler_error(
+      "Missing required vars.iceberg_sync." ~ key ~ " (or top-level var iceberg_sync_" ~ key ~ ")."
+    ) }}
+  {% endif %}
+  {{ return(value) }}
+{% endmacro %}

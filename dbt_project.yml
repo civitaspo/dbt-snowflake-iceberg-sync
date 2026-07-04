@@ -1,14 +1,13 @@
 name: dbt_snowflake_iceberg_sync
-version: 0.3.3
+version: 0.1.0
 config-version: 2
+require-dbt-version: [">=1.10.0", "<2.0.0"]
 
-profile: dbt_snowflake_iceberg_sync
+dispatch:
+  - macro_namespace: dbt_snowflake_iceberg_sync
+    search_order:
+      - dbt_snowflake_iceberg_sync
 
-require-dbt-version: ">=1.10.0,<3.0.0"
-
-macro-paths:
-  - macros
-
-clean-targets:
-  - target
-  - dbt_packages
+models:
+  dbt_snowflake_iceberg_sync:
+    +enabled: false

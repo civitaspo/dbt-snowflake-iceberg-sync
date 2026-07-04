@@ -1,595 +1,313 @@
 # dbt-snowflake-iceberg-sync
 
-`dbt-snowflake-iceberg-sync` is a dbt package that syncs data exported from an
-external source into a Snowflake-managed Iceberg table and exposes the dbt model
-as a Snowflake view.
+`dbt-snowflake-iceberg-sync` is a dbt package for syncing source data exported from BigQuery into Snowflake-managed Iceberg tables.
 
-The first supported source type is BigQuery. The dbt materialization is
-Snowflake-only and is named `iceberg_sync`.
+The package exposes a Snowflake-only materialization named `iceberg_sync`. The dbt model relation is a Snowflake view, while the physical storage table is an internal Snowflake-managed Iceberg table in the same database and schema with the model identifier prefixed by `__`.
 
-## Supported Versions
+## Status
 
-- dbt Core: `>=1.10.0,<2.0.0`
-- dbt Fusion Engine: `>=2.0.0,<3.0.0`
-- dbt adapter: `dbt-snowflake`
-- Snowflake Python procedure runtime: Python `3.12`
-- Local package tests: Python `>=3.11`
+This package is early OSS implementation work. The first supported source type is BigQuery, and the first supported Snowflake load mode is Parquet `COPY INTO ... LOAD_MODE = ADD_FILES_COPY`.
+
+## Requirements
+
+- dbt Core 1.10 or later, below 2.0.
+- Snowflake with managed Iceberg table support.
+- A Snowflake external volume for the managed Iceberg table.
+- A Snowflake stage backed by GCS for BigQuery export files.
+- A Snowflake external access integration and GCP credentials that allow the Python procedure to call BigQuery APIs, either a service account key JSON in a Snowflake secret or Snowflake outbound workload identity federation.
+- BigQuery tables or SQL queries that can be exported to Parquet.
 
 ## Installation
 
-Add the package to `packages.yml`:
+Add the package to your dbt project's `packages.yml`:
 
 ```yaml
 packages:
-  - git: https://github.com/civitaspo/dbt-snowflake-iceberg-sync.git
-    revision: v0.3.3
+  - git: "https://github.com/civitaspo/dbt-snowflake-iceberg-sync.git"
+    revision: v0.1.0
 ```
 
-Then run:
+Install dependencies:
 
 ```bash
 dbt deps
 ```
 
-## Required Snowflake Setup
+## Snowflake Procedure Setup
 
-You must create and manage the Snowflake resources that grant access to GCS and
-BigQuery:
-
-- A Snowflake-managed Iceberg external volume.
-- A GCS-backed Snowflake stage used as the BigQuery export destination.
-- A network rule and external access integration for BigQuery API calls.
-- A Snowflake secret containing the GCP service account JSON.
-- A database/schema where the package procedure can be installed.
-
-Example deployment vars:
+The materialization delegates source export, schema mapping, Iceberg DDL, `DELETE`, `COPY`, and run logging to a Snowflake Python procedure. Configure deployment-level values through dbt vars, not model config:
 
 ```yaml
 vars:
   iceberg_sync:
-    handler_local_path: /absolute/path/to/dbt_packages/dbt_snowflake_iceberg_sync/procedure
+    procedure_database: ANALYTICS
+    procedure_schema: UTIL
+    procedure_name: ICEBERG_SYNC
+
+    handler_stage: ANALYTICS.UTIL.ICEBERG_SYNC_HANDLER_STAGE
+    handler_stage_path: procedure
+    handler_import_name: iceberg_sync_procedure
+    handler_name: iceberg_sync_procedure.handler.main
+    handler_local_path: dbt_packages/dbt_snowflake_iceberg_sync/procedure
 
     external_access_integrations: [BIGQUERY_API]
-    google_cloud_service_account_secret_fqdn: ANALYTICS.SECRETS.GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON
+
+    # GCP authentication. gcp_auth_method defaults to service_account_key.
+    gcp_auth_method: service_account_key
+    gcp_sa_secret_fqdn: ANALYTICS.SECRETS.GCP_SA_CREDENTIALS_JSON
+    gcp_sa_secret_alias: gcp_sa_credentials_json
 ```
 
-`procedure_database` defaults to the active dbt `target.database`, and
-`procedure_schema` defaults to the active dbt `target.schema`.
-`procedure_name` defaults to `ICEBERG_SYNC`, and `handler_stage` defaults to
-`<procedure_database>.<procedure_schema>.ICEBERG_SYNC_HANDLER_STAGE`. Override
-these only when the package helper objects should live outside the active target
-database/schema. This lets clone and CI targets install helper objects in their
-own target database and schema without requiring privileges on a production
-database/schema.
-
-The package creates a run log table named
-`<procedure_database>.<procedure_schema>.ICEBERG_SYNC_RUN_LOG` by default. Set
-`vars.iceberg_sync.run_log_table` to a three-part relation name to override it.
-
-Deployment vars:
-
-| Var | Required | Default | Description |
-| --- | --- | --- | --- |
-| `handler_local_path` | Yes | None | Local path to the package `procedure/` directory uploaded by the installer. Use an absolute path with dbt Fusion. |
-| `google_cloud_service_account_secret_fqdn` | Yes | None | Fully qualified Snowflake secret containing the GCP service account JSON. |
-| `procedure_database` | No | `target.database` | Database where the package procedure and default helper objects are installed. |
-| `procedure_schema` | No | `target.schema` | Schema where the package procedure and default helper objects are installed. |
-| `procedure_name` | No | `ICEBERG_SYNC` | Name of the Snowflake stored procedure. |
-| `handler_stage` | No | `<procedure_database>.<procedure_schema>.ICEBERG_SYNC_HANDLER_STAGE` | Internal Snowflake stage used for the Python handler files. |
-| `handler_stage_path` | No | `procedure` | Directory prefix inside `handler_stage` for uploaded handler files. |
-| `handler_import_name` | No | `iceberg_sync_procedure` | Import directory name mounted into the Snowflake Python runtime. |
-| `handler_name` | No | `<handler_import_name>.handler.main` | Python procedure entry point. |
-| `external_access_integrations` | No | `[]` | External access integrations granted to the procedure. |
-| `google_cloud_service_account_secret_alias` | No | `google_cloud_service_account_credentials_json` | Secret alias read by the Python handler. |
-| `run_log_table` | No | `<procedure_database>.<procedure_schema>.ICEBERG_SYNC_RUN_LOG` | Three-part relation used for procedure run logs. |
-
-## Required GCP IAM Setup
-
-The GCP service account stored in the Snowflake secret needs permissions to:
-
-- Read BigQuery table metadata.
-- Run BigQuery query jobs when `bigquery_export_strategy='select'`.
-- Run BigQuery extract jobs.
-- Write ZSTD-compressed Parquet exports to the GCS bucket behind
-  `bigquery_export_location` by default.
-- Read or create staging tables when select/staging mode is used.
-
-Exact IAM bindings depend on your project layout. Keep the permissions scoped to
-the datasets and bucket prefixes used by the package.
-
-## Procedure Installation
-
-Install or update the Snowflake procedure from `on-run-start`:
+Install or replace the procedure from `on-run-start` or a one-off `dbt run-operation`:
 
 ```yaml
 on-run-start:
   - "{{ dbt_snowflake_iceberg_sync.install_iceberg_sync_procedure() }}"
 ```
 
-The installer uploads the Python `procedure/` package to the configured internal
-stage using Snowflake directory imports, then creates:
+The installer uploads the package's `procedure/` directory to an internal Snowflake stage and creates a Python procedure with directory imports.
+
+## GCP IAM Setup
+
+The GCP identity used by the procedure (the service account stored in the Snowflake secret, or the workload identity federation principal) needs BigQuery permissions to inspect tables, create query jobs, create or update staging tables for `select` exports, and run extract jobs. It also needs permission to write exported Parquet files to the GCS bucket behind the Snowflake stage.
+
+Do not put service account JSON, private keys, passwords, or Snowflake secret FQDNs in model config.
+
+## GCP Workload Identity Federation
+
+As an alternative to a static service account key, the procedure can authenticate to GCP with Snowflake outbound workload identity federation (WIF). Snowflake issues a short-lived JWT with `SYSTEM$ISSUE_WORKLOAD_IDENTITY_FEDERATION_TOKEN`, the procedure exchanges it at Google STS through `google.auth.identity_pool.Credentials`, and optionally impersonates a GCP service account. No key material is stored anywhere.
+
+dbt configuration:
+
+```yaml
+vars:
+  iceberg_sync:
+    # ... procedure and stage settings as above ...
+    external_access_integrations: [BIGQUERY_API]
+
+    gcp_auth_method: workload_identity_federation
+    gcp_wif_secret_fqdn: ANALYTICS.SECRETS.GCP_WIF
+    gcp_wif_audience: //iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool_id>/providers/<provider_id>
+    # Optional. Omit to use the federated token directly, which requires IAM
+    # roles granted to the workload identity pool principal itself.
+    gcp_service_account_impersonation: <service_account_email>
+```
+
+### Per-target WIF configuration
+
+dbt renders jinja only in top-level string vars; values nested inside the `iceberg_sync` map reach the package unrendered. When WIF values differ per environment (for example a per-target GCP project number in the audience), set them through dedicated top-level vars instead. Each of the four auth keys can be overridden by a top-level var named `iceberg_sync_<key>`; a set and non-empty top-level var takes precedence over the nested `vars.iceberg_sync` entry:
+
+```yaml
+vars:
+  iceberg_sync:
+    # ... static deployment settings ...
+    gcp_auth_method: workload_identity_federation
+    gcp_wif_secret_fqdn: ANALYTICS.SECRETS.GCP_WIF
+
+  # Top-level vars are jinja-rendered with target context.
+  iceberg_sync_gcp_wif_audience: "{{ '//iam.googleapis.com/projects/<dev_project_number>/locations/global/workloadIdentityPools/<pool_id>/providers/<provider_id>' if target.name == 'dev' else '//iam.googleapis.com/projects/<prd_project_number>/locations/global/workloadIdentityPools/<pool_id>/providers/<provider_id>' }}"
+  iceberg_sync_gcp_service_account_impersonation: "sync-{{ target.name }}@<project_id>.iam.gserviceaccount.com"
+```
+
+The overrides also apply to `iceberg_sync_gcp_auth_method` and `iceberg_sync_gcp_wif_secret_fqdn`, and they can equally be passed on the command line with `--vars`.
+
+`gcp_sa_secret_fqdn` is not required with WIF, and the installer does not bind a `SECRETS = (...)` clause to the procedure. WIF secrets cannot be read with `_snowflake.get_generic_secret_string`; the token is issued per run through the Snowpark session, so the calling role needs USAGE on the WIF secret (the procedure runs `EXECUTE AS CALLER`).
+
+### Snowflake setup
+
+Create a WIF secret and read its issuer and subject:
 
 ```sql
-CREATE OR ALTER PROCEDURE <procedure>(config VARIANT)
-RETURNS VARIANT
-LANGUAGE PYTHON
-RUNTIME_VERSION = '3.12'
-PACKAGES = ('snowflake-snowpark-python', 'requests', 'google-auth')
-IMPORTS = ('@<handler_stage>/<handler_stage_path>/=<handler_import_name>/')
-HANDLER = '<handler_import_name>.handler.main'
-EXTERNAL_ACCESS_INTEGRATIONS = (...)
-SECRETS = ('<alias>' = <secret_fqdn>)
-EXECUTE AS CALLER
+CREATE SECRET ANALYTICS.SECRETS.GCP_WIF TYPE = WORKLOAD_IDENTITY_FEDERATION;
+DESC SECRET ANALYTICS.SECRETS.GCP_WIF;
+-- Note workload_identity_federation_issuer and workload_identity_federation_subject.
+GRANT USAGE ON SECRET ANALYTICS.SECRETS.GCP_WIF TO ROLE <dbt_role>;
 ```
+
+The external access integration used by the procedure must allow egress to `sts.googleapis.com:443` (always) and `iamcredentials.googleapis.com:443` (only when `gcp_service_account_impersonation` is set), in addition to the existing BigQuery endpoints, and the WIF secret must be listed in the integration's `ALLOWED_AUTHENTICATION_SECRETS`:
+
+```sql
+CREATE OR REPLACE NETWORK RULE GCP_APIS
+  MODE = EGRESS
+  TYPE = HOST_PORT
+  VALUE_LIST = (
+    'bigquery.googleapis.com:443',
+    'sts.googleapis.com:443',
+    'iamcredentials.googleapis.com:443'
+  );
+
+CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION BIGQUERY_API
+  ALLOWED_NETWORK_RULES = (GCP_APIS)
+  ALLOWED_AUTHENTICATION_SECRETS = (ANALYTICS.SECRETS.GCP_WIF)
+  ENABLED = TRUE;
+```
+
+### GCP setup
+
+Create a workload identity pool and an OIDC provider that trusts the Snowflake secret, using the issuer and subject from `DESC SECRET`:
+
+```bash
+gcloud iam workload-identity-pools create <pool_id> \
+  --project=<project_id> --location=global
+
+gcloud iam workload-identity-pools providers create-oidc <provider_id> \
+  --project=<project_id> --location=global \
+  --workload-identity-pool=<pool_id> \
+  --issuer-uri="<workload_identity_federation_issuer from DESC SECRET>" \
+  --attribute-mapping="google.subject=assertion.sub"
+```
+
+When the provider defines no allowed audiences, GCP expects the JWT audience `https://iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool_id>/providers/<provider_id>`. The package derives it from `gcp_wif_audience` automatically (both the `//iam.googleapis.com/...` and `https://iam.googleapis.com/...` spellings are accepted).
+
+Grant access to the federated principal, where the subject is the `workload_identity_federation_subject` from `DESC SECRET`:
+
+```bash
+# With impersonation: let the principal mint tokens for the service account.
+gcloud iam service-accounts add-iam-policy-binding <service_account_email> \
+  --project=<project_id> \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principal://iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool_id>/subject/<subject>"
+
+# Without impersonation: grant BigQuery and GCS roles to the principal directly.
+```
+
+### Runtime requirements
+
+The Snowflake procedure resolves `google-auth` from the Snowflake Anaconda channel; WIF requires google-auth 2.29.0 or later for custom subject token suppliers. Snowflake WIF tokens expire after 15 minutes; the package re-issues and re-exchanges tokens automatically when credentials refresh.
 
 ## BigQuery Extract Model
 
-Use `extract` when the source is a concrete BigQuery table, a wildcard table, or
-native partition decorators.
+Use `bigquery_export_strategy='extract'` for concrete BigQuery tables, native partition decorators, or wildcard tables expanded into concrete tables.
 
 ```sql
 {{
   config(
     materialized='iceberg_sync',
-    meta={
-      'iceberg_sync': {
-        'source_type': 'bigquery',
-        'materialization_strategy': 'incremental',
+    source_type='bigquery',
+    materialization_strategy='incremental',
 
-        'bigquery_export_strategy': 'extract',
-        'google_cloud_project_id': 'my-gcp-project',
-        'bigquery_dataset_id': 'analytics',
-        'bigquery_table_id': 'orders',
-        'bigquery_location': 'US',
-        'bigquery_export_location': '@ANALYTICS.PUBLIC.BQ_EXPORT_STAGE/orders',
-        'bigquery_export_predicate_type': 'auto',
-        'bigquery_export_incremental_predicates': ["20260530"],
+    bigquery_export_strategy='extract',
+    google_cloud_project_id='example-project',
+    bigquery_dataset_id='analytics',
+    bigquery_table_id='events',
+    bigquery_location='US',
+    bigquery_export_location='@ANALYTICS.UTIL.BQ_EXPORT_STAGE/events',
 
-        'incremental_strategy': 'delete+copy',
-        'incremental_predicate': "\"order_date\" = '2026-05-30'",
+    bigquery_export_predicate_type='partition_decorator',
+    bigquery_export_incremental_predicates=['20260529'],
+    incremental_predicate="event_date = DATE '2026-05-29'",
 
-        'iceberg_table_external_volume': 'ICEBERG_EXTERNAL_VOLUME'
-      }
-    }
+    iceberg_table_external_volume='ICEBERG_VOLUME'
   )
 }}
+
+select 1 as placeholder
 ```
 
-The model body is ignored for `extract` mode and should be empty.
+The SQL body is ignored for `extract` exports.
 
-## BigQuery Select/Staging Model
+## BigQuery Select Model
 
-Use `select` when the source is arbitrary BigQuery SQL. The SQL in the model body
-is BigQuery SQL, not Snowflake SQL.
+Use `bigquery_export_strategy='select'` when the model body should be treated as BigQuery SQL. The procedure writes the query result into a deterministic expiring BigQuery staging table, then exports that table to Parquet.
 
 ```sql
 {{
   config(
     materialized='iceberg_sync',
-    meta={
-      'iceberg_sync': {
-        'source_type': 'bigquery',
+    source_type='bigquery',
+    materialization_strategy='incremental',
 
-        'bigquery_export_strategy': 'select',
-        'google_cloud_project_id': 'my-gcp-project',
-        'bigquery_dataset_id': 'analytics',
-        'bigquery_table_id': 'orders',
-        'bigquery_location': 'US',
-        'bigquery_export_location': '@ANALYTICS.PUBLIC.BQ_EXPORT_STAGE/orders_select',
-        'bigquery_export_predicate_type': 'where',
-        'bigquery_export_incremental_predicates': ["order_date = '2026-05-30'"],
+    bigquery_export_strategy='select',
+    google_cloud_project_id='example-project',
+    bigquery_dataset_id='analytics',
+    bigquery_table_id='events',
+    bigquery_location='US',
+    bigquery_export_location='@ANALYTICS.UTIL.BQ_EXPORT_STAGE/events',
+    bigquery_export_predicate_type='where',
+    bigquery_export_incremental_predicates=["event_date = DATE '2026-05-29'"],
 
-        'bigquery_staging_dataset_id': 'dbt_staging',
-        'bigquery_staging_table_expiration_hours': 24,
-        'bigquery_staging_table_reuse': true,
+    bigquery_staging_dataset_id='dbt_staging',
+    bigquery_staging_table_expiration_hours=24,
+    bigquery_staging_table_reuse=true,
 
-        'incremental_strategy': 'delete+copy',
-        'incremental_predicate': "\"order_date\" = '2026-05-30'",
-
-        'iceberg_table_external_volume': 'ICEBERG_EXTERNAL_VOLUME'
-      }
-    }
+    incremental_predicate="event_date = DATE '2026-05-29'",
+    iceberg_table_external_volume='ICEBERG_VOLUME'
   )
 }}
 
 select
   *
-from `my-gcp-project.analytics.orders`
+from `example-project.analytics.events`
 ```
 
-The procedure creates or reuses a deterministic staging table, exports it to GCS
-as Parquet, and then loads those files into the Snowflake-managed Iceberg table.
+## Refresh Behavior
 
-## Materialization Options
+The procedure runs in full-refresh mode when dbt `--full-refresh` is set, when `materialization_strategy='full_refresh'`, or when the internal Iceberg table does not yet exist. Otherwise it runs incrementally.
 
-All options in this section are dbt model configs under `meta.iceberg_sync`.
-Keeping package-specific keys under `meta` is required by dbt Fusion. dbt Core
-also accepts the same `meta.iceberg_sync` shape, and this package still reads
-legacy top-level config keys for existing dbt Core projects. The materialization
-separates common options from source-specific options so future source types can
-define their own required fields. In the current release, `source_type='bigquery'`
-is the only supported source type, so every working model uses the BigQuery
-option group below.
+In full-refresh mode the procedure deletes the full internal table before copying exported files. In incremental mode, BigQuery predicates and the Snowflake `incremental_predicate` must be both present or both absent. If both are absent, the procedure performs a full-table delete plus copy.
 
-Credential material is not a materialization option. Keep service account JSON
-and secret names in Snowflake resources and `vars.iceberg_sync`; model configs
-that contain credential-like keys are rejected.
-
-Snowflake object identifiers managed by the package, including relation
-database, schema, table, view, procedure, run-log, and named stage identifiers,
-are normalized to uppercase so they are compatible with Snowflake unquoted
-identifier folding. Source column names are different: BigQuery and Parquet loads
-use `MATCH_BY_COLUMN_NAME = CASE_SENSITIVE`, so source column case is preserved
-and quoted in internal table DDL and exposed view SQL.
-
-### Common Options
-
-| Option | Required | Default | Description |
-| --- | --- | --- | --- |
-| `materialized` | Yes | None | Must be `iceberg_sync`. |
-| `source_type` | No | `bigquery` | Source adapter to use. Only `bigquery` is supported in this release. |
-| `materialization_strategy` | No | `incremental` | `incremental` or `full_refresh`. `full_refresh` always reloads the target table. |
-| `incremental_strategy` | No | `delete+copy` | Incremental load strategy. Only `delete+copy` is supported. |
-| `incremental_predicate` | Conditional | None | Snowflake SQL predicate used to delete rows from the internal Iceberg table during incremental runs. Required when `bigquery_export_incremental_predicates` is non-empty, and must be absent when that list is empty. |
-| `partition_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. |
-| `cluster_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. |
-| `iceberg_sync_retry_max_attempts` | No | `3` | Compatibility retry setting for the legacy full-run procedure path. The dbt-side materialization issues Snowflake load statements directly and does not retry failed `COPY INTO` statements inside Snowflake Scripting. |
-| `iceberg_sync_retry_initial_delay_seconds` | No | `5` | Compatibility retry delay for the legacy full-run procedure path. |
-| `iceberg_sync_retry_max_delay_seconds` | No | `60` | Compatibility maximum retry delay for the legacy full-run procedure path. |
-| `iceberg_sync_retry_backoff_multiplier` | No | `2.0` | Compatibility retry delay multiplier for the legacy full-run procedure path. Must be at least `1.0`. |
-| `iceberg_sync_retry_jitter_seconds` | No | `3` | Compatibility random retry jitter for the legacy full-run procedure path. |
-| `iceberg_sync_cleanup_created_table_on_failure` | No | `true` | Compatibility cleanup setting for the legacy full-run procedure path. In the dbt-side path, uncaught Snowflake statement failures abort the materialization before Jinja can run cleanup SQL, and the materialization does not drop tables after `CREATE ICEBERG TABLE IF NOT EXISTS` because ownership cannot be proven under concurrent runs. |
-| `iceberg_sync_run_log_fail_on_error` | No | `false` | Fail the model when writing the shared run log table fails. The default keeps run-log writes best-effort for high-concurrency runs. |
-
-The effective mode becomes full refresh when dbt is invoked with
-`--full-refresh`, when `materialization_strategy='full_refresh'`, or when the
-internal Iceberg table or exposed target view does not yet exist.
-
-The materialization orchestrates Snowflake work from dbt. BigQuery REST API
-calls still run through the package-managed Snowflake procedure because they
-need the configured external access integration and secret, but dbt now controls
-the wait loop between BigQuery job polls and directly issues Snowflake
-`CREATE ICEBERG TABLE`, additive `ALTER ICEBERG TABLE`, `DELETE`, `COPY INTO`,
-target view creation, and run-log `INSERT` statements.
-
-### Iceberg Table Options
-
-These options apply to the Snowflake-managed Iceberg table created behind the
-exposed dbt view. The table is created as `__<model_identifier>` in the model's
-target database and schema.
-
-| Option | Required | Default | Description |
-| --- | --- | --- | --- |
-| `iceberg_table_external_volume` | Yes | None | Snowflake external volume used by `CREATE ICEBERG TABLE`. |
-| `iceberg_table_base_location` | No | `<database>/<schema>/<identifier>` | Iceberg base location. When omitted, the package derives a stable location from the target relation. |
-| `iceberg_table_target_file_size` | No | `AUTO` | Passed to `TARGET_FILE_SIZE`. |
-| `iceberg_table_storage_serialization_policy` | No | `COMPATIBLE` | `COMPATIBLE` or `OPTIMIZED`. |
-| `iceberg_table_data_retention_time_in_days` | No | `7` | Passed to `DATA_RETENTION_TIME_IN_DAYS`. |
-| `iceberg_table_max_data_extension_time_in_days` | No | None | Optional `MAX_DATA_EXTENSION_TIME_IN_DAYS`. |
-| `iceberg_table_change_tracking` | No | `true` | Passed to `CHANGE_TRACKING`. Must stay `true` when `iceberg_table_iceberg_version=3`. |
-| `iceberg_table_copy_grants` | No | `false` | Adds `COPY GRANTS` when the table is created. |
-| `iceberg_table_error_logging` | No | `false` | Must stay `false`; Snowflake does not support error logging for this Iceberg `COPY INTO` path. |
-| `iceberg_table_iceberg_version` | No | `3` | `2` or `3`. |
-| `iceberg_table_enable_iceberg_merge_on_read` | No | `true` | Passed to `ENABLE_ICEBERG_MERGE_ON_READ`. |
-| `iceberg_table_enable_data_compaction` | No | `true` | Passed to `ENABLE_DATA_COMPACTION`. |
-
-### BigQuery Source Options
-
-These options apply when `source_type='bigquery'`.
-
-| Option | Required | Default | Description |
-| --- | --- | --- | --- |
-| `google_cloud_project_id` | Yes | None | BigQuery project for metadata, query, and extract jobs. |
-| `bigquery_dataset_id` | Yes | None | BigQuery dataset containing the source table or wildcard shard set. |
-| `bigquery_table_id` | Yes | None | BigQuery source table id. For `extract`, this is the table to export and may end with `_*` for sharded tables. For `select`, this still identifies the source for deterministic staging-table hashing even though the model SQL is the exported query. |
-| `bigquery_location` | Yes | None | BigQuery job location, for example `US` or a regional location. |
-| `bigquery_export_location` | Yes | None | Named Snowflake stage location that resolves to the GCS export prefix, for example `@DB.SCHEMA.STAGE/path`. User stages (`@~`) and table stages (`@%`) are rejected. |
-| `bigquery_export_compression` | No | `ZSTD` | BigQuery Parquet extract compression. Supported values are `NONE`, `SNAPPY`, `GZIP`, and `ZSTD`. Applies to both direct `extract` exports and `select` exports from generated staging tables. |
-| `bigquery_export_strategy` | No | `extract` | `extract` exports BigQuery tables directly. `select` runs model SQL into a BigQuery staging table, then exports that table. |
-| `bigquery_export_predicate_type` | No | `auto` | Predicate planning mode. Supported values are `auto`, `none`, `partition_decorator`, `table_suffix`, and `where`; valid values depend on `bigquery_export_strategy`. |
-| `bigquery_export_full_refresh_predicates` | No | `[]` | Source predicates used only when the effective mode is full refresh. A string is treated as a single-item list. |
-| `bigquery_export_incremental_predicates` | No | `[]` | Source predicates used only when the effective mode is incremental. Must be paired with `incremental_predicate`. A string is treated as a single-item list. |
-| `bigquery_extract_skip_missing_tables` | No | `false` | For `extract` only. When `true`, missing planned BigQuery tables are skipped instead of failing the model. If every planned table is missing, dbt reports the model as successful without creating, loading, or replacing Snowflake objects. |
-| `bigquery_export_poll_interval_seconds` | No | `30` | Seconds dbt waits between BigQuery export job polls. Must be positive. |
-| `bigquery_export_poll_timeout_seconds` | No | `3600` | Maximum dbt-side wait window for BigQuery export completion. Must be positive and at least `bigquery_export_poll_interval_seconds`. |
-
-BigQuery source predicates are interpreted differently by predicate type:
-
-| Predicate type | Valid with | Predicate value meaning |
-| --- | --- | --- |
-| `auto` | `extract`, `select` | Chooses `none` when no source predicates are configured. For `extract`, chooses `table_suffix` for `bigquery_table_id` values ending in `_*`, or `partition_decorator` for native time- or integer-range-partitioned tables. For `select`, chooses `where` when predicates exist. |
-| `none` | `extract`, `select` | No source predicates are allowed. `extract` exports the concrete table, or every table matching the wildcard prefix when `bigquery_table_id` ends in `_*`. |
-| `partition_decorator` | `extract` only | Each predicate is appended as a BigQuery partition decorator, such as `20260530` or an integer-range partition id. Requires a concrete native partitioned table. |
-| `table_suffix` | `extract` only | Each predicate is appended to the wildcard prefix. Requires `bigquery_table_id` to end with `_*`. |
-| `where` | `select` only | Each predicate is BigQuery SQL. Predicates are combined with `OR` and applied outside the model SQL subquery. |
-
-### BigQuery Extract Requirements
-
-Use `bigquery_export_strategy='extract'` for concrete tables, native partitioned
-tables, and sharded tables. The dbt model body must be empty in this mode; model
-SQL is rejected so it is not silently ignored.
-
-Extract jobs write Parquet with `bigquery_export_compression='ZSTD'` by default.
-Use `NONE`, `SNAPPY`, or `GZIP` only when downstream compatibility or performance
-testing calls for a different codec.
-
-`extract` does not use BigQuery staging table options. Its required fields are
-the common BigQuery source fields plus `iceberg_table_external_volume`.
-
-By default, missing BigQuery source tables fail the model. Set
-`bigquery_extract_skip_missing_tables=true` when a scheduled shard or partition
-may not exist yet and the model should leave existing Snowflake objects unchanged
-instead of failing. If some planned tables exist and others are missing, only the
-existing tables are exported.
-
-### BigQuery Select/Staging Requirements
-
-Use `bigquery_export_strategy='select'` for arbitrary BigQuery SQL. The dbt
-model body is required and must be BigQuery SQL. `select` allows only `auto`,
-`none`, or `where` predicate types.
-
-| Option | Required | Default | Description |
-| --- | --- | --- | --- |
-| `bigquery_staging_dataset_id` | Yes for `select` | None | BigQuery dataset where deterministic staging tables are created. |
-| `bigquery_staging_table_expiration_hours` | No | `24` | Expiration applied to generated staging tables. |
-| `bigquery_staging_table_reuse` | No | `true` | Reuse an existing non-expired staging table when its stored hash matches the model SQL, predicates, source identity, and target relation. The final Parquet extract still runs with the current `bigquery_export_compression`. |
-| `force_rebuild_staging_table` | No | `false` | Rebuild the staging table even if a reusable table exists. This option is currently unprefixed in dbt model config. |
-
-When `where` predicates are configured for `select`, the package renders:
-
-```sql
-SELECT *
-FROM (
-<model SQL>
-) AS __dbt_iceberg_sync_src
-WHERE (<predicate 1>) OR (<predicate 2>)
-```
-
-## Full Refresh Behavior
-
-The effective mode is full refresh when:
-
-- dbt runs with `--full-refresh`;
-- `materialization_strategy='full_refresh'`;
-- the internal Iceberg table or exposed target view does not exist.
-
-Full refresh deletes all rows from the internal Iceberg table before copying the
-new Parquet files.
-
-## Incremental Delete+Copy Behavior
-
-Incremental mode uses `incremental_strategy='delete+copy'`. BigQuery incremental
-predicates and Snowflake `incremental_predicate` must be both present or both
-absent.
-
-- Both present: export the BigQuery predicate window, delete the Snowflake
-  predicate window, then copy files.
-- Both absent: copy a complete export after a full-table delete.
-
-The Snowflake transaction begins after export and table DDL. dbt issues plain
-SQL statements for `BEGIN`, the delete statement, `COPY INTO`, and `COMMIT`.
-The commit is reached only after both the delete and copy statements succeed.
-
-## Retry And Cleanup Behavior
-
-The dbt-side materialization does not wrap Snowflake load work in anonymous
-Snowflake Scripting such as `EXECUTE IMMEDIATE 'DECLARE ...'`. Instead, dbt
-issues the load sequence as individual statements:
-
-```sql
-BEGIN;
-DELETE FROM <internal_iceberg_table> [WHERE ...];
-COPY INTO <internal_iceberg_table> ... LOAD_MODE = ADD_FILES_COPY;
-COMMIT;
-```
-
-dbt/Jinja cannot catch a failed Snowflake statement and then continue the same
-materialization run with a rollback or retry. For that reason, failed Snowflake
-load statements should be retried by rerunning the dbt model or by using an
-external orchestrator retry policy. This avoids keeping retry sleeps inside a
-long-running Snowflake Scripting block.
-
-The BigQuery export wait is controlled by dbt through `start_export` and
-`poll_export` procedure actions. These actions keep Google API calls inside
-Snowflake external access, while dbt controls the poll cadence.
-
-The dbt materialization creates or replaces the exposed dbt view after a
-successful load commit. Because dbt/Jinja cannot catch failed Snowflake
-statements, the dbt-side path cannot guarantee cleanup SQL after an uncaught
-`COPY INTO` or view-creation failure. It also avoids dropping an internal table
-after `CREATE ICEBERG TABLE IF NOT EXISTS`, because a concurrent run may have
-created that table between the initial existence check and the create statement.
-The legacy full-run procedure path keeps the prior
-`iceberg_sync_cleanup_created_table_on_failure` behavior.
-
-The run log includes `retry` and `cleanup` objects for compatibility with prior
-versions. In the dbt-side load path, `retry.attempts` is `1` because Snowflake
-load retries are not performed inside the materialization.
-
-The run log table is shared by all concurrent models. Run-log writes are
-best-effort by default, and lock-contention failures such as `000625`, `locked
-table`, or `number of waiters` are retried before being ignored. When a
-successful sync cannot write the run log, the procedure result includes
-`run_log_error`. Set `iceberg_sync_run_log_fail_on_error=true` to restore strict
-run-log behavior.
-
-The `incremental_predicate` is evaluated against the internal Iceberg table, not
-the exposed view. Top-level source field names are preserved exactly in that
-table for `MATCH_BY_COLUMN_NAME = CASE_SENSITIVE`, so quote lowercase or mixed
-case source names in Snowflake predicates, for example
-`incremental_predicate="\"event_date\" = '20240111'"`.
+The exposed dbt relation is recreated as a view after a successful procedure run.
 
 ## Schema Support
 
-Top-level source field names are preserved exactly in the internal Iceberg table
-for `MATCH_BY_COLUMN_NAME = CASE_SENSITIVE`.
-
-The exposed view aliases top-level fields to lower-snake names. Alias collisions
-fail before loading.
+Initial scalar mapping:
 
 | BigQuery type | Snowflake type |
 | --- | --- |
 | `STRING` | `VARCHAR` |
-| `INT64`, `INTEGER` | `BIGINT` |
-| `FLOAT64`, `FLOAT`, `DOUBLE` | `DOUBLE` |
+| `INT64`, `INTEGER` | `NUMBER(38,0)` |
+| `FLOAT64`, `FLOAT`, `DOUBLE` | `FLOAT` |
 | `BOOL`, `BOOLEAN` | `BOOLEAN` |
 | `DATE` | `DATE` |
-| `DATETIME` | `TIMESTAMP_NTZ(6)` |
 | `TIMESTAMP` | `TIMESTAMP_LTZ(6)` |
 | `NUMERIC`, `DECIMAL` | `NUMBER(38,9)` |
 | `BYTES` | `BINARY` |
 | `RECORD`, `STRUCT` | structured `OBJECT(...)` |
-| repeated compatible fields | structured `ARRAY(...)` |
+| repeated fields | structured `ARRAY(...)` |
 
-Unsupported in the first scope:
+Unsupported first-scope types include `BIGNUMERIC`, `DATETIME`, `GEOGRAPHY`, `JSON`, and `TIME`.
 
-- `BIGNUMERIC`, `BIGDECIMAL`
-- `GEOGRAPHY`
-- `JSON`
-- `TIME`
-- unsupported nested or repeated combinations
-
-Schema evolution is conservative. Existing column order, names, and mapped types
-must remain compatible. Safe additive columns may be added.
+Storage columns preserve source field names exactly for `MATCH_BY_COLUMN_NAME = CASE_SENSITIVE`. The exposed view aliases top-level fields to lower-snake unquoted identifiers. Alias collisions fail before loading.
 
 ## Unsupported First-Scope Features
 
-The package rejects:
+- `partition_by`
+- `cluster_by`
+- arbitrary `COPY INTO` transformations
+- non-Parquet export files
+- unstaged cloud URI loads
+- generic `VARIANT` sinks for unsupported nested data
 
-- Non-empty `partition_by`.
-- Non-empty `cluster_by`.
-- Arbitrary `COPY INTO` transformations.
-- Non-Parquet file formats.
-- Unstaged cloud URI loads.
-- Generic `VARIANT` sinks for unsupported nested data.
-- `iceberg_table_error_logging=true`; Snowflake does not support error logging
-  for this `COPY INTO` path.
-- `iceberg_table_change_tracking=false` with Iceberg V3 tables.
+## Run Logs
 
-The Iceberg load uses:
-
-```sql
-COPY INTO <iceberg_table>
-FROM @<named_stage>/<run_prefix>/
-FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)
-LOAD_MODE = ADD_FILES_COPY
-MATCH_BY_COLUMN_NAME = CASE_SENSITIVE
-PURGE = FALSE
-```
+When `vars.iceberg_sync.run_log_enabled` is true, the procedure creates a run log table in the configured procedure schema. The log captures run identifiers, target relations, effective mode, predicate payloads, export segments, BigQuery job references, Snowflake query ids, status, errors, and timestamps.
 
 ## Local Tests
 
 Unit tests do not require Snowflake or BigQuery credentials:
 
 ```bash
-mise install --locked
-uv sync --frozen
-uv run pytest tests/unit
-uv run ruff check procedure tests
-uv run dbt parse --profiles-dir tests/ci_profiles --no-version-check
+uv run pytest
 ```
 
-For dbt Fusion validation, run the same package parse with the Fusion CLI and
-do not pass partial-parse flags:
-
-```bash
-dbtf parse --profiles-dir tests/ci_profiles --no-version-check
-```
-
-## Local Integration Test Setup
-
-Integration tests are opt-in:
+Live integration tests are opt-in:
 
 ```bash
 DBT_SNOWFLAKE_ICEBERG_SYNC_RUN_INTEGRATION=1 uv run pytest -m integration
 ```
 
-Configure these environment variables for your own resources:
+Integration tests use generic environment variables such as `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD`, `SNOWFLAKE_PRIVATE_KEY_PATH`, `SNOWFLAKE_ROLE`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA`, `DBT_SNOWFLAKE_ICEBERG_SYNC_STAGE`, `DBT_SNOWFLAKE_ICEBERG_SYNC_EXTERNAL_VOLUME`, `DBT_SNOWFLAKE_ICEBERG_SYNC_SECRET_FQDN`, `DBT_SNOWFLAKE_ICEBERG_SYNC_EXTERNAL_ACCESS_INTEGRATION`, `GOOGLE_APPLICATION_CREDENTIALS`, `DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_PROJECT_ID`, `DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_LOCATION`, `DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATASET_ID`, `DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TABLE_ID`, `DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_PARTITIONED_TABLE_ID`, `DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_WILDCARD_TABLE_ID`, `DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_STAGING_DATASET_ID`, `DBT_SNOWFLAKE_ICEBERG_SYNC_GCS_BUCKET`, and `DBT_SNOWFLAKE_ICEBERG_SYNC_GCS_PREFIX`.
 
-```text
-SNOWFLAKE_ACCOUNT
-SNOWFLAKE_USER
-SNOWFLAKE_AUTHENTICATOR
-SNOWFLAKE_PASSWORD
-SNOWFLAKE_PRIVATE_KEY_PATH
-SNOWFLAKE_ROLE
-SNOWFLAKE_WAREHOUSE
-SNOWFLAKE_DATABASE
-SNOWFLAKE_SCHEMA
-DBT_SNOWFLAKE_ICEBERG_SYNC_HANDLER_STAGE
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_EXPORT_STAGE
-DBT_SNOWFLAKE_ICEBERG_SYNC_EXTERNAL_VOLUME
-DBT_SNOWFLAKE_ICEBERG_SYNC_PROCEDURE_DATABASE
-DBT_SNOWFLAKE_ICEBERG_SYNC_PROCEDURE_SCHEMA
-DBT_SNOWFLAKE_ICEBERG_SYNC_SECRET_FQDN
-DBT_SNOWFLAKE_ICEBERG_SYNC_SECRET_ALIAS
-DBT_SNOWFLAKE_ICEBERG_SYNC_EXTERNAL_ACCESS_INTEGRATION
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_PROJECT_ID
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_LOCATION
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATASET_ID
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TABLE_ID
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TABLE_EXPECTED_ROWS
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATETIME_TABLE_ID
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATETIME_EXPECTED_ROWS
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATETIME_EXPECTED_VALUES
+The workload identity federation integration test additionally uses `DBT_SNOWFLAKE_ICEBERG_SYNC_WIF_SECRET_FQDN`, `DBT_SNOWFLAKE_ICEBERG_SYNC_WIF_AUDIENCE`, and optionally `DBT_SNOWFLAKE_ICEBERG_SYNC_WIF_SERVICE_ACCOUNT`. It opens a real Snowpark session, which requires the opt-in dependency group:
 
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_NON_PARTITIONED_TABLE_ID
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_NON_PARTITIONED_EXPECTED_ROWS
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIME_PARTITIONED_TABLE_ID
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIME_PARTITION_DECORATOR
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIME_PARTITION_EXPECTED_ROWS
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_RANGE_PARTITIONED_TABLE_ID
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_RANGE_PARTITION_DECORATOR
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_RANGE_PARTITION_EXPECTED_ROWS
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_TABLE_ID
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_SUFFIX
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_SUFFIX_EXPECTED_ROWS
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_ALL_EXPECTED_ROWS
-
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_STAGING_DATASET_ID
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_SQL
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_PREDICATE
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_TABLE_ID
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_EXPECTED_ROWS
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_ALL_EXPECTED_ROWS
-
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_INCREMENTAL_TABLE_ID
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_INCREMENTAL_EXPORT_PREDICATE_TYPE
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_INCREMENTAL_FULL_REFRESH_PREDICATES
-DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_INCREMENTAL_PREDICATES
-DBT_SNOWFLAKE_ICEBERG_SYNC_INCREMENTAL_PREDICATE
-DBT_SNOWFLAKE_ICEBERG_SYNC_INCREMENTAL_EXPECTED_ROWS
+```bash
+uv sync --group integration
 ```
-
-`SNOWFLAKE_AUTHENTICATOR` defaults to `externalbrowser` when unset.
-`DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TABLE_EXPECTED_ROWS` is optional. The
-incremental predicate list variables accept either JSON arrays or comma-separated
-strings.
-
-Integration tests may create temporary Snowflake procedures, views, Iceberg
-tables, run log tables, BigQuery extract jobs, and GCS objects under generated
-test prefixes. The tests use caller-provided BigQuery fixture tables and do not
-create or delete those fixture tables. Cleanup is best-effort and must not delete
-user-specified non-test resources.
-
-### Integration CI Approval
-
-Pull request CI includes an approval-only `Integration Approval` check. It does
-not run live integration tests and does not receive Snowflake, BigQuery, GCS, or
-fixture credentials.
-
-The check passes when the current PR head has a fresh approving review from an
-`OWNER`, `MEMBER`, or `COLLABORATOR`, excluding the PR author. New commits require
-a new approval. The check is bypassed when the PR author is a repository owner.
-Run live integration tests outside GitHub with company-managed credentials after
-that approval.
 
 ## Security Notes
 
-- No credential material belongs in dbt model config.
-- GCP service account JSON should live in a Snowflake secret.
-- External access integrations, network rules, stages, and IAM permissions are
-  managed by the user.
-- BigQuery credentials are not included in the procedure call payload.
-- Exported GCS files are not cleaned up by first-scope code. Use a GCS lifecycle
-  policy or add explicit cleanup in a later release.
+- Credential material does not belong in dbt model config.
+- GCP service account JSON should live in a Snowflake secret, or be avoided entirely with workload identity federation.
+- Workload identity federation tokens are short-lived (15 minutes), only ever exist in procedure memory, and are never written to run logs or error messages.
+- External access integrations and network rules are managed by the user.
+- Exported GCS files are not cleaned up by first-scope code. Use a GCS lifecycle policy or implement cleanup in a later extension.

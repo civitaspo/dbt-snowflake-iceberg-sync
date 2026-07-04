@@ -1,24 +1,33 @@
-{% macro iceberg_sync_relation_from_payload(payload, relation_type='table') -%}
+{% macro iceberg_sync_internal_relation(target_relation) %}
   {{ return(api.Relation.create(
-    database=dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
-      payload['database']
-    ),
-    schema=dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
-      payload['schema']
-    ),
-    identifier=dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
-      payload['identifier']
-    ),
-    type=relation_type,
-    quote_policy={'database': true, 'schema': true, 'identifier': true}
-  )) }}
-{%- endmacro %}
+      database=target_relation.database,
+      schema=target_relation.schema,
+      identifier='__' ~ target_relation.identifier,
+      type='table'
+    ))
+  }}
+{% endmacro %}
 
-{% macro iceberg_sync_create_view_sql(target_relation, internal_relation, view_columns) -%}
-  CREATE OR REPLACE VIEW {{ target_relation }} AS
-  SELECT
-  {%- for column in view_columns %}
-    {{ adapter.quote(column['source_name']) }} AS {{ adapter.quote(column['alias'] | upper) }}{{ "," if not loop.last }}
-  {%- endfor %}
-  FROM {{ internal_relation }}
-{%- endmacro %}
+{% macro iceberg_sync_relation_dict(relation) %}
+  {{ return({
+      'database': relation.database,
+      'schema': relation.schema,
+      'identifier': relation.identifier,
+      'rendered': relation | string
+    })
+  }}
+{% endmacro %}
+
+{% macro iceberg_sync_procedure_relation() %}
+  {% set deployment = var('iceberg_sync', {}) %}
+  {% set procedure_database = dbt_snowflake_iceberg_sync.iceberg_sync_required_var(deployment, 'procedure_database') %}
+  {% set procedure_schema = dbt_snowflake_iceberg_sync.iceberg_sync_required_var(deployment, 'procedure_schema') %}
+  {% set procedure_name = dbt_snowflake_iceberg_sync.iceberg_sync_required_var(deployment, 'procedure_name') %}
+  {{ return(api.Relation.create(
+      database=procedure_database,
+      schema=procedure_schema,
+      identifier=procedure_name,
+      type='procedure'
+    ))
+  }}
+{% endmacro %}

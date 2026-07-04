@@ -1,226 +1,222 @@
-"""Snowflake session wrapper used by the procedure handler."""
-
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
-from .config import RelationConfig
-from .errors import ConfigError, SnowflakeExecutionError
-from .schema import SnowflakeColumn, ViewColumn, columns_from_snowflake_describe
+from .config import IcebergSyncConfig
+from .errors import SnowflakeSyncError
+from .schema import SnowflakeColumn, validate_schema_compatibility
 from .sql import (
-    alter_table_add_columns_sql,
-    copy_into_sql,
-    create_iceberg_table_sql,
-    create_or_alter_run_log_table_sql,
-    create_or_replace_view_sql,
-    delete_sql,
-    desc_stage_sql,
-    drop_iceberg_table_sql,
-    insert_run_log_sql,
-    relation_sql,
+    bool_literal,
+    csv,
+    quote_identifier,
+    quote_relation,
+    stage_copy_location,
+    string_literal,
 )
-from .utils import quote_fqn, quote_stage_fqn, sql_string
 
 
 @dataclass(frozen=True)
 class StageLocation:
-    stage_fqn: str
+    stage_name: str
     stage_path: str
-    run_stage_location: str
-    gcs_run_uri: str
+    gcs_uri: str
+
+    @property
+    def snowflake_location(self) -> str:
+        if self.stage_path:
+            return f"@{self.stage_name}/{self.stage_path.strip('/')}"
+        return f"@{self.stage_name}"
+
+
+def parse_named_stage_location(value: str) -> tuple[str, str]:
+    if not value or not value.startswith("@"):
+        raise SnowflakeSyncError(
+            "bigquery_export_location must be a named Snowflake stage location such as @DB.SCHEMA.STAGE/prefix."
+        )
+    without_at = value[1:]
+    if "/" in without_at:
+        stage_name, stage_path = without_at.split("/", 1)
+    else:
+        stage_name, stage_path = without_at, ""
+    if not stage_name:
+        raise SnowflakeSyncError("bigquery_export_location is missing the stage name.")
+    return stage_name, stage_path.strip("/")
 
 
 class SnowflakeClient:
-    def __init__(self, session: Any):
+    def __init__(self, session: Any) -> None:
         self.session = session
-        self.query_ids: list[str] = []
 
-    def execute(self, statement: str) -> list[Any]:
+    def execute(self, sql: str) -> list[Any]:
         try:
-            result = self.session.sql(statement)
-            rows = result.collect()
-            query_id = _query_id_from_result(result)
-            if query_id:
-                self.query_ids.append(query_id)
-            return list(rows)
-        except Exception as exc:  # pragma: no cover - exercised through mocks
-            raise SnowflakeExecutionError(str(exc)) from exc
+            return self.session.sql(sql).collect()
+        except Exception as exc:  # pragma: no cover - Snowpark exception type is runtime-provided.
+            raise SnowflakeSyncError(f"Snowflake SQL failed: {sql}\n{exc}") from exc
 
-    def table_exists(self, relation: RelationConfig) -> bool:
-        return self.relation_exists(relation)
+    def query_id(self) -> str | None:
+        try:
+            rows = self.session.sql("select last_query_id()").collect()
+            return rows[0][0] if rows else None
+        except Exception:
+            return None
 
-    def relation_exists(
-        self, relation: RelationConfig, *, expected_type: str | None = None
-    ) -> bool:
-        type_filter = ""
-        if expected_type is not None:
-            type_filter = f" AND TABLE_TYPE = {sql_string(expected_type.upper())}"
+    def table_exists(self, database: str, schema: str, identifier: str) -> bool:
+        like_pattern = identifier.replace("'", "''")
+        schema_relation = quote_relation(database, schema, "")
         rows = self.execute(
-            "SELECT COUNT(*) AS TABLE_COUNT "
-            f"FROM {quote_fqn(relation.database, 'INFORMATION_SCHEMA', 'TABLES')} "
-            f"WHERE TABLE_SCHEMA = {sql_string(relation.schema)} "
-            f"AND TABLE_NAME = {sql_string(relation.identifier)}"
-            f"{type_filter}"
+            f"show iceberg tables like {string_literal(like_pattern)} in schema "
+            f"{schema_relation}"
         )
-        if not rows:
-            return False
-        value = _first_value(rows[0])
-        return int(value or 0) > 0
+        return len(rows) > 0
 
-    def describe_table(self, relation: RelationConfig) -> list[SnowflakeColumn]:
-        return columns_from_snowflake_describe(
-            self.execute(f"DESCRIBE TABLE {relation_sql(relation)}")
-        )
-
-    def create_iceberg_table(self, config: Any, columns: list[SnowflakeColumn]) -> None:
-        self.execute(create_iceberg_table_sql(config, columns))
-
-    def drop_iceberg_table(self, relation: RelationConfig) -> None:
-        self.execute(drop_iceberg_table_sql(relation))
-
-    def add_columns(self, relation: RelationConfig, columns: list[SnowflakeColumn]) -> None:
-        for statement in alter_table_add_columns_sql(relation, columns):
-            self.execute(statement)
-
-    def create_or_replace_view(
-        self,
-        target: RelationConfig,
-        internal: RelationConfig,
-        columns: list[ViewColumn],
-    ) -> None:
-        self.execute(create_or_replace_view_sql(target, internal, columns))
-
-    def resolve_stage_location(self, export_location: str, run_id: str) -> StageLocation:
-        stage_fqn, stage_path = parse_stage_location(export_location)
-        rows = self.execute(desc_stage_sql(stage_fqn))
-        url = _stage_url(rows)
-        if not url.startswith("gcs://"):
-            raise ConfigError(
-                "bigquery_export_location must reference a Snowflake stage backed by GCS"
+    def describe_stage_location(self, named_stage_location: str) -> StageLocation:
+        stage_name, stage_path = parse_named_stage_location(named_stage_location)
+        rows = self.execute(f"desc stage {stage_name}")
+        url = None
+        for row in rows:
+            values = row.as_dict() if hasattr(row, "as_dict") else row.asDict() if hasattr(row, "asDict") else {}
+            property_name = (
+                values.get("property")
+                or values.get("Property")
+                or values.get("PROPERTY")
+                or (row[0] if len(row) > 0 else None)
             )
-        run_path = "/".join(part.strip("/") for part in (stage_path, run_id) if part.strip("/"))
-        run_stage_location = f"@{stage_fqn}/{run_path}" if run_path else f"@{stage_fqn}"
-        export_url = "gs://" + url.removeprefix("gcs://")
-        gcs_run_uri = "/".join(
-            part.strip("/") for part in (export_url, run_path) if part.strip("/")
+            property_value = (
+                values.get("property_value")
+                or values.get("Property Value")
+                or values.get("PROPERTY_VALUE")
+                or (row[1] if len(row) > 1 else None)
+            )
+            if str(property_name).upper() in {"URL", "STAGE_LOCATION"} and property_value:
+                url = str(property_value)
+                break
+        if not url:
+            raise SnowflakeSyncError(f"Could not resolve backing cloud URL from DESC STAGE {stage_name}.")
+        if not url.lower().startswith(("gcs://", "gs://")):
+            raise SnowflakeSyncError(f"Stage {stage_name} must point at a GCS URL for BigQuery export.")
+        normalized = "gs://" + url.split("://", 1)[1].strip("/")
+        if stage_path:
+            normalized = f"{normalized}/{stage_path}"
+        return StageLocation(stage_name=stage_name, stage_path=stage_path, gcs_uri=normalized)
+
+    def existing_columns(self, database: str, schema: str, identifier: str) -> dict[str, str]:
+        rows = self.execute(f"describe table {quote_relation(database, schema, identifier)}")
+        columns: dict[str, str] = {}
+        for row in rows:
+            values = row.as_dict() if hasattr(row, "as_dict") else row.asDict() if hasattr(row, "asDict") else {}
+            name = values.get("name") or values.get("Name") or values.get("NAME") or (row[0] if len(row) > 0 else None)
+            data_type = (
+                values.get("type")
+                or values.get("Type")
+                or values.get("TYPE")
+                or (row[1] if len(row) > 1 else None)
+            )
+            if name and data_type:
+                columns[str(name)] = str(data_type)
+        return columns
+
+    def create_or_alter_iceberg_table(
+        self,
+        config: IcebergSyncConfig,
+        columns: list[SnowflakeColumn],
+        exists: bool,
+    ) -> None:
+        internal = config.internal_relation
+        relation = quote_relation(internal.database, internal.schema, internal.identifier)
+        if not exists:
+            ddl = render_create_iceberg_table(config, columns)
+            self.execute(ddl)
+            return
+
+        additive_columns = validate_schema_compatibility(
+            self.existing_columns(internal.database, internal.schema, internal.identifier),
+            columns,
         )
-        if not gcs_run_uri.startswith("gs://"):
-            gcs_run_uri = "gs://" + gcs_run_uri.removeprefix("gs:/").lstrip("/")
-        return StageLocation(
-            stage_fqn=stage_fqn,
-            stage_path=stage_path,
-            run_stage_location=run_stage_location,
-            gcs_run_uri=gcs_run_uri,
-        )
+        for column in additive_columns:
+            self.execute(
+                f"alter iceberg table {relation} add column "
+                f"{quote_identifier(column.storage_name)} {column.snowflake_type}"
+            )
 
-    def begin(self) -> None:
-        self.execute("BEGIN")
-
-    def commit(self) -> None:
-        self.execute("COMMIT")
-
-    def rollback(self) -> None:
-        self.execute("ROLLBACK")
-
-    def delete_from_iceberg(self, relation: RelationConfig, predicate: str | None) -> None:
-        self.execute(delete_sql(relation, predicate))
-
-    def copy_into_iceberg(self, relation: RelationConfig, stage_run_location: str) -> None:
-        self.execute(copy_into_sql(relation, stage_run_location))
-
-    def ensure_run_log(self, relation: RelationConfig | None) -> None:
-        if relation is not None:
-            self.execute(create_or_alter_run_log_table_sql(relation))
-
-    def write_run_log(self, relation: RelationConfig | None, payload: dict[str, Any]) -> None:
-        if relation is not None:
-            self.execute(insert_run_log_sql(relation, payload))
-
-
-def parse_stage_location(export_location: str) -> tuple[str, str]:
-    if not export_location.startswith("@"):
-        raise ConfigError("bigquery_export_location must start with @")
-    raw = export_location[1:]
-    if not raw or raw.startswith(("~", "%")):
-        raise ConfigError(
-            "bigquery_export_location must be a named Snowflake stage, not a user or table stage"
-        )
-    if "/" in raw:
-        stage_raw, stage_path = raw.split("/", 1)
-    else:
-        stage_raw, stage_path = raw, ""
-    raw_parts = stage_raw.split(".")
-    if any(part == "" for part in raw_parts):
-        raise ConfigError("bigquery_export_location contains an invalid stage name")
-    stage_parts = [part.strip('"') for part in raw_parts]
-    if any(part == "" for part in stage_parts) or not 1 <= len(stage_parts) <= 3:
-        raise ConfigError("bigquery_export_location contains an invalid stage name")
-    return quote_stage_fqn(stage_parts), stage_path.strip("/")
-
-
-def _stage_url(rows: list[Any]) -> str:
-    for row in rows:
-        data = _row_to_mapping(row)
-        key = str(
-            data.get("property") or data.get("PROPERTY") or data.get("name") or data.get("NAME")
-        )
-        value = (
-            data.get("property_value")
-            or data.get("PROPERTY_VALUE")
-            or data.get("value")
-            or data.get("VALUE")
-        )
-        if key.upper() == "URL" and value:
-            return _normalize_stage_url(value)
-    raise ConfigError("DESC STAGE did not return a URL property")
-
-
-def _normalize_stage_url(value: Any) -> str:
-    text = str(value).strip()
-    if text.startswith("["):
+    def load_copy(
+        self,
+        config: IcebergSyncConfig,
+        named_stage_location: str,
+        run_prefix: str,
+        effective_mode: str,
+    ) -> list[str]:
+        internal = config.internal_relation
+        relation = quote_relation(internal.database, internal.schema, internal.identifier)
+        query_ids: list[str] = []
+        self.execute("begin")
         try:
-            urls = json.loads(text)
-        except json.JSONDecodeError:
-            urls = []
-        if urls:
-            text = str(urls[0]).strip()
-    return text.rstrip("/")
+            if effective_mode == "incremental" and config.incremental_predicate:
+                self.execute(f"delete from {relation} where {config.incremental_predicate}")
+            else:
+                self.execute(f"delete from {relation}")
+            query_ids.append(self.query_id() or "")
+
+            self.execute(render_copy_into_sql(relation, named_stage_location, run_prefix))
+            query_ids.append(self.query_id() or "")
+            self.execute("commit")
+            return [query_id for query_id in query_ids if query_id]
+        except Exception:
+            self.execute("rollback")
+            raise
 
 
-def _query_id_from_result(result: Any) -> str | None:
-    data = getattr(result, "__dict__", {})
-    for attr in ("query_id", "queryId", "sfqid"):
-        value = data.get(attr)
-        if value:
-            return str(value)
-    return None
+def render_create_iceberg_table(config: IcebergSyncConfig, columns: list[SnowflakeColumn]) -> str:
+    internal = config.internal_relation
+    relation = quote_relation(internal.database, internal.schema, internal.identifier)
+    column_sql = ",\n  ".join(
+        f"{quote_identifier(column.storage_name)} {column.snowflake_type}"
+        for column in columns
+    )
+    header = f"create or replace iceberg table {relation}"
+    if config.iceberg_table_copy_grants:
+        header += " copy grants"
+    clauses = [
+        f"{header} (\n  {column_sql}\n)",
+        f"external_volume = {string_literal(config.iceberg_table_external_volume)}",
+        "catalog = 'SNOWFLAKE'",
+        f"base_location = {string_literal(config.iceberg_table_base_location)}",
+        f"target_file_size = {string_literal(config.iceberg_table_target_file_size)}",
+        "storage_serialization_policy = "
+        f"{string_literal(config.iceberg_table_storage_serialization_policy)}",
+        "data_retention_time_in_days = "
+        f"{int(config.iceberg_table_data_retention_time_in_days)}",
+        f"change_tracking = {bool_literal(config.iceberg_table_change_tracking)}",
+        f"iceberg_version = {int(config.iceberg_table_iceberg_version)}",
+        "enable_iceberg_merge_on_read = "
+        f"{bool_literal(config.iceberg_table_enable_iceberg_merge_on_read)}",
+        "enable_data_compaction = "
+        f"{bool_literal(config.iceberg_table_enable_data_compaction)}",
+    ]
+    if config.iceberg_table_max_data_extension_time_in_days is not None:
+        clauses.append(
+            "max_data_extension_time_in_days = "
+            f"{int(config.iceberg_table_max_data_extension_time_in_days)}"
+        )
+    return "\n".join(clauses)
 
 
-def _first_value(row: Any) -> Any:
-    if isinstance(row, dict):
-        return next(iter(row.values()))
-    if hasattr(row, "as_dict"):
-        data = row.as_dict()
-        return next(iter(data.values()))
-    if hasattr(row, "asDict"):
-        data = row.asDict()
-        return next(iter(data.values()))
-    match = re.search(r"[-+]?\d+", str(row))
-    return match.group(0) if match else None
+def render_copy_into_sql(relation: str, named_stage_location: str, run_prefix: str) -> str:
+    return "\n".join(
+        [
+            f"copy into {relation}",
+            f"from {stage_copy_location(named_stage_location, run_prefix)}",
+            "file_format = (type = parquet use_vectorized_scanner = true)",
+            "load_mode = add_files_copy",
+            "match_by_column_name = case_sensitive",
+            "purge = false",
+        ]
+    )
 
 
-def _row_to_mapping(row: Any) -> dict[str, Any]:
-    if isinstance(row, dict):
-        return row
-    if hasattr(row, "as_dict"):
-        return row.as_dict()
-    if hasattr(row, "asDict"):
-        return row.asDict()
-    return {
-        key: getattr(row, key)
-        for key in dir(row)
-        if not key.startswith("_") and not callable(getattr(row, key))
-    }
+def render_view_sql(target_relation: str, internal_relation: str, columns: list[SnowflakeColumn]) -> str:
+    select_list = csv(
+        f"{quote_identifier(column.storage_name)} as {column.alias}"
+        for column in columns
+    )
+    return f"create or replace view {target_relation} as select {select_list} from {internal_relation}"

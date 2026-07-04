@@ -1,105 +1,55 @@
 {% materialization iceberg_sync, adapter='snowflake' %}
-  {%- set payload = dbt_snowflake_iceberg_sync.iceberg_sync_collect_config(
-    sql, this, model, flags.FULL_REFRESH
-  ) -%}
-  {%- set target_relation = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_payload(
-    payload['target_relation'], 'view'
-  ) -%}
-  {%- set internal_relation = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_payload(
-    payload['internal_relation']
-  ) -%}
+  {% set target_relation = this %}
+  {% set internal_relation = dbt_snowflake_iceberg_sync.iceberg_sync_internal_relation(target_relation) %}
+  {% set payload = dbt_snowflake_iceberg_sync.iceberg_sync_config(model, target_relation, internal_relation) %}
+  {% do dbt_snowflake_iceberg_sync.iceberg_sync_validate_config(payload) %}
+  {% set procedure_relation = dbt_snowflake_iceberg_sync.iceberg_sync_procedure_relation() %}
 
-  {%- if execute -%}
-    {%- set existing_internal_relation = adapter.get_relation(
-      database=internal_relation.database,
-      schema=internal_relation.schema,
-      identifier=internal_relation.identifier
-    ) -%}
-    {%- set existing_target_relation = adapter.get_relation(
+  {% set existing_relation = adapter.get_relation(
       database=target_relation.database,
       schema=target_relation.schema,
       identifier=target_relation.identifier
-    ) -%}
-    {%- set internal_table_exists = existing_internal_relation is not none -%}
-    {%- set target_view_exists = (
-      existing_target_relation is not none
-      and (existing_target_relation.type | upper) == 'VIEW'
-    ) -%}
-    {%- set effective_mode = dbt_snowflake_iceberg_sync.iceberg_sync_effective_mode(
-      payload, internal_table_exists, target_view_exists
-    ) -%}
-    {%- set predicates = dbt_snowflake_iceberg_sync.iceberg_sync_predicates_for_mode(
-      payload, effective_mode
-    ) -%}
-    {%- set run_id = dbt_snowflake_iceberg_sync.iceberg_sync_run_id(payload) -%}
-    {%- set stage = dbt_snowflake_iceberg_sync.iceberg_sync_resolve_stage_location(
-      payload['bigquery']['export_location'], run_id
-    ) -%}
-    {%- set export_result = dbt_snowflake_iceberg_sync.iceberg_sync_wait_for_export(
-      payload, effective_mode, stage['gcs_run_uri']
-    ) -%}
-    {%- set cleanup = {
-      'created_internal_table': false,
-      'altered_internal_table_schema': false,
-      'dropped_created_internal_table': false,
-      'cleanup_error_message': none
-    } -%}
-    {%- if export_result.get('skipped') -%}
-      {%- call statement('main', auto_begin=False) -%}
-        SELECT 1
-      {%- endcall -%}
-      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_write_skipped_log(
-        payload,
-        run_id,
-        effective_mode,
-        predicates,
-        export_result,
-        {},
-        cleanup
-      ) -%}
-    {%- else -%}
-      {%- set desired_columns = export_result['columns'] -%}
+    )
+  %}
 
-      {%- call statement('iceberg_sync_create_internal_table', auto_begin=False) -%}
-        {{ dbt_snowflake_iceberg_sync.iceberg_sync_create_iceberg_table_sql(
-          payload, desired_columns
-        ) }}
-      {%- endcall -%}
+  {% if existing_relation is not none and existing_relation.type != 'view' %}
+    {% do adapter.drop_relation(existing_relation) %}
+  {% endif %}
 
-      {%- set before_add_columns = dbt_snowflake_iceberg_sync.iceberg_sync_describe_table_columns(
-        internal_relation
-      ) -%}
-      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_validate_or_add_columns(
-        internal_relation, desired_columns
-      ) -%}
-      {%- if desired_columns | length > before_add_columns | length -%}
-        {%- do cleanup.update({'altered_internal_table_schema': true}) -%}
-      {%- endif -%}
+  {% call statement('iceberg_sync_call_procedure', fetch_result=True, auto_begin=False) %}
+    call {{ procedure_relation }}({{ dbt_snowflake_iceberg_sync.iceberg_sync_json_literal(payload) }})
+  {% endcall %}
 
-      {%- set load_result = dbt_snowflake_iceberg_sync.iceberg_sync_run_load(
-        payload, effective_mode, stage['run_stage_location']
-      ) -%}
-      {%- if load_result.get('status') != 'success' -%}
-        {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-          load_result.get('error_message', 'Iceberg load failed')
-        ) -%}
-      {%- endif -%}
+  {% set result_table = load_result('iceberg_sync_call_procedure') %}
+  {% if result_table is none or result_table.get('data') is none or result_table.get('data') | length == 0 %}
+    {{ exceptions.raise_compiler_error("iceberg_sync procedure returned no result.") }}
+  {% endif %}
 
-      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_create_view(
-        target_relation, internal_relation, export_result['view_columns']
-      ) -%}
+  {% set procedure_result = result_table.get('data')[0][0] %}
+  {% if procedure_result is string %}
+    {% set procedure_result = fromjson(procedure_result) %}
+  {% endif %}
 
-      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_write_success_log(
-        payload,
-        run_id,
-        effective_mode,
-        predicates,
-        export_result,
-        load_result.get('retry', {}),
-        cleanup
-      ) -%}
-    {%- endif -%}
-  {%- endif -%}
+  {% if procedure_result is none or procedure_result.get('status') != 'success' %}
+    {{ exceptions.raise_compiler_error("iceberg_sync procedure did not return success: " ~ procedure_result) }}
+  {% endif %}
 
+  {% set view_columns = procedure_result.get('view_columns', []) %}
+  {% do dbt_snowflake_iceberg_sync.iceberg_sync_validate_view_columns(view_columns) %}
+
+  {% call statement('main', auto_begin=False) %}
+    create or replace view {{ target_relation }} as
+    select
+      {% for column in view_columns %}
+      {{ adapter.quote(column.get('storage_name')) }} as {{ column.get('alias') }}{% if not loop.last %},{% endif %}
+      {% endfor %}
+    from {{ internal_relation }}
+  {% endcall %}
+
+  {% do adapter.commit() %}
   {{ return({'relations': [target_relation]}) }}
+{% endmaterialization %}
+
+{% materialization iceberg_sync, default %}
+  {{ exceptions.raise_compiler_error("iceberg_sync is a Snowflake-only materialization.") }}
 {% endmaterialization %}
