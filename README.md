@@ -90,6 +90,7 @@ Deployment vars:
 | `google_cloud_workload_identity_federation_secret_fqdn` | Yes for `workload_identity_federation` | None | Three-part name of the Snowflake workload identity federation secret used by `SYSTEM$ISSUE_WORKLOAD_IDENTITY_FEDERATION_TOKEN`. |
 | `google_cloud_workload_identity_federation_audience` | Yes for `workload_identity_federation` | None | Google Cloud workload identity provider resource name, for example `//iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool_id>/providers/<provider_id>`. |
 | `google_cloud_service_account_impersonation` | No | None | Optional Google Cloud service account email to impersonate after the STS token exchange. |
+| `google_cloud_workload_identity_federation_by_dbt_target` | No | None | Map of `target.name` to per-target workload identity federation settings. Each entry uses the same keys as the flat vars above. An optional `default` entry is used when `target.name` is not present in the map. |
 | `run_log_table` | No | `<procedure_database>.<procedure_schema>.ICEBERG_SYNC_RUN_LOG` | Three-part relation used for procedure run logs. |
 
 ## Required Google Cloud IAM Setup
@@ -127,11 +128,44 @@ In this mode the procedure issues a short-lived JWT with
 `google-auth` identity-pool credentials, and optionally impersonates a service
 account. The installer does not bind a `SECRETS = (...)` clause for workload identity federation auth.
 
-Per-target overrides can be passed as top-level dbt vars such as
+When each dbt target needs a different workload identity provider, secret, or
+impersonation service account, use
+`google_cloud_workload_identity_federation_by_dbt_target`:
+
+```yaml
+vars:
+  iceberg_sync:
+    google_cloud_auth_method: workload_identity_federation
+    google_cloud_workload_identity_federation_by_dbt_target:
+      dev:
+        google_cloud_workload_identity_federation_secret_fqdn: ANALYTICS.SECRETS.WORKLOAD_IDENTITY_FEDERATION_DEV
+        google_cloud_workload_identity_federation_audience: //iam.googleapis.com/projects/111111111111/locations/global/workloadIdentityPools/dev-pool/providers/dev-provider
+        google_cloud_service_account_impersonation: sync-dev@example-project.iam.gserviceaccount.com
+      stg:
+        google_cloud_workload_identity_federation_secret_fqdn: ANALYTICS.SECRETS.WORKLOAD_IDENTITY_FEDERATION_STG
+        google_cloud_workload_identity_federation_audience: //iam.googleapis.com/projects/222222222222/locations/global/workloadIdentityPools/stg-pool/providers/stg-provider
+        google_cloud_service_account_impersonation: sync-stg@example-project.iam.gserviceaccount.com
+      default:
+        google_cloud_workload_identity_federation_secret_fqdn: ANALYTICS.SECRETS.WORKLOAD_IDENTITY_FEDERATION_DEFAULT
+        google_cloud_workload_identity_federation_audience: //iam.googleapis.com/projects/000000000000/locations/global/workloadIdentityPools/example-pool/providers/example-provider
+```
+
+dbt does not expose keys nested under `vars.<target.name>` to `var('foo')`.
+The package therefore resolves workload identity federation settings from this
+map using `target.name` explicitly.
+
+For each workload identity federation field, resolution order is:
+
+1. Top-level dbt vars such as `iceberg_sync_google_cloud_workload_identity_federation_audience` or CLI `--vars` overrides
+2. `google_cloud_workload_identity_federation_by_dbt_target[target.name]`
+3. `google_cloud_workload_identity_federation_by_dbt_target['default']`
+4. Flat `vars.iceberg_sync.google_cloud_workload_identity_federation_*` keys
+
+Per-target overrides can also be passed as top-level dbt vars such as
 `iceberg_sync_google_cloud_auth_method`, `iceberg_sync_google_cloud_workload_identity_federation_secret_fqdn`, and
 `iceberg_sync_google_cloud_workload_identity_federation_audience`. This is useful when a shared project file keeps
 common package settings under `vars.iceberg_sync` but each target needs a
-different workload identity provider or secret.
+different workload identity provider or secret at runtime.
 
 The workload identity federation transfer integration test
 (`test_dbt_select_smoke_workload_identity_federation`) uses the `select` export
