@@ -958,8 +958,10 @@ def _write_project(context: IntegrationContext, models: dict[str, str]) -> None:
     if context.google_cloud_auth_method == "service_account_key":
         auth_lines.extend(
             [
-                f"                google_cloud_service_account_secret_fqdn: {context.secret_fqdn}",
-                f"                google_cloud_service_account_secret_alias: {context.secret_alias}",
+                "                google_cloud_service_account_secret_fqdn: "
+                f"{context.secret_fqdn}",
+                "                google_cloud_service_account_secret_alias: "
+                f"{context.secret_alias}",
             ]
         )
     else:
