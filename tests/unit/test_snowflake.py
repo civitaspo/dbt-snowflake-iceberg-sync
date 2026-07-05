@@ -131,9 +131,7 @@ def test_resolve_stage_location_uses_gs_uri_for_bigquery_export():
 
 
 def test_resolve_stage_location_rejects_non_gcs_stage():
-    session = StaticSession(
-        [{"property": "URL", "property_value": '["s3://bucket/base/"]'}]
-    )
+    session = StaticSession([{"property": "URL", "property_value": '["s3://bucket/base/"]'}])
 
     with pytest.raises(ConfigError, match="backed by GCS"):
         SnowflakeClient(session).resolve_stage_location(

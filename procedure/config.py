@@ -15,7 +15,7 @@ BIGQUERY_PARQUET_EXPORT_COMPRESSIONS = {"GZIP", "NONE", "SNAPPY", "ZSTD"}
 PREDICATE_TYPES = {"auto", "none", "partition_decorator", "table_suffix", "where"}
 INCREMENTAL_STRATEGIES = {"delete+copy"}
 STORAGE_SERIALIZATION_POLICIES = {"COMPATIBLE", "OPTIMIZED"}
-GCP_AUTH_METHODS = {"service_account_key", "workload_identity_federation"}
+GOOGLE_CLOUD_AUTH_METHODS = {"service_account_key", "workload_identity_federation"}
 FORBIDDEN_MODEL_CONFIG_KEYS = {
     "credentials",
     "credential",
@@ -27,10 +27,10 @@ FORBIDDEN_MODEL_CONFIG_KEYS = {
     "google_cloud_service_account_secret_fqdn",
     "google_cloud_service_account_secret_alias",
     "google_application_credentials",
-    "gcp_auth_method",
-    "gcp_wif_secret_fqdn",
-    "gcp_wif_audience",
-    "gcp_service_account_impersonation",
+    "google_cloud_auth_method",
+    "google_cloud_workload_identity_federation_secret_fqdn",
+    "google_cloud_workload_identity_federation_audience",
+    "google_cloud_service_account_impersonation",
 }
 
 
@@ -60,10 +60,10 @@ class DeploymentConfig:
     procedure_name: str | None = None
     run_log_table: RelationConfig | None = None
     google_cloud_service_account_secret_alias: str | None = None
-    gcp_auth_method: str = "service_account_key"
-    gcp_wif_secret_fqdn: str | None = None
-    gcp_wif_audience: str | None = None
-    gcp_service_account_impersonation: str | None = None
+    google_cloud_auth_method: str = "service_account_key"
+    google_cloud_workload_identity_federation_secret_fqdn: str | None = None
+    google_cloud_workload_identity_federation_audience: str | None = None
+    google_cloud_service_account_impersonation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -178,11 +178,17 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         google_cloud_service_account_secret_alias=deployment_payload.get(
             "google_cloud_service_account_secret_alias"
         ),
-        gcp_auth_method=_defaulted(deployment_payload, "gcp_auth_method", "service_account_key"),
-        gcp_wif_secret_fqdn=_optional_secret_fqdn(deployment_payload.get("gcp_wif_secret_fqdn")),
-        gcp_wif_audience=_optional_string(deployment_payload.get("gcp_wif_audience")),
-        gcp_service_account_impersonation=_optional_string(
-            deployment_payload.get("gcp_service_account_impersonation")
+        google_cloud_auth_method=_defaulted(
+            deployment_payload, "google_cloud_auth_method", "service_account_key"
+        ),
+        google_cloud_workload_identity_federation_secret_fqdn=_optional_secret_fqdn(
+            deployment_payload.get("google_cloud_workload_identity_federation_secret_fqdn")
+        ),
+        google_cloud_workload_identity_federation_audience=_optional_string(
+            deployment_payload.get("google_cloud_workload_identity_federation_audience")
+        ),
+        google_cloud_service_account_impersonation=_optional_string(
+            deployment_payload.get("google_cloud_service_account_impersonation")
         ),
     )
 
@@ -250,9 +256,7 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
 
     retry_payload = payload.get("retry", {})
     retry = RetryPolicyConfig(
-        max_attempts=_int(
-            retry_payload.get("max_attempts", 3), "iceberg_sync_retry_max_attempts"
-        ),
+        max_attempts=_int(retry_payload.get("max_attempts", 3), "iceberg_sync_retry_max_attempts"),
         initial_delay_seconds=_float(
             retry_payload.get("initial_delay_seconds", 5),
             "iceberg_sync_retry_initial_delay_seconds",
@@ -325,29 +329,24 @@ def validate_config(config: IcebergSyncConfig) -> None:
             "bigquery_extract_skip_missing_tables is supported only with extract export strategy"
         )
     if config.bigquery.export_compression not in BIGQUERY_PARQUET_EXPORT_COMPRESSIONS:
+        raise ConfigError("bigquery_export_compression must be one of GZIP, NONE, SNAPPY, or ZSTD")
+    if config.deployment.google_cloud_auth_method not in GOOGLE_CLOUD_AUTH_METHODS:
         raise ConfigError(
-            "bigquery_export_compression must be one of GZIP, NONE, SNAPPY, or ZSTD"
-        )
-    if config.deployment.gcp_auth_method not in GCP_AUTH_METHODS:
-        raise ConfigError(
-            "gcp_auth_method must be 'service_account_key' or "
+            "google_cloud_auth_method must be 'service_account_key' or "
             "'workload_identity_federation'"
         )
-    if config.deployment.gcp_auth_method == "workload_identity_federation":
+    if config.deployment.google_cloud_auth_method == "workload_identity_federation":
         missing_wif_fields = []
-        if not config.deployment.gcp_wif_secret_fqdn:
-            missing_wif_fields.append("gcp_wif_secret_fqdn")
-        if not config.deployment.gcp_wif_audience:
-            missing_wif_fields.append("gcp_wif_audience")
+        if not config.deployment.google_cloud_workload_identity_federation_secret_fqdn:
+            missing_wif_fields.append("google_cloud_workload_identity_federation_secret_fqdn")
+        if not config.deployment.google_cloud_workload_identity_federation_audience:
+            missing_wif_fields.append("google_cloud_workload_identity_federation_audience")
         if missing_wif_fields:
             raise ConfigError(
-                "gcp_auth_method='workload_identity_federation' requires "
+                "google_cloud_auth_method='workload_identity_federation' requires "
                 + ", ".join(missing_wif_fields)
             )
-    if (
-        config.iceberg_table.storage_serialization_policy
-        not in STORAGE_SERIALIZATION_POLICIES
-    ):
+    if config.iceberg_table.storage_serialization_policy not in STORAGE_SERIALIZATION_POLICIES:
         raise ConfigError(
             "iceberg_table_storage_serialization_policy must be COMPATIBLE or OPTIMIZED"
         )
@@ -373,10 +372,7 @@ def validate_config(config: IcebergSyncConfig) -> None:
         raise ConfigError("bigquery_export_poll_interval_seconds must be positive")
     if config.bigquery.export_poll_timeout_seconds <= 0:
         raise ConfigError("bigquery_export_poll_timeout_seconds must be positive")
-    if (
-        config.bigquery.export_poll_interval_seconds
-        > config.bigquery.export_poll_timeout_seconds
-    ):
+    if config.bigquery.export_poll_interval_seconds > config.bigquery.export_poll_timeout_seconds:
         raise ConfigError(
             "bigquery_export_poll_interval_seconds must not exceed "
             "bigquery_export_poll_timeout_seconds"
@@ -456,7 +452,10 @@ def _optional_secret_fqdn(value: Any) -> str | None:
         return None
     parts = [str(part).strip() for part in str(value).split(".")]
     if len(parts) != 3 or any(part == "" for part in parts):
-        raise ConfigError("gcp_wif_secret_fqdn must be a three-part Snowflake object name")
+        raise ConfigError(
+            "google_cloud_workload_identity_federation_secret_fqdn must be a "
+            "three-part Snowflake object name"
+        )
     return ".".join(normalize_snowflake_object_identifier(part) for part in parts)
 
 

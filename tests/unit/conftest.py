@@ -45,10 +45,10 @@ def base_payload() -> dict[str, Any]:
             "google_cloud_service_account_secret_alias": (
                 "google_cloud_service_account_credentials_json"
             ),
-            "gcp_auth_method": "service_account_key",
-            "gcp_wif_secret_fqdn": None,
-            "gcp_wif_audience": None,
-            "gcp_service_account_impersonation": None,
+            "google_cloud_auth_method": "service_account_key",
+            "google_cloud_workload_identity_federation_secret_fqdn": None,
+            "google_cloud_workload_identity_federation_audience": None,
+            "google_cloud_service_account_impersonation": None,
         },
         "retry": {
             "max_attempts": 3,

@@ -7,7 +7,7 @@ from typing import Any
 
 from ..config import IcebergSyncConfig
 from ..errors import IcebergSyncError
-from ..gcp_auth import build_gcp_credentials
+from ..google_cloud_auth import build_google_cloud_credentials
 from ..utils import load_snowflake_secret
 from .base import SourceAdapter
 from .bigquery import BigQueryRestClient, BigQuerySourceAdapter
@@ -27,9 +27,7 @@ def create_source_adapter(
     *,
     session: Any | None = None,
 ) -> SourceAdapter:
-    registry = (
-        default_source_adapter_factories(session=session) if factories is None else factories
-    )
+    registry = default_source_adapter_factories(session=session) if factories is None else factories
     factory = registry.get(config.source_type)
     if factory is None:
         raise IcebergSyncError(f"unsupported source_type: {config.source_type}")
@@ -41,7 +39,7 @@ def _bigquery_adapter(
     *,
     session: Any | None = None,
 ) -> SourceAdapter:
-    credentials = build_gcp_credentials(
+    credentials = build_google_cloud_credentials(
         session,
         config.deployment,
         secret_reader=load_snowflake_secret,

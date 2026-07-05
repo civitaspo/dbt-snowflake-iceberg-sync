@@ -70,9 +70,7 @@ class IcebergSyncRunner:
         view_created = False
 
         try:
-            internal_table_existed_before = self.snowflake.table_exists(
-                config.internal_relation
-            )
+            internal_table_existed_before = self.snowflake.table_exists(config.internal_relation)
             target_view_existed_before = self.snowflake.relation_exists(
                 config.target_relation,
                 expected_type="VIEW",
@@ -272,9 +270,7 @@ class IcebergSyncRunner:
                 "job_references": export_result.job_references,
                 "staging_table_reference": export_result.staging_table_reference,
                 "columns": [asdict(column) | {"ddl": column.ddl} for column in columns],
-                "view_columns": [
-                    asdict(column) for column in view_columns(columns)
-                ],
+                "view_columns": [asdict(column) for column in view_columns(columns)],
             },
         }
 
@@ -328,9 +324,7 @@ class IcebergSyncRunner:
                             "attempt": attempt,
                             "phase": "load_transaction",
                             "error_message": _sanitize_error_message(exc),
-                            "rolled_back": getattr(
-                                exc, "_iceberg_sync_rolled_back", False
-                            ),
+                            "rolled_back": getattr(exc, "_iceberg_sync_rolled_back", False),
                             "rollback_error_message": getattr(
                                 exc, "_iceberg_sync_rollback_error_message", None
                             ),
@@ -490,11 +484,7 @@ def is_retryable_run_log_error(exc: Exception) -> bool:
     if not isinstance(exc, SnowflakeExecutionError):
         return False
     lowered = str(exc).lower()
-    return (
-        "000625" in lowered
-        or "locked table" in lowered
-        or "number of waiters" in lowered
-    )
+    return "000625" in lowered or "locked table" in lowered or "number of waiters" in lowered
 
 
 def compute_retry_delay(

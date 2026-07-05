@@ -9,8 +9,8 @@ pytestmark = pytest.mark.integration
 _REQUIRED_ENV_VARS = [
     "SNOWFLAKE_ACCOUNT",
     "SNOWFLAKE_USER",
-    "DBT_SNOWFLAKE_ICEBERG_SYNC_WIF_SECRET_FQDN",
-    "DBT_SNOWFLAKE_ICEBERG_SYNC_WIF_AUDIENCE",
+    "DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SECRET_FQDN",
+    "DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_AUDIENCE",
     "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_PROJECT_ID",
     "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATASET_ID",
     "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TABLE_ID",
@@ -60,21 +60,25 @@ def test_workload_identity_federation_credentials_authorize_bigquery_calls():
     from google.auth.transport.requests import Request
 
     from procedure.config import DeploymentConfig
-    from procedure.gcp_auth import build_gcp_credentials
+    from procedure.google_cloud_auth import build_google_cloud_credentials
     from procedure.sources.bigquery import BigQueryRestClient
 
     deployment = DeploymentConfig(
-        gcp_auth_method="workload_identity_federation",
-        gcp_wif_secret_fqdn=os.environ["DBT_SNOWFLAKE_ICEBERG_SYNC_WIF_SECRET_FQDN"],
-        gcp_wif_audience=os.environ["DBT_SNOWFLAKE_ICEBERG_SYNC_WIF_AUDIENCE"],
-        gcp_service_account_impersonation=os.getenv(
-            "DBT_SNOWFLAKE_ICEBERG_SYNC_WIF_SERVICE_ACCOUNT_IMPERSONATION"
+        google_cloud_auth_method="workload_identity_federation",
+        google_cloud_workload_identity_federation_secret_fqdn=os.environ[
+            "DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SECRET_FQDN"
+        ],
+        google_cloud_workload_identity_federation_audience=os.environ[
+            "DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_AUDIENCE"
+        ],
+        google_cloud_service_account_impersonation=os.getenv(
+            "DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SERVICE_ACCOUNT"
         ),
     )
 
     session = _open_snowflake_session()
     try:
-        credentials = build_gcp_credentials(
+        credentials = build_google_cloud_credentials(
             session,
             deployment,
             secret_reader=lambda alias: pytest.fail(

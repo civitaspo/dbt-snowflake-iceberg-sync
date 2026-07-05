@@ -1,4 +1,4 @@
-"""GCP credential helpers for the Snowflake procedure."""
+"""Google Cloud credential helpers for the Snowflake procedure."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from .config import DeploymentConfig
 from .errors import ConfigError, SourceError
 from .utils import sql_string
 
-GCP_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+GOOGLE_CLOUD_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
 STS_TOKEN_URL = "https://sts.googleapis.com/v1/token"
 SUBJECT_TOKEN_TYPE_JWT = "urn:ietf:params:oauth:token-type:jwt"
 _SUBJECT_TOKEN_REFRESH_MARGIN_SECONDS = 120
@@ -40,14 +40,15 @@ def normalize_workload_identity_federation_audience(value: str) -> tuple[str, st
     if audience.startswith("//iam.googleapis.com/"):
         return audience, "https:" + audience
     raise ConfigError(
-        "gcp_wif_audience must be a workload identity provider resource in the form "
+        "google_cloud_workload_identity_federation_audience must be a workload "
+        "identity provider resource in the form "
         "//iam.googleapis.com/projects/<project_number>/locations/global/"
         "workloadIdentityPools/<pool_id>/providers/<provider_id>"
     )
 
 
 class SnowflakeWorkloadIdentityFederationSubjectTokenSupplier:
-    """Issue Snowflake WIF JWTs on demand for google-auth refreshes."""
+    """Issue Snowflake workload identity federation JWTs on demand for google-auth refreshes."""
 
     def __init__(self, session: Any, secret_fqdn: str, jwt_audience: str) -> None:
         self._session = session
@@ -91,15 +92,16 @@ class SnowflakeWorkloadIdentityFederationSubjectTokenSupplier:
         return str(token)
 
 
-def build_gcp_credentials(
+def build_google_cloud_credentials(
     session: Any,
     deployment: DeploymentConfig,
     secret_reader: Callable[[str], str],
 ) -> Any:
-    if deployment.gcp_auth_method == "workload_identity_federation":
+    if deployment.google_cloud_auth_method == "workload_identity_federation":
         if session is None:
             raise SourceError(
-                "A Snowpark session is required for gcp_auth_method='workload_identity_federation'"
+                "A Snowpark session is required for "
+                "google_cloud_auth_method='workload_identity_federation'"
             )
         return _build_workload_identity_federation_credentials(session, deployment)
 
@@ -118,7 +120,7 @@ def build_service_account_credentials(service_account_json: str) -> Any:
         raise SourceError("google-auth is required inside the Snowflake procedure.") from exc
 
     info = json.loads(service_account_json, strict=False)
-    return service_account.Credentials.from_service_account_info(info, scopes=GCP_SCOPES)
+    return service_account.Credentials.from_service_account_info(info, scopes=GOOGLE_CLOUD_SCOPES)
 
 
 def _build_workload_identity_federation_credentials(
@@ -130,9 +132,9 @@ def _build_workload_identity_federation_credentials(
     except ImportError as exc:  # pragma: no cover - import availability is environment-specific
         raise SourceError("google-auth is required inside the Snowflake procedure.") from exc
 
-    secret_fqdn = deployment.gcp_wif_secret_fqdn or ""
+    secret_fqdn = deployment.google_cloud_workload_identity_federation_secret_fqdn or ""
     sts_audience, jwt_audience = normalize_workload_identity_federation_audience(
-        deployment.gcp_wif_audience or ""
+        deployment.google_cloud_workload_identity_federation_audience or ""
     )
     supplier = SnowflakeWorkloadIdentityFederationSubjectTokenSupplier(
         session,
@@ -144,12 +146,12 @@ def _build_workload_identity_federation_credentials(
         "subject_token_type": SUBJECT_TOKEN_TYPE_JWT,
         "token_url": STS_TOKEN_URL,
         "subject_token_supplier": supplier,
-        "scopes": GCP_SCOPES,
+        "scopes": GOOGLE_CLOUD_SCOPES,
     }
-    if deployment.gcp_service_account_impersonation:
+    if deployment.google_cloud_service_account_impersonation:
         kwargs["service_account_impersonation_url"] = (
             "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/"
-            f"{deployment.gcp_service_account_impersonation}:generateAccessToken"
+            f"{deployment.google_cloud_service_account_impersonation}:generateAccessToken"
         )
     try:
         return identity_pool.Credentials(**kwargs)

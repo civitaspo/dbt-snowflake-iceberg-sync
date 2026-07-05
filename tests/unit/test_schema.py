@@ -78,9 +78,7 @@ def test_maps_repeated_record_to_structured_array():
     assert '"Sku" VARCHAR' in columns[0].snowflake_type
 
 
-@pytest.mark.parametrize(
-    "field_type", ["BIGNUMERIC", "BIGDECIMAL", "JSON", "GEOGRAPHY", "TIME"]
-)
+@pytest.mark.parametrize("field_type", ["BIGNUMERIC", "BIGDECIMAL", "JSON", "GEOGRAPHY", "TIME"])
 def test_rejects_unsupported_type(field_type):
     with pytest.raises(SchemaError, match=field_type):
         map_bigquery_schema([{"name": "UnsupportedField", "type": field_type}])

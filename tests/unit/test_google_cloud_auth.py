@@ -6,12 +6,12 @@ import time
 
 import pytest
 
-from procedure import gcp_auth
+from procedure import google_cloud_auth
 from procedure.config import DeploymentConfig
 from procedure.errors import ConfigError, SourceError
-from procedure.gcp_auth import (
+from procedure.google_cloud_auth import (
     SnowflakeWorkloadIdentityFederationSubjectTokenSupplier,
-    build_gcp_credentials,
+    build_google_cloud_credentials,
     decode_jwt_expiry,
     normalize_workload_identity_federation_audience,
 )
@@ -49,9 +49,11 @@ class FakeSession:
 
 def workload_identity_federation_deployment(**overrides) -> DeploymentConfig:
     value = {
-        "gcp_auth_method": "workload_identity_federation",
-        "gcp_wif_secret_fqdn": "DB.AUTH.WORKLOAD_IDENTITY_FEDERATION_GCP",
-        "gcp_wif_audience": AUDIENCE,
+        "google_cloud_auth_method": "workload_identity_federation",
+        "google_cloud_workload_identity_federation_secret_fqdn": (
+            "DB.AUTH.WORKLOAD_IDENTITY_FEDERATION"
+        ),
+        "google_cloud_workload_identity_federation_audience": AUDIENCE,
     }
     value.update(overrides)
     return DeploymentConfig(**value)
@@ -79,7 +81,7 @@ def test_normalize_workload_identity_federation_audience_accepts_both_spellings(
 
 
 def test_normalize_workload_identity_federation_audience_rejects_other_values():
-    with pytest.raises(ConfigError, match="gcp_wif_audience"):
+    with pytest.raises(ConfigError, match="google_cloud_workload_identity_federation_audience"):
         normalize_workload_identity_federation_audience(
             "projects/000000000000/locations/global/workloadIdentityPools/p"
         )
@@ -107,7 +109,7 @@ def test_supplier_caches_token_until_near_expiry():
     session = FakeSession(token)
     supplier = SnowflakeWorkloadIdentityFederationSubjectTokenSupplier(
         session,
-        "DB.AUTH.WORKLOAD_IDENTITY_FEDERATION_GCP",
+        "DB.AUTH.WORKLOAD_IDENTITY_FEDERATION",
         "https:" + AUDIENCE,
     )
 
@@ -121,7 +123,7 @@ def test_supplier_reissues_token_close_to_expiry():
     session = FakeSession(token)
     supplier = SnowflakeWorkloadIdentityFederationSubjectTokenSupplier(
         session,
-        "DB.AUTH.WORKLOAD_IDENTITY_FEDERATION_GCP",
+        "DB.AUTH.WORKLOAD_IDENTITY_FEDERATION",
         "https:" + AUDIENCE,
     )
 
@@ -134,7 +136,7 @@ def test_supplier_rejects_empty_token():
     session = FakeSession(None)
     supplier = SnowflakeWorkloadIdentityFederationSubjectTokenSupplier(
         session,
-        "DB.AUTH.WORKLOAD_IDENTITY_FEDERATION_GCP",
+        "DB.AUTH.WORKLOAD_IDENTITY_FEDERATION",
         "https:" + AUDIENCE,
     )
 
@@ -150,7 +152,7 @@ def test_supplier_wraps_sql_failures():
 
     supplier = SnowflakeWorkloadIdentityFederationSubjectTokenSupplier(
         FailingSession(),
-        "DB.AUTH.WORKLOAD_IDENTITY_FEDERATION_GCP",
+        "DB.AUTH.WORKLOAD_IDENTITY_FEDERATION",
         "https:" + AUDIENCE,
     )
 
@@ -162,7 +164,7 @@ def test_build_workload_identity_federation_credentials_configures_identity_pool
     from google.auth import identity_pool
 
     session = FakeSession(make_jwt({"exp": time.time() + 900}))
-    credentials = build_gcp_credentials(
+    credentials = build_google_cloud_credentials(
         session,
         workload_identity_federation_deployment(),
         secret_reader=lambda alias: pytest.fail(
@@ -172,7 +174,7 @@ def test_build_workload_identity_federation_credentials_configures_identity_pool
 
     assert isinstance(credentials, identity_pool.Credentials)
     assert credentials._audience == AUDIENCE
-    assert credentials._subject_token_type == gcp_auth.SUBJECT_TOKEN_TYPE_JWT
+    assert credentials._subject_token_type == google_cloud_auth.SUBJECT_TOKEN_TYPE_JWT
     assert credentials._service_account_impersonation_url is None
     assert isinstance(
         credentials._subject_token_supplier,
@@ -182,10 +184,10 @@ def test_build_workload_identity_federation_credentials_configures_identity_pool
 
 def test_build_workload_identity_federation_credentials_with_impersonation():
     session = FakeSession(make_jwt({"exp": time.time() + 900}))
-    credentials = build_gcp_credentials(
+    credentials = build_google_cloud_credentials(
         session,
         workload_identity_federation_deployment(
-            gcp_service_account_impersonation="sync@example-project.iam.gserviceaccount.com"
+            google_cloud_service_account_impersonation="sync@example-project.iam.gserviceaccount.com"
         ),
         secret_reader=lambda alias: pytest.fail(
             f"workload identity federation must not read generic secrets: {alias}"
@@ -198,17 +200,17 @@ def test_build_workload_identity_federation_credentials_with_impersonation():
     )
 
 
-def test_build_gcp_credentials_defaults_to_service_account_key(monkeypatch):
+def test_build_google_cloud_credentials_defaults_to_service_account_key(monkeypatch):
     seen = {}
 
     def fake_builder(service_account_json):
         seen["json"] = service_account_json
         return "sa-credentials"
 
-    monkeypatch.setattr(gcp_auth, "build_service_account_credentials", fake_builder)
+    monkeypatch.setattr(google_cloud_auth, "build_service_account_credentials", fake_builder)
     deployment = DeploymentConfig(google_cloud_service_account_secret_alias="my_alias")
 
-    credentials = build_gcp_credentials(
+    credentials = build_google_cloud_credentials(
         session=None,
         deployment=deployment,
         secret_reader=lambda alias: f"secret-for-{alias}",
@@ -218,9 +220,9 @@ def test_build_gcp_credentials_defaults_to_service_account_key(monkeypatch):
     assert seen["json"] == "secret-for-my_alias"
 
 
-def test_build_gcp_credentials_requires_session_for_workload_identity_federation():
+def test_build_google_cloud_credentials_requires_session_for_workload_identity_federation():
     with pytest.raises(SourceError, match="Snowpark session"):
-        build_gcp_credentials(
+        build_google_cloud_credentials(
             session=None,
             deployment=workload_identity_federation_deployment(),
             secret_reader=lambda alias: alias,

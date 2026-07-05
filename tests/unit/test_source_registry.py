@@ -22,7 +22,7 @@ def test_bigquery_adapter_builds_client_with_google_credentials(base_payload, mo
         captured["secret_reader"] = secret_reader
         return credentials
 
-    monkeypatch.setattr(registry, "build_gcp_credentials", fake_build_credentials)
+    monkeypatch.setattr(registry, "build_google_cloud_credentials", fake_build_credentials)
     monkeypatch.setattr(registry, "BigQueryRestClient", FakeBigQueryRestClient)
 
     adapter = registry.create_source_adapter(parse_config(base_payload))
@@ -41,9 +41,9 @@ def test_bigquery_adapter_passes_session_for_workload_identity_federation(
 ):
     config = parse_config(
         payload_factory(
-            deployment__gcp_auth_method="workload_identity_federation",
-            deployment__gcp_wif_secret_fqdn="DB.AUTH.GCP_WIF_SECRET",
-            deployment__gcp_wif_audience=(
+            deployment__google_cloud_auth_method="workload_identity_federation",
+            deployment__google_cloud_workload_identity_federation_secret_fqdn="DB.AUTH.WORKLOAD_IDENTITY_FEDERATION_SECRET",
+            deployment__google_cloud_workload_identity_federation_audience=(
                 "//iam.googleapis.com/projects/000000000000/locations/global/"
                 "workloadIdentityPools/example-pool/providers/example-provider"
             ),
@@ -59,14 +59,14 @@ def test_bigquery_adapter_passes_session_for_workload_identity_federation(
         captured["secret_reader"] = secret_reader
         return credentials
 
-    monkeypatch.setattr(registry, "build_gcp_credentials", fake_build_credentials)
+    monkeypatch.setattr(registry, "build_google_cloud_credentials", fake_build_credentials)
     monkeypatch.setattr(registry, "BigQueryRestClient", FakeBigQueryRestClient)
 
     adapter = registry.create_source_adapter(config, session=session)
 
     assert adapter.client.credentials is credentials
     assert captured["session"] is session
-    assert captured["deployment"].gcp_auth_method == "workload_identity_federation"
+    assert captured["deployment"].google_cloud_auth_method == "workload_identity_federation"
     assert captured["secret_reader"] is registry.load_snowflake_secret
 
 
@@ -77,7 +77,7 @@ def test_bigquery_adapter_surfaces_auth_errors(payload_factory, monkeypatch):
 
     monkeypatch.setattr(
         registry,
-        "build_gcp_credentials",
+        "build_google_cloud_credentials",
         lambda session, deployment, secret_reader: (_ for _ in ()).throw(
             IcebergSyncError("auth failed")
         ),

@@ -60,8 +60,7 @@ def test_add_columns_uses_alter_iceberg_table(base_payload):
     )
 
     assert statements == [
-        'ALTER ICEBERG TABLE "ANALYTICS"."PUBLIC"."__ORDERS" '
-        'ADD COLUMN "CustomerName" VARCHAR'
+        'ALTER ICEBERG TABLE "ANALYTICS"."PUBLIC"."__ORDERS" ADD COLUMN "CustomerName" VARCHAR'
     ]
     assert not statements[0].startswith("ALTER TABLE ")
 

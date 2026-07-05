@@ -104,10 +104,10 @@
     'google_cloud_service_account_secret_fqdn',
     'google_cloud_service_account_secret_alias',
     'google_application_credentials',
-    'gcp_auth_method',
-    'gcp_wif_secret_fqdn',
-    'gcp_wif_audience',
-    'gcp_service_account_impersonation'
+    'google_cloud_auth_method',
+    'google_cloud_workload_identity_federation_secret_fqdn',
+    'google_cloud_workload_identity_federation_audience',
+    'google_cloud_service_account_impersonation'
   ] -%}
   {%- set model_meta = dbt_snowflake_iceberg_sync.iceberg_sync_model_meta(model_node) -%}
   {%- for key in forbidden -%}
@@ -128,20 +128,20 @@
   {%- endif -%}
 
   {%- set deployment = payload['deployment'] -%}
-  {%- if deployment['gcp_auth_method'] not in ['service_account_key', 'workload_identity_federation'] -%}
+  {%- if deployment['google_cloud_auth_method'] not in ['service_account_key', 'workload_identity_federation'] -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      "gcp_auth_method must be 'service_account_key' or 'workload_identity_federation'"
+      "google_cloud_auth_method must be 'service_account_key' or 'workload_identity_federation'"
     ) -%}
   {%- endif -%}
-  {%- if deployment['gcp_auth_method'] == 'workload_identity_federation' -%}
-    {%- if not deployment['gcp_wif_secret_fqdn'] -%}
+  {%- if deployment['google_cloud_auth_method'] == 'workload_identity_federation' -%}
+    {%- if not deployment['google_cloud_workload_identity_federation_secret_fqdn'] -%}
       {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        "gcp_auth_method='workload_identity_federation' requires gcp_wif_secret_fqdn"
+        "google_cloud_auth_method='workload_identity_federation' requires google_cloud_workload_identity_federation_secret_fqdn"
       ) -%}
     {%- endif -%}
-    {%- if not deployment['gcp_wif_audience'] -%}
+    {%- if not deployment['google_cloud_workload_identity_federation_audience'] -%}
       {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        "gcp_auth_method='workload_identity_federation' requires gcp_wif_audience"
+        "google_cloud_auth_method='workload_identity_federation' requires google_cloud_workload_identity_federation_audience"
       ) -%}
     {%- endif -%}
   {%- endif -%}
