@@ -34,6 +34,10 @@ class IntegrationContext:
     external_access_integration: str
     secret_fqdn: str
     secret_alias: str
+    google_cloud_auth_method: str
+    google_cloud_workload_identity_federation_secret_fqdn: str | None
+    google_cloud_workload_identity_federation_audience: str | None
+    google_cloud_service_account_impersonation: str | None
     bigquery_project_id: str
     bigquery_dataset_id: str
     bigquery_location: str
@@ -79,6 +83,67 @@ def test_dbt_extract_smoke(tmp_path: Path):
         _cleanup(context, [model_name])
 
 
+def test_dbt_select_smoke_workload_identity_federation(tmp_path: Path):
+    if not os.environ.get("DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SECRET_FQDN"):
+        pytest.skip(
+            "Set DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SECRET_FQDN "
+            "to run the workload identity federation transfer test."
+        )
+
+    staging_dataset_id = _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_STAGING_DATASET_ID")
+    context = _integration_context(
+        tmp_path,
+        "wif_smoke",
+        auth_method="workload_identity_federation",
+        bigquery_project_id=_required_env(
+            "DBT_SNOWFLAKE_ICEBERG_SYNC_WIF_TRANSFER_BIGQUERY_PROJECT_ID"
+        ),
+        bigquery_dataset_id=staging_dataset_id,
+    )
+    model_name = f"iceberg_sync_wif_smoke_{context.run_id}"
+    table_id = f"wif_smoke_{context.run_id}"
+    export_prefix = _export_prefix(context, model_name)
+    models = {
+        model_name: _select_model_sql(
+            context,
+            model_name=model_name,
+            model_sql=textwrap.dedent(
+                """
+                SELECT
+                  1 AS smoke_id,
+                  'wif-smoke' AS smoke_label
+                """
+            ).strip(),
+            predicates=[],
+            predicate_type="none",
+            table_id=table_id,
+            staging_dataset_id=staging_dataset_id,
+            base_location=export_prefix,
+            export_prefix=export_prefix,
+        )
+    }
+
+    _write_project(context, models)
+    try:
+        _run_dbt(context, "deps")
+        _run_dbt(context, "run", "--select", model_name)
+        _assert_models(
+            context,
+            [
+                _assertion(
+                    context,
+                    model_name,
+                    expected_modes=["full_refresh"],
+                    expected_rows=1,
+                    expected_source_job_reference_counts=[2],
+                    require_staging_table=True,
+                )
+            ],
+        )
+    finally:
+        _cleanup(context, [model_name])
+
+
 def test_dbt_extract_skips_missing_table(tmp_path: Path):
     context = _integration_context(tmp_path, "extract_skip_missing")
     model_name = f"iceberg_sync_extract_skip_missing_{context.run_id}"
@@ -113,9 +178,7 @@ def test_dbt_extract_datetime(tmp_path: Path):
         model_name: _extract_model_sql(
             context,
             model_name=model_name,
-            table_id=_required_env(
-                "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATETIME_TABLE_ID"
-            ),
+            table_id=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATETIME_TABLE_ID"),
             export_predicate_type="none",
             base_location=export_prefix,
             export_prefix=export_prefix,
@@ -190,9 +253,7 @@ def test_dbt_extract_modes(tmp_path: Path):
             ),
             "export_predicate_type": "auto",
             "full_refresh_predicates": [
-                _required_env(
-                    "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIME_PARTITION_DECORATOR"
-                )
+                _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIME_PARTITION_DECORATOR")
             ],
             "expected_rows": _required_int_env(
                 "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIME_PARTITION_EXPECTED_ROWS"
@@ -205,9 +266,7 @@ def test_dbt_extract_modes(tmp_path: Path):
             ),
             "export_predicate_type": "partition_decorator",
             "full_refresh_predicates": [
-                _required_env(
-                    "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIME_PARTITION_DECORATOR"
-                )
+                _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIME_PARTITION_DECORATOR")
             ],
             "expected_rows": _required_int_env(
                 "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIME_PARTITION_EXPECTED_ROWS"
@@ -220,9 +279,7 @@ def test_dbt_extract_modes(tmp_path: Path):
             ),
             "export_predicate_type": "auto",
             "full_refresh_predicates": [
-                _required_env(
-                    "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_RANGE_PARTITION_DECORATOR"
-                )
+                _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_RANGE_PARTITION_DECORATOR")
             ],
             "expected_rows": _required_int_env(
                 "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_RANGE_PARTITION_EXPECTED_ROWS"
@@ -235,9 +292,7 @@ def test_dbt_extract_modes(tmp_path: Path):
             ),
             "export_predicate_type": "partition_decorator",
             "full_refresh_predicates": [
-                _required_env(
-                    "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_RANGE_PARTITION_DECORATOR"
-                )
+                _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_RANGE_PARTITION_DECORATOR")
             ],
             "expected_rows": _required_int_env(
                 "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_RANGE_PARTITION_EXPECTED_ROWS"
@@ -245,9 +300,7 @@ def test_dbt_extract_modes(tmp_path: Path):
         },
         {
             "suffix": "sharded_auto_all",
-            "table_id": _required_env(
-                "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_TABLE_ID"
-            ),
+            "table_id": _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_TABLE_ID"),
             "export_predicate_type": "auto",
             "full_refresh_predicates": [],
             "expected_rows": _required_int_env(
@@ -256,9 +309,7 @@ def test_dbt_extract_modes(tmp_path: Path):
         },
         {
             "suffix": "sharded_none_all",
-            "table_id": _required_env(
-                "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_TABLE_ID"
-            ),
+            "table_id": _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_TABLE_ID"),
             "export_predicate_type": "none",
             "full_refresh_predicates": [],
             "expected_rows": _required_int_env(
@@ -267,9 +318,7 @@ def test_dbt_extract_modes(tmp_path: Path):
         },
         {
             "suffix": "sharded_auto_suffix",
-            "table_id": _required_env(
-                "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_TABLE_ID"
-            ),
+            "table_id": _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_TABLE_ID"),
             "export_predicate_type": "auto",
             "full_refresh_predicates": [
                 _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_SUFFIX")
@@ -280,9 +329,7 @@ def test_dbt_extract_modes(tmp_path: Path):
         },
         {
             "suffix": "sharded_table_suffix",
-            "table_id": _required_env(
-                "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_TABLE_ID"
-            ),
+            "table_id": _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_TABLE_ID"),
             "export_predicate_type": "table_suffix",
             "full_refresh_predicates": [
                 _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_SUFFIX")
@@ -328,9 +375,7 @@ def test_dbt_extract_modes(tmp_path: Path):
 
 def test_dbt_extract_compression_modes(tmp_path: Path):
     context = _integration_context(tmp_path, "extract_compression")
-    table_id = _required_env(
-        "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_NON_PARTITIONED_TABLE_ID"
-    )
+    table_id = _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_NON_PARTITIONED_TABLE_ID")
     expected_rows = _required_int_env(
         "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_NON_PARTITIONED_EXPECTED_ROWS"
     )
@@ -397,11 +442,7 @@ def test_dbt_select_query_export(tmp_path: Path):
         {
             "suffix": "auto_where",
             "predicate_type": "auto",
-            "predicates": [
-                _required_env(
-                    "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_PREDICATE"
-                )
-            ],
+            "predicates": [_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_PREDICATE")],
             "expected_rows": _required_int_env(
                 "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_EXPECTED_ROWS"
             ),
@@ -412,11 +453,7 @@ def test_dbt_select_query_export(tmp_path: Path):
         {
             "suffix": "where",
             "predicate_type": "where",
-            "predicates": [
-                _required_env(
-                    "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_PREDICATE"
-                )
-            ],
+            "predicates": [_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_PREDICATE")],
             "expected_rows": _required_int_env(
                 "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_EXPECTED_ROWS"
             ),
@@ -427,11 +464,7 @@ def test_dbt_select_query_export(tmp_path: Path):
         {
             "suffix": "reuse",
             "predicate_type": "where",
-            "predicates": [
-                _required_env(
-                    "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_PREDICATE"
-                )
-            ],
+            "predicates": [_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_PREDICATE")],
             "expected_rows": _required_int_env(
                 "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_EXPECTED_ROWS"
             ),
@@ -442,11 +475,7 @@ def test_dbt_select_query_export(tmp_path: Path):
         {
             "suffix": "force_rebuild",
             "predicate_type": "where",
-            "predicates": [
-                _required_env(
-                    "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_PREDICATE"
-                )
-            ],
+            "predicates": [_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_PREDICATE")],
             "expected_rows": _required_int_env(
                 "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SELECT_EXPECTED_ROWS"
             ),
@@ -476,9 +505,7 @@ def test_dbt_select_query_export(tmp_path: Path):
             base_location=export_prefix,
             export_prefix=export_prefix,
             staging_table_reuse=bool(case["staging_table_reuse"]),
-            force_rebuild_staging_table=bool(
-                case.get("force_rebuild_staging_table", False)
-            ),
+            force_rebuild_staging_table=bool(case.get("force_rebuild_staging_table", False)),
         )
         assertions.append(
             _assertion(
@@ -510,9 +537,7 @@ def test_dbt_incremental_delete_copy(tmp_path: Path):
         model_name: _extract_model_sql(
             context,
             model_name=model_name,
-            table_id=_required_env(
-                "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_INCREMENTAL_TABLE_ID"
-            ),
+            table_id=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_INCREMENTAL_TABLE_ID"),
             export_predicate_type=os.environ.get(
                 "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_INCREMENTAL_EXPORT_PREDICATE_TYPE",
                 "auto",
@@ -524,9 +549,7 @@ def test_dbt_incremental_delete_copy(tmp_path: Path):
             incremental_predicates=_required_env_list(
                 "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_INCREMENTAL_PREDICATES"
             ),
-            incremental_predicate=_required_env(
-                "DBT_SNOWFLAKE_ICEBERG_SYNC_INCREMENTAL_PREDICATE"
-            ),
+            incremental_predicate=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_INCREMENTAL_PREDICATE"),
             base_location=export_prefix,
             export_prefix=export_prefix,
         )
@@ -557,9 +580,7 @@ def test_dbt_incremental_delete_copy(tmp_path: Path):
 
 def test_dbt_invalid_parameter_combinations(tmp_path: Path):
     context = _integration_context(tmp_path, "invalid")
-    sharded_table_id = _required_env(
-        "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_TABLE_ID"
-    )
+    sharded_table_id = _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_SHARDED_TABLE_ID")
     cases = [
         {
             "suffix": "extract_where",
@@ -661,9 +682,7 @@ def test_dbt_invalid_parameter_combinations(tmp_path: Path):
             "sql": _extract_model_sql(
                 context,
                 model_name=f"invalid_incremental_bq_only_{context.run_id}",
-                table_id=_required_env(
-                    "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_INCREMENTAL_TABLE_ID"
-                ),
+                table_id=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_INCREMENTAL_TABLE_ID"),
                 export_predicate_type="auto",
                 materialization_strategy="incremental",
                 full_refresh_predicates=_required_env_list(
@@ -682,9 +701,7 @@ def test_dbt_invalid_parameter_combinations(tmp_path: Path):
             "sql": _extract_model_sql(
                 context,
                 model_name=f"invalid_incremental_snowflake_only_{context.run_id}",
-                table_id=_required_env(
-                    "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_INCREMENTAL_TABLE_ID"
-                ),
+                table_id=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_INCREMENTAL_TABLE_ID"),
                 export_predicate_type="auto",
                 materialization_strategy="incremental",
                 full_refresh_predicates=_required_env_list(
@@ -709,9 +726,7 @@ def test_dbt_invalid_parameter_combinations(tmp_path: Path):
                 export_predicate_type="auto",
                 base_location="unused",
                 export_prefix="unused",
-                extra_config={
-                    "google_cloud_service_account_secret_fqdn": "DB.SCHEMA.SECRET"
-                },
+                extra_config={"google_cloud_service_account_secret_fqdn": "DB.SCHEMA.SECRET"},
             ),
             "message": "credential material",
         },
@@ -740,9 +755,7 @@ def test_dbt_invalid_parameter_combinations(tmp_path: Path):
                 ),
                 export_predicate_type="none",
                 full_refresh_predicates=[
-                    _required_env(
-                        "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIME_PARTITION_DECORATOR"
-                    )
+                    _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIME_PARTITION_DECORATOR")
                 ],
                 base_location="unused",
                 export_prefix="unused",
@@ -826,10 +839,7 @@ def test_dbt_invalid_parameter_combinations(tmp_path: Path):
             "message": "does not accept predicates",
         },
     ]
-    models = {
-        f"iceberg_sync_{case['suffix']}_{context.run_id}": str(case["sql"])
-        for case in cases
-    }
+    models = {f"iceberg_sync_{case['suffix']}_{context.run_id}": str(case["sql"]) for case in cases}
     _write_project(context, models)
     try:
         _run_dbt(context, "deps")
@@ -845,9 +855,38 @@ def test_dbt_invalid_parameter_combinations(tmp_path: Path):
         _cleanup(context, list(models))
 
 
-def _integration_context(tmp_path: Path, prefix: str) -> IntegrationContext:
+def _integration_context(
+    tmp_path: Path,
+    prefix: str,
+    *,
+    auth_method: str = "service_account_key",
+    bigquery_project_id: str | None = None,
+    bigquery_dataset_id: str | None = None,
+) -> IntegrationContext:
     if os.environ.get("DBT_SNOWFLAKE_ICEBERG_SYNC_RUN_INTEGRATION") != "1":
         pytest.skip("set DBT_SNOWFLAKE_ICEBERG_SYNC_RUN_INTEGRATION=1 to run")
+
+    if auth_method == "workload_identity_federation":
+        wif_secret_fqdn = _required_env(
+            "DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SECRET_FQDN"
+        )
+        wif_audience = _required_env(
+            "DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_AUDIENCE"
+        )
+        wif_impersonation = os.environ.get(
+            "DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SERVICE_ACCOUNT"
+        )
+        secret_fqdn = ""
+        secret_alias = ""
+    else:
+        wif_secret_fqdn = None
+        wif_audience = None
+        wif_impersonation = None
+        secret_fqdn = _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_SECRET_FQDN")
+        secret_alias = os.environ.get(
+            "DBT_SNOWFLAKE_ICEBERG_SYNC_SECRET_ALIAS",
+            "google_cloud_service_account_credentials_json",
+        )
 
     run_id = uuid.uuid4().hex[:12]
     snowflake_database = _required_env("SNOWFLAKE_DATABASE")
@@ -890,17 +929,16 @@ def _integration_context(tmp_path: Path, prefix: str) -> IntegrationContext:
         external_access_integration=_required_env(
             "DBT_SNOWFLAKE_ICEBERG_SYNC_EXTERNAL_ACCESS_INTEGRATION"
         ),
-        secret_fqdn=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_SECRET_FQDN"),
-        secret_alias=os.environ.get(
-            "DBT_SNOWFLAKE_ICEBERG_SYNC_SECRET_ALIAS",
-            "google_cloud_service_account_credentials_json",
-        ),
-        bigquery_project_id=_required_env(
-            "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_PROJECT_ID"
-        ),
-        bigquery_dataset_id=_required_env(
-            "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATASET_ID"
-        ),
+        secret_fqdn=secret_fqdn,
+        secret_alias=secret_alias,
+        google_cloud_auth_method=auth_method,
+        google_cloud_workload_identity_federation_secret_fqdn=wif_secret_fqdn,
+        google_cloud_workload_identity_federation_audience=wif_audience,
+        google_cloud_service_account_impersonation=wif_impersonation,
+        bigquery_project_id=bigquery_project_id
+        or _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_PROJECT_ID"),
+        bigquery_dataset_id=bigquery_dataset_id
+        or _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATASET_ID"),
         bigquery_location=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_LOCATION"),
     )
 
@@ -914,6 +952,34 @@ def _write_project(context: IntegrationContext, models: dict[str, str]) -> None:
         f"packages:\n  - local: {context.package_path}\n",
         encoding="utf-8",
     )
+    auth_lines = [
+        f"                google_cloud_auth_method: {context.google_cloud_auth_method}",
+    ]
+    if context.google_cloud_auth_method == "service_account_key":
+        auth_lines.extend(
+            [
+                "                google_cloud_service_account_secret_fqdn: "
+                f"{context.secret_fqdn}",
+                "                google_cloud_service_account_secret_alias: "
+                f"{context.secret_alias}",
+            ]
+        )
+    else:
+        auth_lines.extend(
+            [
+                "                google_cloud_workload_identity_federation_secret_fqdn: "
+                f"{context.google_cloud_workload_identity_federation_secret_fqdn}",
+                "                google_cloud_workload_identity_federation_audience: "
+                f"{context.google_cloud_workload_identity_federation_audience}",
+            ]
+        )
+        if context.google_cloud_service_account_impersonation:
+            auth_lines.append(
+                "                google_cloud_service_account_impersonation: "
+                f"{context.google_cloud_service_account_impersonation}"
+            )
+    auth_block = "\n".join(auth_lines)
+
     (context.project_dir / "dbt_project.yml").write_text(
         textwrap.dedent(
             f"""
@@ -938,8 +1004,7 @@ def _write_project(context: IntegrationContext, models: dict[str, str]) -> None:
                 handler_local_path: {json.dumps(str(context.package_path / "procedure"))}
                 external_access_integrations:
                   - {context.external_access_integration}
-                google_cloud_service_account_secret_fqdn: {context.secret_fqdn}
-                google_cloud_service_account_secret_alias: {context.secret_alias}
+{auth_block}
             """
         ).lstrip(),
         encoding="utf-8",
@@ -1013,7 +1078,7 @@ def _extract_model_sql(
               'iceberg_sync': {{
                 'source_type': 'bigquery',
                 'materialization_strategy': {_jstr(materialization_strategy)},
-        {textwrap.indent(incremental_config, '    ').rstrip()}
+        {textwrap.indent(incremental_config, "    ").rstrip()}
                 'bigquery_export_strategy': 'extract',
                 'google_cloud_project_id': {_jstr(context.bigquery_project_id)},
                 'bigquery_dataset_id': {_jstr(dataset_id or context.bigquery_dataset_id)},
@@ -1454,10 +1519,7 @@ def _required_env(name: str) -> str:
     value = os.environ.get(name)
     if not value:
         if os.environ.get("DBT_SNOWFLAKE_ICEBERG_SYNC_RUN_INTEGRATION") == "1":
-            pytest.fail(
-                f"{name} is required when "
-                "DBT_SNOWFLAKE_ICEBERG_SYNC_RUN_INTEGRATION=1"
-            )
+            pytest.fail(f"{name} is required when DBT_SNOWFLAKE_ICEBERG_SYNC_RUN_INTEGRATION=1")
         pytest.skip(f"{name} is required for integration tests")
     return value
 
@@ -1502,8 +1564,9 @@ def _profile_yaml(*, database: str, schema: str) -> str:
         if value:
             optional_lines.append(f"      {profile_name}: {value}")
 
-    return textwrap.dedent(
-        f"""
+    return (
+        textwrap.dedent(
+            f"""
         iceberg_sync_integration:
           target: test
           outputs:
@@ -1516,7 +1579,10 @@ def _profile_yaml(*, database: str, schema: str) -> str:
               schema: {schema}
               threads: 1
         """
-    ).lstrip() + "\n".join(optional_lines) + "\n"
+        ).lstrip()
+        + "\n".join(optional_lines)
+        + "\n"
+    )
 
 
 def _export_prefix(context: IntegrationContext, model_name: str) -> str:

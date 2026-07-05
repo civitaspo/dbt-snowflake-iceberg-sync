@@ -163,9 +163,7 @@ class BigQuerySourceAdapter:
                 raise
             if schema_fields is None:
                 schema_fields = table.get("schema", {}).get("fields", [])
-            segment_uri = (
-                f"{destination_uri.rstrip('/')}/segment-{len(segments):05d}-*.parquet"
-            )
+            segment_uri = f"{destination_uri.rstrip('/')}/segment-{len(segments):05d}-*.parquet"
             try:
                 job = self.client.run_extract_job(
                     bq.project_id,
@@ -285,9 +283,7 @@ class BigQuerySourceAdapter:
                 raise
             if schema_fields is None:
                 schema_fields = table.get("schema", {}).get("fields", [])
-            segment_uri = (
-                f"{destination_uri.rstrip('/')}/segment-{len(segments):05d}-*.parquet"
-            )
+            segment_uri = f"{destination_uri.rstrip('/')}/segment-{len(segments):05d}-*.parquet"
             try:
                 job = self.client.insert_extract_job(
                     bq.project_id,
@@ -392,9 +388,7 @@ class BigQuerySourceAdapter:
             _raise_if_job_failed(job)
 
             bq = config.bigquery
-            expiration = datetime.now(tz=UTC) + timedelta(
-                hours=bq.staging_table_expiration_hours
-            )
+            expiration = datetime.now(tz=UTC) + timedelta(hours=bq.staging_table_expiration_hours)
             staging_ref = state["staging_ref"]
             self.client.patch_table(
                 bq.project_id,
@@ -402,9 +396,7 @@ class BigQuerySourceAdapter:
                 staging_ref["tableId"],
                 {
                     "expirationTime": str(int(expiration.timestamp() * 1000)),
-                    "labels": {
-                        "dbt_iceberg_sync_hash": str(state["expected_hash"])[:63]
-                    },
+                    "labels": {"dbt_iceberg_sync_hash": str(state["expected_hash"])[:63]},
                 },
             )
         return self._submit_select_extract(config, state)
@@ -436,9 +428,7 @@ class BigQuerySourceAdapter:
                 "status": "running",
                 "phase": "extract",
                 "schema_fields": schema_fields,
-                "segments": [
-                    {"table_id": staging_ref["tableId"], "destination_uri": segment_uri}
-                ],
+                "segments": [{"table_id": staging_ref["tableId"], "destination_uri": segment_uri}],
                 "job_references": [*state.get("job_references", []), extract_ref],
                 "pending_jobs": [extract_ref],
             }
@@ -521,9 +511,7 @@ def concrete_extract_tables(
         return [prefix + predicate for predicate in predicates]
     if predicate_type == "partition_decorator":
         if bq.table_id.endswith("_*") or "*" in bq.table_id:
-            raise ConfigError(
-                "partition_decorator requires a concrete native partitioned table"
-            )
+            raise ConfigError("partition_decorator requires a concrete native partitioned table")
         table = client.get_table(bq.project_id, bq.dataset_id, bq.table_id)
         if not _is_native_partitioned(table):
             raise ConfigError("partition_decorator requires a native partitioned table")
@@ -590,17 +578,13 @@ class BigQueryRestClient:
 
     def __init__(
         self,
-        google_cloud_service_account_info: dict[str, Any],
+        credentials: Any,
         requests_session: Any | None = None,
     ):
         import requests
         from google.auth.transport.requests import Request
-        from google.oauth2 import service_account
 
-        self.credentials = service_account.Credentials.from_service_account_info(
-            google_cloud_service_account_info,
-            scopes=["https://www.googleapis.com/auth/cloud-platform"],
-        )
+        self.credentials = _coerce_google_credentials(credentials)
         self.auth_request = Request()
         self.requests = requests_session or requests.Session()
 
@@ -770,6 +754,18 @@ class BigQueryRestClient:
         return response.json() if response.text else {}
 
 
+def _coerce_google_credentials(credentials: Any) -> Any:
+    if hasattr(credentials, "refresh") and hasattr(credentials, "valid"):
+        return credentials
+
+    from google.oauth2 import service_account
+
+    return service_account.Credentials.from_service_account_info(
+        credentials,
+        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+    )
+
+
 def _validate_predicate_type(
     bq: BigQueryConfig, predicate_type: str, predicates: tuple[str, ...]
 ) -> None:
@@ -822,9 +818,7 @@ def _is_missing_table_not_found(exc: SourceError) -> bool:
             messages = [error.get("message")]
             errors = error.get("errors")
             if isinstance(errors, list):
-                messages.extend(
-                    item.get("message") for item in errors if isinstance(item, dict)
-                )
+                messages.extend(item.get("message") for item in errors if isinstance(item, dict))
             return any(_is_missing_table_message(message) for message in messages)
 
     return _is_missing_table_message(str(exc))

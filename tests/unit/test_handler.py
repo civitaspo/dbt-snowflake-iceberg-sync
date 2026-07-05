@@ -255,8 +255,7 @@ def test_handler_skips_when_source_export_is_skipped(base_payload):
     assert result["error_message"] == "BigQuery extract source table was not found"
     assert ("create_iceberg_table", []) not in snowflake.calls
     assert not any(
-        call[0] in {"begin", "copy", "commit", "create_or_replace_view"}
-        for call in snowflake.calls
+        call[0] in {"begin", "copy", "commit", "create_or_replace_view"} for call in snowflake.calls
     )
     assert ("write_run_log", "skipped") in snowflake.calls
     assert snowflake.run_logs[-1]["status"] == "skipped"
@@ -326,9 +325,7 @@ def test_retryable_snowflake_internal_error_retries_and_succeeds(payload_factory
     )
     snowflake = FakeSnowflake(
         table_exists=False,
-        copy_errors=[
-            SnowflakeExecutionError("SQL execution internal error: incident 123")
-        ],
+        copy_errors=[SnowflakeExecutionError("SQL execution internal error: incident 123")],
     )
     source = FakeSource()
 
@@ -349,26 +346,17 @@ def test_retryable_snowflake_internal_error_retries_and_succeeds(payload_factory
     assert [call for call in source.calls if call[0] == "full_refresh"] == [
         ("full_refresh", "gcs://bucket/dbt/run")
     ]
-    assert (
-        snowflake.calls.count(("copy", '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/dbt/run'))
-        == 2
-    )
+    assert snowflake.calls.count(("copy", '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/dbt/run')) == 2
 
 
 def test_retryable_snowflake_internal_error_messages_are_classified():
     assert is_retryable_snowflake_error(
         SnowflakeExecutionError("SQL execution internal error while loading table")
     )
+    assert is_retryable_snowflake_error(SnowflakeExecutionError("Processing aborted; incident 42"))
+    assert not is_retryable_snowflake_error(SnowflakeExecutionError("000603 XX000 300005"))
     assert is_retryable_snowflake_error(
-        SnowflakeExecutionError("Processing aborted; incident 42")
-    )
-    assert not is_retryable_snowflake_error(
-        SnowflakeExecutionError("000603 XX000 300005")
-    )
-    assert is_retryable_snowflake_error(
-        SnowflakeExecutionError(
-            "Scoped transaction started in stored procedure is incomplete"
-        )
+        SnowflakeExecutionError("Scoped transaction started in stored procedure is incomplete")
     )
     assert not is_retryable_snowflake_error(ConfigError("invalid config"))
 
@@ -567,9 +555,7 @@ def test_success_run_log_lock_contention_is_retried_and_does_not_fail(payload_fa
 def test_success_run_log_failure_is_best_effort_by_default(base_payload):
     snowflake = FakeSnowflake(
         table_exists=False,
-        run_log_errors=[
-            SnowflakeExecutionError("non-retryable run log write failed")
-        ],
+        run_log_errors=[SnowflakeExecutionError("non-retryable run log write failed")],
     )
 
     result = IcebergSyncRunner(
@@ -587,9 +573,7 @@ def test_success_run_log_failure_can_be_strict(payload_factory):
     payload = payload_factory(run_log__fail_on_error=True)
     snowflake = FakeSnowflake(
         table_exists=False,
-        run_log_errors=[
-            SnowflakeExecutionError("non-retryable run log write failed")
-        ],
+        run_log_errors=[SnowflakeExecutionError("non-retryable run log write failed")],
     )
 
     with pytest.raises(SnowflakeExecutionError, match="run log write failed"):
@@ -604,9 +588,7 @@ def test_failure_run_log_error_does_not_mask_original_load_error(base_payload):
     snowflake = FakeSnowflake(
         table_exists=False,
         fail_copy=True,
-        run_log_errors=[
-            SnowflakeExecutionError("non-retryable run log write failed")
-        ],
+        run_log_errors=[SnowflakeExecutionError("non-retryable run log write failed")],
     )
 
     with pytest.raises(SnowflakeExecutionError, match="copy failed"):

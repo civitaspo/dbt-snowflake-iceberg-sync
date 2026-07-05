@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -231,9 +232,7 @@ def _extract_matrix_cases():
     ("shape_name", "requested_type", "predicates"),
     list(_extract_matrix_cases()),
 )
-def test_extract_predicate_type_matrix(
-    payload_factory, shape_name, requested_type, predicates
-):
+def test_extract_predicate_type_matrix(payload_factory, shape_name, requested_type, predicates):
     shape = EXTRACT_SHAPES[shape_name]
     client = FakeBigQueryClient()
     expected_error = _expected_extract_error(shape, requested_type, predicates)
@@ -306,9 +305,7 @@ def _expected_extract_plan(shape, requested_type, predicates):
         return "none", shape["all_tables"]
     if requested_type == "table_suffix":
         return "table_suffix", [f"events_{predicate}" for predicate in predicates]
-    return "partition_decorator", [
-        f"{shape['table_id']}${predicate}" for predicate in predicates
-    ]
+    return "partition_decorator", [f"{shape['table_id']}${predicate}" for predicate in predicates]
 
 
 def _select_matrix_cases():
@@ -426,19 +423,17 @@ def test_table_suffix_expands_concrete_tables(payload_factory):
 def test_extract_none_on_wildcard_lists_matching_tables(payload_factory):
     config = parse_config(payload_factory(bigquery__table_id="events_*"))
 
-    assert concrete_extract_tables(
-        config.bigquery, "none", (), FakeBigQueryClient()
-    ) == ["events_20260101", "events_20260102"]
+    assert concrete_extract_tables(config.bigquery, "none", (), FakeBigQueryClient()) == [
+        "events_20260101",
+        "events_20260102",
+    ]
 
 
 def test_auto_extract_time_partitioned_table_uses_partition_decorator(payload_factory):
     config = parse_config(payload_factory(bigquery__table_id="orders_by_date"))
     client = FakeBigQueryClient()
 
-    assert (
-        resolve_predicate_type(config.bigquery, ("20260101",), client)
-        == "partition_decorator"
-    )
+    assert resolve_predicate_type(config.bigquery, ("20260101",), client) == "partition_decorator"
     assert concrete_extract_tables(
         config.bigquery, "partition_decorator", ("20260101",), client
     ) == ["orders_by_date$20260101"]
@@ -448,12 +443,10 @@ def test_auto_extract_range_partitioned_table_uses_partition_decorator(payload_f
     config = parse_config(payload_factory(bigquery__table_id="orders_by_bucket"))
     client = FakeBigQueryClient()
 
-    assert (
-        resolve_predicate_type(config.bigquery, ("10",), client) == "partition_decorator"
-    )
-    assert concrete_extract_tables(
-        config.bigquery, "partition_decorator", ("10",), client
-    ) == ["orders_by_bucket$10"]
+    assert resolve_predicate_type(config.bigquery, ("10",), client) == "partition_decorator"
+    assert concrete_extract_tables(config.bigquery, "partition_decorator", ("10",), client) == [
+        "orders_by_bucket$10"
+    ]
 
 
 def test_extract_non_partitioned_table_runs_direct_extract(base_payload):
@@ -935,9 +928,7 @@ def test_select_export_runs_query_then_extracts_staging_table(payload_factory):
             "ZSTD",
         )
     ]
-    assert result.staging_table_reference == (
-        f"project.staging.{destination_table['tableId']}"
-    )
+    assert result.staging_table_reference == (f"project.staging.{destination_table['tableId']}")
 
 
 def test_select_export_uses_configured_compression(payload_factory):
@@ -1029,6 +1020,16 @@ def test_rest_extract_job_sets_parquet_compression():
         "destinationFormat": "PARQUET",
         "compression": "ZSTD",
     }
+
+
+def test_rest_client_accepts_injected_google_credentials():
+    credentials = SimpleNamespace(valid=True, token="token", refresh=lambda request: None)
+    requests_session = object()
+
+    client = BigQueryRestClient(credentials, requests_session=requests_session)
+
+    assert client.credentials is credentials
+    assert client.requests is requests_session
 
 
 def test_extract_export_raises_when_no_tables_match(payload_factory):

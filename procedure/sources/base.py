@@ -28,29 +28,24 @@ class SourceExportResult:
 class SourceAdapter(Protocol):
     source_type: str
 
-    def export_location(self, config: IcebergSyncConfig) -> str:
-        ...
+    def export_location(self, config: IcebergSyncConfig) -> str: ...
 
     def export(
         self,
         config: IcebergSyncConfig,
         context: SourceExecutionContext,
-    ) -> SourceExportResult:
-        ...
+    ) -> SourceExportResult: ...
 
-    def map_schema(self, export_result: SourceExportResult) -> list[SnowflakeColumn]:
-        ...
+    def map_schema(self, export_result: SourceExportResult) -> list[SnowflakeColumn]: ...
 
     def start_export(
         self,
         config: IcebergSyncConfig,
         context: SourceExecutionContext,
-    ) -> dict[str, Any]:
-        ...
+    ) -> dict[str, Any]: ...
 
     def poll_export(
         self,
         config: IcebergSyncConfig,
         state: dict[str, Any],
-    ) -> dict[str, Any]:
-        ...
+    ) -> dict[str, Any]: ...

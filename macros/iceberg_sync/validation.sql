@@ -103,7 +103,11 @@
     'google_cloud_service_account_json',
     'google_cloud_service_account_secret_fqdn',
     'google_cloud_service_account_secret_alias',
-    'google_application_credentials'
+    'google_application_credentials',
+    'google_cloud_auth_method',
+    'google_cloud_workload_identity_federation_secret_fqdn',
+    'google_cloud_workload_identity_federation_audience',
+    'google_cloud_service_account_impersonation'
   ] -%}
   {%- set model_meta = dbt_snowflake_iceberg_sync.iceberg_sync_model_meta(model_node) -%}
   {%- for key in forbidden -%}
@@ -121,6 +125,25 @@
 {% macro iceberg_sync_validate_payload(payload) -%}
   {%- if payload['source_type'] != 'bigquery' -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise("source_type must be 'bigquery'") -%}
+  {%- endif -%}
+
+  {%- set deployment = payload['deployment'] -%}
+  {%- if deployment['google_cloud_auth_method'] not in ['service_account_key', 'workload_identity_federation'] -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "google_cloud_auth_method must be 'service_account_key' or 'workload_identity_federation'"
+    ) -%}
+  {%- endif -%}
+  {%- if deployment['google_cloud_auth_method'] == 'workload_identity_federation' -%}
+    {%- if not deployment['google_cloud_workload_identity_federation_secret_fqdn'] -%}
+      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+        "google_cloud_auth_method='workload_identity_federation' requires google_cloud_workload_identity_federation_secret_fqdn"
+      ) -%}
+    {%- endif -%}
+    {%- if not deployment['google_cloud_workload_identity_federation_audience'] -%}
+      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+        "google_cloud_auth_method='workload_identity_federation' requires google_cloud_workload_identity_federation_audience"
+      ) -%}
+    {%- endif -%}
   {%- endif -%}
 
   {%- if payload['materialization_strategy'] not in ['full_refresh', 'incremental'] -%}

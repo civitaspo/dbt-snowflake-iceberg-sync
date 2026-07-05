@@ -10,6 +10,7 @@ def test_parse_config_defaults(base_payload):
     config = parse_config(base_payload)
 
     assert config.source_type == "bigquery"
+    assert config.deployment.google_cloud_auth_method == "service_account_key"
     assert config.bigquery.export_strategy == "extract"
     assert config.bigquery.export_compression == "ZSTD"
     assert config.bigquery.skip_missing_tables is False
@@ -86,6 +87,7 @@ def test_parse_config_normalizes_only_snowflake_object_identifiers(payload_facto
         ({"cleanup__created_table_on_failure": "not-bool"}, "cleanup_created_table"),
         ({"run_log__fail_on_error": "not-bool"}, "run_log_fail_on_error"),
         ({"bigquery__skip_missing_tables": "not-bool"}, "skip_missing_tables"),
+        ({"deployment__google_cloud_auth_method": "oidc"}, "google_cloud_auth_method"),
         ({"partition_by": ["event_date"]}, "partition_by"),
         ({"cluster_by": ["event_name"]}, "cluster_by"),
     ],
@@ -103,6 +105,22 @@ def test_rejects_secret_material_in_model_config(payload_factory):
             "google_cloud_service_account_secret_fqdn": "DB.SECRET.JSON",
         }
     )
+
+    with pytest.raises(ConfigError, match="credential material"):
+        parse_config(payload)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "google_cloud_auth_method",
+        "google_cloud_workload_identity_federation_secret_fqdn",
+        "google_cloud_workload_identity_federation_audience",
+        "google_cloud_service_account_impersonation",
+    ],
+)
+def test_rejects_workload_identity_federation_material_in_model_config(payload_factory, key):
+    payload = payload_factory(model_config={key: "value"})
 
     with pytest.raises(ConfigError, match="credential material"):
         parse_config(payload)
@@ -178,6 +196,62 @@ def test_bigquery_extract_skip_missing_tables_rejects_select_strategy(payload_fa
 
     with pytest.raises(ConfigError, match="skip_missing_tables"):
         parse_config(payload)
+
+
+def test_workload_identity_federation_requires_secret_and_audience(payload_factory):
+    payload = payload_factory(deployment__google_cloud_auth_method="workload_identity_federation")
+
+    with pytest.raises(
+        ConfigError,
+        match=(
+            "google_cloud_workload_identity_federation_secret_fqdn, "
+            "google_cloud_workload_identity_federation_audience"
+        ),
+    ):
+        parse_config(payload)
+
+
+def test_workload_identity_federation_secret_fqdn_must_be_three_part_name(payload_factory):
+    payload = payload_factory(
+        deployment__google_cloud_auth_method="workload_identity_federation",
+        deployment__google_cloud_workload_identity_federation_secret_fqdn="DB.SECRET",
+        deployment__google_cloud_workload_identity_federation_audience=(
+            "//iam.googleapis.com/projects/000000000000/locations/global/"
+            "workloadIdentityPools/example-pool/providers/example-provider"
+        ),
+    )
+
+    with pytest.raises(ConfigError, match="three-part Snowflake object name"):
+        parse_config(payload)
+
+
+def test_parse_config_accepts_workload_identity_federation(payload_factory):
+    payload = payload_factory(
+        deployment__google_cloud_auth_method="workload_identity_federation",
+        deployment__google_cloud_workload_identity_federation_secret_fqdn="db.auth.workload_identity_federation_secret",
+        deployment__google_cloud_workload_identity_federation_audience=(
+            "//iam.googleapis.com/projects/000000000000/locations/global/"
+            "workloadIdentityPools/example-pool/providers/example-provider"
+        ),
+        deployment__google_cloud_service_account_impersonation=(
+            "sync@example-project.iam.gserviceaccount.com"
+        ),
+    )
+
+    config = parse_config(payload)
+
+    assert config.deployment.google_cloud_auth_method == "workload_identity_federation"
+    assert (
+        config.deployment.google_cloud_workload_identity_federation_secret_fqdn
+        == "DB.AUTH.WORKLOAD_IDENTITY_FEDERATION_SECRET"
+    )
+    assert config.deployment.google_cloud_workload_identity_federation_audience.startswith(
+        "//iam.googleapis.com/"
+    )
+    assert (
+        config.deployment.google_cloud_service_account_impersonation
+        == "sync@example-project.iam.gserviceaccount.com"
+    )
 
 
 def _strategy_config_matrix_cases():
@@ -285,7 +359,7 @@ def test_incremental_predicates_must_pair_with_snowflake_predicate(payload_facto
 
 
 def test_incremental_predicate_must_pair_with_bigquery_predicates(payload_factory):
-    payload = payload_factory(incremental_predicate='"event_date" = \'2026-01-01\'')
+    payload = payload_factory(incremental_predicate="\"event_date\" = '2026-01-01'")
 
     with pytest.raises(ConfigError, match="both present or both absent"):
         parse_config(payload)
@@ -316,9 +390,7 @@ def test_incremental_predicate_must_pair_with_bigquery_predicates(payload_factor
         ({"model__sql": "select 1"}, "model SQL"),
     ],
 )
-def test_rejects_incompatible_bigquery_strategy_combinations(
-    payload_factory, updates, message
-):
+def test_rejects_incompatible_bigquery_strategy_combinations(payload_factory, updates, message):
     payload = payload_factory(**updates)
 
     with pytest.raises(ConfigError, match=message):
@@ -371,21 +443,27 @@ def test_rejects_missing_required_payload_fields(base_payload, path, message):
 def test_effective_mode_prefers_full_refresh_flag(payload_factory):
     config = parse_config(payload_factory(dbt_full_refresh=True))
 
-    assert effective_mode_for(
-        config,
-        internal_table_exists=True,
-        target_view_exists=True,
-    ) == "full_refresh"
+    assert (
+        effective_mode_for(
+            config,
+            internal_table_exists=True,
+            target_view_exists=True,
+        )
+        == "full_refresh"
+    )
 
 
 def test_effective_mode_prefers_materialization_full_refresh(payload_factory):
     config = parse_config(payload_factory(materialization_strategy="full_refresh"))
 
-    assert effective_mode_for(
-        config,
-        internal_table_exists=True,
-        target_view_exists=True,
-    ) == "full_refresh"
+    assert (
+        effective_mode_for(
+            config,
+            internal_table_exists=True,
+            target_view_exists=True,
+        )
+        == "full_refresh"
+    )
 
 
 def test_effective_mode_full_refresh_when_table_missing(base_payload):
@@ -479,7 +557,7 @@ def test_predicates_are_selected_by_effective_mode(payload_factory):
         payload_factory(
             bigquery__full_refresh_predicates=["20260101"],
             bigquery__incremental_predicates=["20260102"],
-            incremental_predicate='"event_date" = \'2026-01-02\'',
+            incremental_predicate="\"event_date\" = '2026-01-02'",
         )
     )
 

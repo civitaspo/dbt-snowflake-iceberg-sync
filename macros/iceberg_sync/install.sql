@@ -8,12 +8,14 @@
   {%- set handler_local_path = deployment['handler_local_path'] -%}
   {%- set external_access_integrations = deployment['external_access_integrations'] -%}
   {%- set run_log_table = deployment['run_log_table'] -%}
+  {%- set google_cloud_auth_method = deployment['google_cloud_auth_method'] -%}
   {%- set google_cloud_service_account_secret_fqdn = deployment['google_cloud_service_account_secret_fqdn'] -%}
   {%- set google_cloud_service_account_secret_alias = deployment['google_cloud_service_account_secret_alias'] -%}
   {%- set procedure_files = [
     '__init__.py',
     'handler.py',
     'config.py',
+    'google_cloud_auth.py',
     'snowflake.py',
     'schema.py',
     'run_log.py',
@@ -81,7 +83,9 @@
     {%- if external_access_integrations | length > 0 %}
     EXTERNAL_ACCESS_INTEGRATIONS = ({{ external_access_integrations | join(', ') }})
     {%- endif %}
+    {%- if google_cloud_auth_method == 'service_account_key' %}
     SECRETS = ('{{ google_cloud_service_account_secret_alias }}' = {{ google_cloud_service_account_secret_fqdn }})
+    {%- endif %}
     EXECUTE AS CALLER
   {%- endcall %}
 {%- endmacro %}

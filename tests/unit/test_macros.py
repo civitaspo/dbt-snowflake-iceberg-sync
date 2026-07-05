@@ -13,7 +13,7 @@ def test_json_sql_literal_round_trips_single_quotes_for_snowflake_sql():
     payload = {
         "incremental_predicate": "event_date = '20240111'",
         "model_sql": "select\n  *\nfrom `project.dataset.table`",
-        "quoted_incremental_predicate": '"event_date" = \'20240111\'',
+        "quoted_incremental_predicate": "\"event_date\" = '20240111'",
     }
 
     literal = _render_json_sql_literal(payload)
@@ -183,9 +183,7 @@ def test_type_normalization_accepts_snowflake_structured_type_canonicalization()
         '"float_value" DOUBLE, "double_value" DOUBLE)))'
     )
 
-    assert _render_normalized_snowflake_type(existing) == _render_normalized_snowflake_type(
-        desired
-    )
+    assert _render_normalized_snowflake_type(existing) == _render_normalized_snowflake_type(desired)
 
 
 def test_deployment_config_honors_explicit_procedure_overrides():
@@ -258,9 +256,59 @@ def test_deployment_config_quotes_secret_fqdn():
         }
     )
 
+    assert config["google_cloud_service_account_secret_fqdn"] == '"SYSTEM"."SECRETS"."GCP""JSON"'
+
+
+def test_deployment_config_accepts_workload_identity_federation_vars():
+    vars_dict = _minimal_deployment_vars()
+    vars_dict.pop("google_cloud_service_account_secret_fqdn")
+    vars_dict["google_cloud_auth_method"] = "workload_identity_federation"
+    vars_dict["google_cloud_workload_identity_federation_secret_fqdn"] = (
+        "analytics.auth.workload_identity_federation_secret"
+    )
+    vars_dict["google_cloud_workload_identity_federation_audience"] = (
+        "//iam.googleapis.com/projects/000000000000/locations/global/"
+        "workloadIdentityPools/example-pool/providers/example-provider"
+    )
+    vars_dict["google_cloud_service_account_impersonation"] = (
+        "sync@example-project.iam.gserviceaccount.com"
+    )
+
+    config = _render_deployment_config(vars_dict)
+
+    assert config["google_cloud_auth_method"] == "workload_identity_federation"
+    assert config["google_cloud_service_account_secret_fqdn"] is None
+    assert config["google_cloud_workload_identity_federation_secret_fqdn"] == (
+        "ANALYTICS.AUTH.WORKLOAD_IDENTITY_FEDERATION_SECRET"
+    )
+    assert config["google_cloud_workload_identity_federation_audience"].startswith(
+        "//iam.googleapis.com/"
+    )
     assert (
-        config["google_cloud_service_account_secret_fqdn"]
-        == '"SYSTEM"."SECRETS"."GCP""JSON"'
+        config["google_cloud_service_account_impersonation"]
+        == "sync@example-project.iam.gserviceaccount.com"
+    )
+
+
+def test_deployment_config_honors_top_level_workload_identity_federation_overrides():
+    vars_dict = _minimal_deployment_vars()
+    top_level_vars = {
+        "iceberg_sync_google_cloud_auth_method": "workload_identity_federation",
+        "iceberg_sync_google_cloud_workload_identity_federation_secret_fqdn": (
+            "analytics.auth.top_level_secret"
+        ),
+        "iceberg_sync_google_cloud_workload_identity_federation_audience": (
+            "//iam.googleapis.com/projects/000000000000/locations/global/"
+            "workloadIdentityPools/example-pool/providers/example-provider"
+        ),
+    }
+
+    config = _render_deployment_config(vars_dict, top_level_vars=top_level_vars)
+
+    assert config["google_cloud_auth_method"] == "workload_identity_federation"
+    assert (
+        config["google_cloud_workload_identity_federation_secret_fqdn"]
+        == "ANALYTICS.AUTH.TOP_LEVEL_SECRET"
     )
 
 
@@ -316,19 +364,29 @@ def _render_deployment_config(
     *,
     target_database: str = "analytics",
     target_schema: str = "dbt_user",
+    top_level_vars: dict[str, object] | None = None,
 ) -> dict[str, object]:
     macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/config.sql"
     template = Environment(extensions=["jinja2.ext.do"]).from_string(
         macro_path.read_text(encoding="utf-8") + "\n{{ iceberg_sync_deployment_config() }}"
     )
 
+    top_level_vars = top_level_vars or {}
     rendered = template.render(
         {
-            "var": lambda name, default=None: vars_dict if name == "iceberg_sync" else default,
+            "var": lambda name, default=None: (
+                vars_dict if name == "iceberg_sync" else top_level_vars.get(name, default)
+            ),
             "target": SimpleNamespace(database=target_database, schema=target_schema),
             "dbt_snowflake_iceberg_sync": SimpleNamespace(
                 iceberg_sync_as_list=_as_list,
                 iceberg_sync_defaulted_var=_defaulted_var,
+                iceberg_sync_deployment_var=lambda current_vars, key, default=None: _deployment_var(
+                    top_level_vars,
+                    current_vars,
+                    key,
+                    default,
+                ),
                 iceberg_sync_normalize_object_identifier=_normalize_object_identifier,
                 iceberg_sync_object_fqn=_object_fqn,
                 iceberg_sync_quote_object_identifier=_quote_object_identifier,
@@ -391,6 +449,15 @@ def _defaulted_var(vars_dict: dict[str, object], key: str, default: object) -> o
     return value
 
 
+def _deployment_var(
+    top_level_vars: dict[str, object],
+    vars_dict: dict[str, object],
+    key: str,
+    default: object,
+) -> object:
+    return top_level_vars.get(f"iceberg_sync_{key}", _defaulted_var(vars_dict, key, default))
+
+
 def _required_var(vars_dict: dict[str, object], key: str) -> object:
     value = vars_dict.get(key)
     if value is None or value == "":
@@ -425,9 +492,7 @@ def _object_fqn(
 ) -> str:
     parts = str(value).split(".")
     if len(parts) < min_parts or len(parts) > max_parts:
-        raise RuntimeError(
-            f"{field_name} must have between {min_parts} and {max_parts} parts"
-        )
+        raise RuntimeError(f"{field_name} must have between {min_parts} and {max_parts} parts")
     if any(not str(part).strip() for part in parts):
         raise RuntimeError(f"{field_name} contains an empty identifier")
     return ".".join(_quote_object_identifier(part) for part in parts)
@@ -447,8 +512,7 @@ def _relation_from_fqn(value: object, field_name: str) -> dict[str, str]:
 def _render_json_sql_literal(value: dict[str, str]) -> str:
     macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/json.sql"
     template = Environment().from_string(
-        macro_path.read_text(encoding="utf-8")
-        + "\n{{ iceberg_sync_json_sql_literal(value) }}"
+        macro_path.read_text(encoding="utf-8") + "\n{{ iceberg_sync_json_sql_literal(value) }}"
     )
     return template.render({"value": value, "return": lambda item: item}).strip()
 

@@ -39,8 +39,7 @@ def test_iceberg_sync_dbt_run_orchestrates_snowflake_work_in_dbt(
     assert any("load_mode = add_files_copy" in sql for sql in normalized_statements)
     assert any("create or replace view" in sql for sql in normalized_statements)
     assert any(
-        "insert into" in sql and "iceberg_sync_run_log" in sql
-        for sql in normalized_statements
+        "insert into" in sql and "iceberg_sync_run_log" in sql for sql in normalized_statements
     )
     assert not any("000603" in sql or "300005" in sql for sql in normalized_statements)
 
@@ -131,8 +130,7 @@ def test_iceberg_sync_dbt_run_rejects_invalid_outer_retry_number(
 
     assert not run_result.success
     assert not any(
-        _normalize_sql(call["sql"]).startswith("execute immediate ")
-        for call in executed_sql
+        _normalize_sql(call["sql"]).startswith("execute immediate ") for call in executed_sql
     )
 
 
