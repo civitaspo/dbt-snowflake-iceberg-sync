@@ -41,7 +41,7 @@ BigQuery:
 - A network rule and external access integration for BigQuery API calls.
 - A Snowflake secret for Google Cloud auth:
   - a generic secret containing the Google Cloud service account JSON when
-    `google_cloud_auth_method=service_account_key` (default), or
+    `google_cloud_auth_method=service_account_credentials_json` (default), or
   - a workload identity federation secret when
     `google_cloud_auth_method=workload_identity_federation`.
 - A database/schema where the package procedure can be installed.
@@ -84,9 +84,9 @@ Deployment vars:
 | `handler_import_name` | No | `iceberg_sync_procedure` | Import directory name mounted into the Snowflake Python runtime. |
 | `handler_name` | No | `<handler_import_name>.handler.main` | Python procedure entry point. |
 | `external_access_integrations` | No | `[]` | External access integrations granted to the procedure. |
-| `google_cloud_auth_method` | No | `service_account_key` | Google Cloud auth mode. Supported values are `service_account_key` and `workload_identity_federation`. |
-| `google_cloud_service_account_secret_fqdn` | Yes for `service_account_key` | None | Fully qualified Snowflake secret containing the Google Cloud service account JSON. |
-| `google_cloud_service_account_secret_alias` | No | `google_cloud_service_account_credentials_json` | Secret alias read by the Python handler for `service_account_key`. |
+| `google_cloud_auth_method` | No | `service_account_credentials_json` | Google Cloud auth mode. Supported values are `service_account_credentials_json` and `workload_identity_federation`. The legacy value `service_account_key` is still accepted as an alias. |
+| `google_cloud_service_account_secret_fqdn` | Yes for `service_account_credentials_json` | None | Fully qualified Snowflake secret containing the Google Cloud service account JSON. |
+| `google_cloud_service_account_secret_alias` | No | `google_cloud_service_account_credentials_json` | Secret alias read by the Python handler for `service_account_credentials_json`. |
 | `google_cloud_workload_identity_federation_secret_fqdn` | Yes for `workload_identity_federation` | None | Three-part name of the Snowflake workload identity federation secret used by `SYSTEM$ISSUE_WORKLOAD_IDENTITY_FEDERATION_TOKEN`. |
 | `google_cloud_workload_identity_federation_audience` | Yes for `workload_identity_federation` | None | Google Cloud workload identity provider resource name, for example `//iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool_id>/providers/<provider_id>`. |
 | `google_cloud_service_account_impersonation` | No | None | Optional Google Cloud service account email to impersonate after the STS token exchange. |

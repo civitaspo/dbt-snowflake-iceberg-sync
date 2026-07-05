@@ -10,7 +10,7 @@ def test_parse_config_defaults(base_payload):
     config = parse_config(base_payload)
 
     assert config.source_type == "bigquery"
-    assert config.deployment.google_cloud_auth_method == "service_account_key"
+    assert config.deployment.google_cloud_auth_method == "service_account_credentials_json"
     assert config.bigquery.export_strategy == "extract"
     assert config.bigquery.export_compression == "ZSTD"
     assert config.bigquery.skip_missing_tables is False
@@ -22,6 +22,14 @@ def test_parse_config_defaults(base_payload):
     assert config.retry.max_attempts == 3
     assert config.cleanup.created_table_on_failure is True
     assert config.run_log.fail_on_error is False
+
+
+def test_parse_config_accepts_legacy_service_account_key_alias(payload_factory):
+    config = parse_config(
+        payload_factory(deployment__google_cloud_auth_method="service_account_key")
+    )
+
+    assert config.deployment.google_cloud_auth_method == "service_account_credentials_json"
 
 
 def test_parse_config_normalizes_only_snowflake_object_identifiers(payload_factory):

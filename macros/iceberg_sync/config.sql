@@ -153,12 +153,15 @@
   {%- set google_cloud_auth_method = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_var(
     vars_dict,
     'google_cloud_auth_method',
-    'service_account_key'
+    'service_account_credentials_json'
   ) -%}
-  {%- if google_cloud_auth_method not in ['service_account_key', 'workload_identity_federation'] -%}
+  {%- if google_cloud_auth_method == 'service_account_key' -%}
+    {%- set google_cloud_auth_method = 'service_account_credentials_json' -%}
+  {%- endif -%}
+  {%- if google_cloud_auth_method not in ['service_account_credentials_json', 'workload_identity_federation'] -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
       "vars.iceberg_sync.google_cloud_auth_method (or top-level var iceberg_sync_google_cloud_auth_method) must be "
-      ~ "'service_account_key' or 'workload_identity_federation'"
+      ~ "'service_account_credentials_json' or 'workload_identity_federation'"
     ) -%}
   {%- endif -%}
   {%- set google_cloud_service_account_secret_fqdn = none -%}
@@ -177,7 +180,7 @@
     'google_cloud_service_account_impersonation',
     none
   ) -%}
-  {%- if google_cloud_auth_method == 'service_account_key' -%}
+  {%- if google_cloud_auth_method == 'service_account_credentials_json' -%}
     {%- set google_cloud_service_account_secret_fqdn = (
       dbt_snowflake_iceberg_sync.iceberg_sync_object_fqn(
         dbt_snowflake_iceberg_sync.iceberg_sync_required_var(

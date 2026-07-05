@@ -17,6 +17,9 @@
 
 ### Changed
 
+- Renamed `google_cloud_auth_method=service_account_key` to
+  `service_account_credentials_json`. The legacy `service_account_key` value is
+  still accepted as an alias.
 - Documented by-dbt-target workload identity federation configuration and
   resolution order in the README.
 

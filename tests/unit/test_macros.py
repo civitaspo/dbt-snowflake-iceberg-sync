@@ -259,6 +259,17 @@ def test_deployment_config_quotes_secret_fqdn():
     assert config["google_cloud_service_account_secret_fqdn"] == '"SYSTEM"."SECRETS"."GCP""JSON"'
 
 
+def test_deployment_config_normalizes_legacy_service_account_key_alias():
+    config = _render_deployment_config(
+        {
+            **_minimal_deployment_vars(),
+            "google_cloud_auth_method": "service_account_key",
+        }
+    )
+
+    assert config["google_cloud_auth_method"] == "service_account_credentials_json"
+
+
 def test_deployment_config_accepts_workload_identity_federation_vars():
     vars_dict = _minimal_deployment_vars()
     vars_dict.pop("google_cloud_service_account_secret_fqdn")

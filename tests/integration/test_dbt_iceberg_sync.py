@@ -859,7 +859,7 @@ def _integration_context(
     tmp_path: Path,
     prefix: str,
     *,
-    auth_method: str = "service_account_key",
+    auth_method: str = "service_account_credentials_json",
     bigquery_project_id: str | None = None,
     bigquery_dataset_id: str | None = None,
 ) -> IntegrationContext:
@@ -955,7 +955,7 @@ def _write_project(context: IntegrationContext, models: dict[str, str]) -> None:
     auth_lines = [
         f"                google_cloud_auth_method: {context.google_cloud_auth_method}",
     ]
-    if context.google_cloud_auth_method == "service_account_key":
+    if context.google_cloud_auth_method == "service_account_credentials_json":
         auth_lines.extend(
             [
                 "                google_cloud_service_account_secret_fqdn: "
