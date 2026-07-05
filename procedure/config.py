@@ -15,7 +15,7 @@ BIGQUERY_PARQUET_EXPORT_COMPRESSIONS = {"GZIP", "NONE", "SNAPPY", "ZSTD"}
 PREDICATE_TYPES = {"auto", "none", "partition_decorator", "table_suffix", "where"}
 INCREMENTAL_STRATEGIES = {"delete+copy"}
 STORAGE_SERIALIZATION_POLICIES = {"COMPATIBLE", "OPTIMIZED"}
-GOOGLE_CLOUD_AUTH_METHODS = {"service_account_key", "workload_identity_federation"}
+GOOGLE_CLOUD_AUTH_METHODS = {"service_account_credentials_json", "workload_identity_federation"}
 FORBIDDEN_MODEL_CONFIG_KEYS = {
     "credentials",
     "credential",
@@ -60,7 +60,7 @@ class DeploymentConfig:
     procedure_name: str | None = None
     run_log_table: RelationConfig | None = None
     google_cloud_service_account_secret_alias: str | None = None
-    google_cloud_auth_method: str = "service_account_key"
+    google_cloud_auth_method: str = "service_account_credentials_json"
     google_cloud_workload_identity_federation_secret_fqdn: str | None = None
     google_cloud_workload_identity_federation_audience: str | None = None
     google_cloud_service_account_impersonation: str | None = None
@@ -179,7 +179,7 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
             "google_cloud_service_account_secret_alias"
         ),
         google_cloud_auth_method=_defaulted(
-            deployment_payload, "google_cloud_auth_method", "service_account_key"
+            deployment_payload, "google_cloud_auth_method", "service_account_credentials_json"
         ),
         google_cloud_workload_identity_federation_secret_fqdn=_optional_secret_fqdn(
             deployment_payload.get("google_cloud_workload_identity_federation_secret_fqdn")
@@ -332,7 +332,7 @@ def validate_config(config: IcebergSyncConfig) -> None:
         raise ConfigError("bigquery_export_compression must be one of GZIP, NONE, SNAPPY, or ZSTD")
     if config.deployment.google_cloud_auth_method not in GOOGLE_CLOUD_AUTH_METHODS:
         raise ConfigError(
-            "google_cloud_auth_method must be 'service_account_key' or "
+            "google_cloud_auth_method must be 'service_account_credentials_json' or "
             "'workload_identity_federation'"
         )
     if config.deployment.google_cloud_auth_method == "workload_identity_federation":

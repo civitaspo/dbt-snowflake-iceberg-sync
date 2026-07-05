@@ -200,7 +200,7 @@ def test_build_workload_identity_federation_credentials_with_impersonation():
     )
 
 
-def test_build_google_cloud_credentials_defaults_to_service_account_key(monkeypatch):
+def test_build_google_cloud_credentials_defaults_to_service_account_credentials_json(monkeypatch):
     seen = {}
 
     def fake_builder(service_account_json):

@@ -83,7 +83,7 @@
     {%- if external_access_integrations | length > 0 %}
     EXTERNAL_ACCESS_INTEGRATIONS = ({{ external_access_integrations | join(', ') }})
     {%- endif %}
-    {%- if google_cloud_auth_method == 'service_account_key' %}
+    {%- if google_cloud_auth_method == 'service_account_credentials_json' %}
     SECRETS = ('{{ google_cloud_service_account_secret_alias }}' = {{ google_cloud_service_account_secret_fqdn }})
     {%- endif %}
     EXECUTE AS CALLER

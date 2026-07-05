@@ -10,7 +10,7 @@ def test_parse_config_defaults(base_payload):
     config = parse_config(base_payload)
 
     assert config.source_type == "bigquery"
-    assert config.deployment.google_cloud_auth_method == "service_account_key"
+    assert config.deployment.google_cloud_auth_method == "service_account_credentials_json"
     assert config.bigquery.export_strategy == "extract"
     assert config.bigquery.export_compression == "ZSTD"
     assert config.bigquery.skip_missing_tables is False

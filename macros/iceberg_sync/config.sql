@@ -26,6 +26,79 @@
   )) }}
 {%- endmacro %}
 
+{% macro iceberg_sync_workload_identity_federation_config_hint(vars_dict, key) -%}
+  {%- set by_dbt_target = vars_dict.get('google_cloud_workload_identity_federation_by_dbt_target', {}) -%}
+  {%- set map_keys = [] -%}
+  {%- if by_dbt_target is mapping -%}
+    {%- for map_key in by_dbt_target.keys() | list | sort -%}
+      {%- do map_keys.append("'" ~ map_key ~ "'") -%}
+    {%- endfor -%}
+  {%- endif -%}
+  {%- set map_keys_text = map_keys | join(', ') if map_keys | length > 0 else '(none)' -%}
+  {%- set has_default = by_dbt_target is mapping and by_dbt_target.get('default', none) is not none -%}
+  {{ return(
+    "Configure vars.iceberg_sync." ~ key
+    ~ " (or top-level var iceberg_sync_" ~ key
+    ~ "), vars.iceberg_sync.google_cloud_workload_identity_federation_by_dbt_target['"
+    ~ target.name ~ "']"
+    ~ (" or ['default']" if has_default else " (no 'default' entry)")
+    ~ ". Available by_dbt_target keys: "
+    ~ map_keys_text
+    ~ " when google_cloud_auth_method='workload_identity_federation'"
+  ) }}
+{%- endmacro %}
+
+{% macro iceberg_sync_workload_identity_federation_by_dbt_target_entry_var(entry_settings, entry_label, key) -%}
+  {%- if entry_settings is none -%}
+    {{ return(none) }}
+  {%- endif -%}
+  {%- if entry_settings is not mapping -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "vars.iceberg_sync.google_cloud_workload_identity_federation_by_dbt_target['"
+      ~ entry_label
+      ~ "'] must be a mapping"
+    ) -%}
+  {%- endif -%}
+  {%- set entry_value = entry_settings.get(key, none) -%}
+  {%- if entry_value is not none and entry_value != "" -%}
+    {{ return(entry_value) }}
+  {%- endif -%}
+  {{ return(none) }}
+{%- endmacro %}
+
+{% macro iceberg_sync_workload_identity_federation_deployment_var(vars_dict, key, default=none) -%}
+  {%- set override = var('iceberg_sync_' ~ key, none) -%}
+  {%- if override is not none and override != "" -%}
+    {{ return(override) }}
+  {%- endif -%}
+  {%- set by_dbt_target = vars_dict.get('google_cloud_workload_identity_federation_by_dbt_target', none) -%}
+  {%- if by_dbt_target is not none and by_dbt_target is not mapping -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "vars.iceberg_sync.google_cloud_workload_identity_federation_by_dbt_target must be a mapping"
+    ) -%}
+  {%- endif -%}
+  {%- if by_dbt_target is mapping -%}
+    {%- for entry_label, entry_settings in [
+      (target.name, by_dbt_target.get(target.name, none)),
+      ('default', by_dbt_target.get('default', none))
+    ] -%}
+      {%- set entry_value = dbt_snowflake_iceberg_sync.iceberg_sync_workload_identity_federation_by_dbt_target_entry_var(
+        entry_settings,
+        entry_label,
+        key
+      ) -%}
+      {%- if entry_value is not none -%}
+        {{ return(entry_value) }}
+      {%- endif -%}
+    {%- endfor -%}
+  {%- endif -%}
+  {{ return(dbt_snowflake_iceberg_sync.iceberg_sync_defaulted_var(
+    vars_dict,
+    key,
+    default
+  )) }}
+{%- endmacro %}
+
 {% macro iceberg_sync_deployment_config() -%}
   {%- set vars_dict = var('iceberg_sync', {}) -%}
   {%- set procedure_database = dbt_snowflake_iceberg_sync.iceberg_sync_normalize_object_identifier(
@@ -87,12 +160,12 @@
   {%- set google_cloud_auth_method = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_var(
     vars_dict,
     'google_cloud_auth_method',
-    'service_account_key'
+    'service_account_credentials_json'
   ) -%}
-  {%- if google_cloud_auth_method not in ['service_account_key', 'workload_identity_federation'] -%}
+  {%- if google_cloud_auth_method not in ['service_account_credentials_json', 'workload_identity_federation'] -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
       "vars.iceberg_sync.google_cloud_auth_method (or top-level var iceberg_sync_google_cloud_auth_method) must be "
-      ~ "'service_account_key' or 'workload_identity_federation'"
+      ~ "'service_account_credentials_json' or 'workload_identity_federation'"
     ) -%}
   {%- endif -%}
   {%- set google_cloud_service_account_secret_fqdn = none -%}
@@ -101,17 +174,17 @@
     'google_cloud_service_account_credentials_json'
   ) -%}
   {%- set google_cloud_workload_identity_federation_secret_fqdn = none -%}
-  {%- set google_cloud_workload_identity_federation_audience = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_var(
+  {%- set google_cloud_workload_identity_federation_audience = dbt_snowflake_iceberg_sync.iceberg_sync_workload_identity_federation_deployment_var(
     vars_dict,
     'google_cloud_workload_identity_federation_audience',
     none
   ) -%}
-  {%- set google_cloud_service_account_impersonation = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_var(
+  {%- set google_cloud_service_account_impersonation = dbt_snowflake_iceberg_sync.iceberg_sync_workload_identity_federation_deployment_var(
     vars_dict,
     'google_cloud_service_account_impersonation',
     none
   ) -%}
-  {%- if google_cloud_auth_method == 'service_account_key' -%}
+  {%- if google_cloud_auth_method == 'service_account_credentials_json' -%}
     {%- set google_cloud_service_account_secret_fqdn = (
       dbt_snowflake_iceberg_sync.iceberg_sync_object_fqn(
         dbt_snowflake_iceberg_sync.iceberg_sync_required_var(
@@ -124,19 +197,25 @@
       )
     ) -%}
   {%- else -%}
-    {%- set raw_google_cloud_workload_identity_federation_secret_fqdn = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_var(
+    {%- set raw_google_cloud_workload_identity_federation_secret_fqdn = dbt_snowflake_iceberg_sync.iceberg_sync_workload_identity_federation_deployment_var(
       vars_dict,
       'google_cloud_workload_identity_federation_secret_fqdn',
       none
     ) -%}
     {%- if raw_google_cloud_workload_identity_federation_secret_fqdn is none or raw_google_cloud_workload_identity_federation_secret_fqdn == "" -%}
       {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        "vars.iceberg_sync.google_cloud_workload_identity_federation_secret_fqdn (or top-level var iceberg_sync_google_cloud_workload_identity_federation_secret_fqdn) is required when google_cloud_auth_method='workload_identity_federation'"
+        dbt_snowflake_iceberg_sync.iceberg_sync_workload_identity_federation_config_hint(
+          vars_dict,
+          'google_cloud_workload_identity_federation_secret_fqdn'
+        )
       ) -%}
     {%- endif -%}
     {%- if google_cloud_workload_identity_federation_audience is none or google_cloud_workload_identity_federation_audience == "" -%}
       {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        "vars.iceberg_sync.google_cloud_workload_identity_federation_audience (or top-level var iceberg_sync_google_cloud_workload_identity_federation_audience) is required when google_cloud_auth_method='workload_identity_federation'"
+        dbt_snowflake_iceberg_sync.iceberg_sync_workload_identity_federation_config_hint(
+          vars_dict,
+          'google_cloud_workload_identity_federation_audience'
+        )
       ) -%}
     {%- endif -%}
     {%- set workload_identity_federation_secret_relation = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_fqn(

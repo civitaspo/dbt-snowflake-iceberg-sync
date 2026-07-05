@@ -312,6 +312,190 @@ def test_deployment_config_honors_top_level_workload_identity_federation_overrid
     )
 
 
+def test_deployment_config_resolves_workload_identity_federation_by_dbt_target():
+    vars_dict = {
+        "handler_local_path": "dbt_packages/dbt_snowflake_iceberg_sync/procedure",
+        "google_cloud_auth_method": "workload_identity_federation",
+        "google_cloud_workload_identity_federation_by_dbt_target": {
+            "dev-via-sso": {
+                "google_cloud_workload_identity_federation_secret_fqdn": (
+                    "system.secrets.workload_identity_federation_default"
+                ),
+                "google_cloud_workload_identity_federation_audience": (
+                    "//iam.googleapis.com/projects/966890289127/locations/global/"
+                    "workloadIdentityPools/snowflake-oidc/providers/snowflake-provider"
+                ),
+                "google_cloud_service_account_impersonation": (
+                    "snowflake@l1-snowflake-dev.iam.gserviceaccount.com"
+                ),
+            },
+            "stg-via-sso": {
+                "google_cloud_workload_identity_federation_secret_fqdn": (
+                    "system.secrets.workload_identity_federation_default"
+                ),
+                "google_cloud_workload_identity_federation_audience": (
+                    "//iam.googleapis.com/projects/1050948979201/locations/global/"
+                    "workloadIdentityPools/snowflake-oidc/providers/snowflake-provider"
+                ),
+                "google_cloud_service_account_impersonation": (
+                    "snowflake@l1-snowflake-stg.iam.gserviceaccount.com"
+                ),
+            },
+        },
+    }
+
+    dev_config = _render_deployment_config(
+        vars_dict,
+        target_name="dev-via-sso",
+    )
+    stg_config = _render_deployment_config(
+        vars_dict,
+        target_name="stg-via-sso",
+    )
+
+    assert "966890289127" in dev_config["google_cloud_workload_identity_federation_audience"]
+    assert dev_config["google_cloud_service_account_impersonation"].endswith(
+        "l1-snowflake-dev.iam.gserviceaccount.com"
+    )
+    assert "1050948979201" in stg_config["google_cloud_workload_identity_federation_audience"]
+    assert stg_config["google_cloud_service_account_impersonation"].endswith(
+        "l1-snowflake-stg.iam.gserviceaccount.com"
+    )
+
+
+def test_deployment_config_prefers_by_dbt_target_over_flat_workload_identity_federation_vars():
+    vars_dict = {
+        "handler_local_path": "dbt_packages/dbt_snowflake_iceberg_sync/procedure",
+        "google_cloud_auth_method": "workload_identity_federation",
+        "google_cloud_workload_identity_federation_secret_fqdn": (
+            "analytics.auth.flat_secret"
+        ),
+        "google_cloud_workload_identity_federation_audience": (
+            "//iam.googleapis.com/projects/flat/locations/global/"
+            "workloadIdentityPools/flat/providers/flat"
+        ),
+        "google_cloud_service_account_impersonation": (
+            "flat@example-project.iam.gserviceaccount.com"
+        ),
+        "google_cloud_workload_identity_federation_by_dbt_target": {
+            "dev-via-sso": {
+                "google_cloud_workload_identity_federation_secret_fqdn": (
+                    "analytics.auth.target_secret"
+                ),
+                "google_cloud_workload_identity_federation_audience": (
+                    "//iam.googleapis.com/projects/target/locations/global/"
+                    "workloadIdentityPools/target/providers/target"
+                ),
+                "google_cloud_service_account_impersonation": (
+                    "target@example-project.iam.gserviceaccount.com"
+                ),
+            }
+        },
+    }
+
+    config = _render_deployment_config(vars_dict, target_name="dev-via-sso")
+
+    assert (
+        config["google_cloud_workload_identity_federation_secret_fqdn"]
+        == "ANALYTICS.AUTH.TARGET_SECRET"
+    )
+    assert "/projects/target/" in config["google_cloud_workload_identity_federation_audience"]
+    assert (
+        config["google_cloud_service_account_impersonation"]
+        == "target@example-project.iam.gserviceaccount.com"
+    )
+
+
+def test_deployment_config_falls_back_to_default_by_dbt_target_entry():
+    vars_dict = {
+        "handler_local_path": "dbt_packages/dbt_snowflake_iceberg_sync/procedure",
+        "google_cloud_auth_method": "workload_identity_federation",
+        "google_cloud_workload_identity_federation_by_dbt_target": {
+            "default": {
+                "google_cloud_workload_identity_federation_secret_fqdn": (
+                    "analytics.auth.default_secret"
+                ),
+                "google_cloud_workload_identity_federation_audience": (
+                    "//iam.googleapis.com/projects/default/locations/global/"
+                    "workloadIdentityPools/default/providers/default"
+                ),
+                "google_cloud_service_account_impersonation": (
+                    "default@example-project.iam.gserviceaccount.com"
+                ),
+            }
+        },
+    }
+
+    config = _render_deployment_config(vars_dict, target_name="unknown-target")
+
+    assert (
+        config["google_cloud_workload_identity_federation_secret_fqdn"]
+        == "ANALYTICS.AUTH.DEFAULT_SECRET"
+    )
+    assert "/projects/default/" in config["google_cloud_workload_identity_federation_audience"]
+
+
+def test_deployment_config_falls_back_to_flat_when_by_dbt_target_has_no_match():
+    vars_dict = {
+        "handler_local_path": "dbt_packages/dbt_snowflake_iceberg_sync/procedure",
+        "google_cloud_auth_method": "workload_identity_federation",
+        "google_cloud_workload_identity_federation_secret_fqdn": (
+            "analytics.auth.flat_secret"
+        ),
+        "google_cloud_workload_identity_federation_audience": (
+            "//iam.googleapis.com/projects/flat/locations/global/"
+            "workloadIdentityPools/flat/providers/flat"
+        ),
+        "google_cloud_service_account_impersonation": (
+            "flat@example-project.iam.gserviceaccount.com"
+        ),
+        "google_cloud_workload_identity_federation_by_dbt_target": {
+            "dev-via-sso": {
+                "google_cloud_workload_identity_federation_secret_fqdn": (
+                    "analytics.auth.target_secret"
+                ),
+                "google_cloud_workload_identity_federation_audience": (
+                    "//iam.googleapis.com/projects/target/locations/global/"
+                    "workloadIdentityPools/target/providers/target"
+                ),
+                "google_cloud_service_account_impersonation": (
+                    "target@example-project.iam.gserviceaccount.com"
+                ),
+            }
+        },
+    }
+
+    config = _render_deployment_config(vars_dict, target_name="unknown-target")
+
+    assert (
+        config["google_cloud_workload_identity_federation_secret_fqdn"]
+        == "ANALYTICS.AUTH.FLAT_SECRET"
+    )
+    assert "/projects/flat/" in config["google_cloud_workload_identity_federation_audience"]
+
+
+def test_deployment_config_raises_when_workload_identity_federation_settings_missing():
+    vars_dict = {
+        "handler_local_path": "dbt_packages/dbt_snowflake_iceberg_sync/procedure",
+        "google_cloud_auth_method": "workload_identity_federation",
+        "google_cloud_workload_identity_federation_by_dbt_target": {
+            "dev-via-sso": {
+                "google_cloud_workload_identity_federation_audience": (
+                    "//iam.googleapis.com/projects/966890289127/locations/global/"
+                    "workloadIdentityPools/snowflake-oidc/providers/snowflake-provider"
+                ),
+            }
+        },
+    }
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _render_deployment_config(vars_dict, target_name="dev-via-sso")
+
+    message = str(exc_info.value)
+    assert "google_cloud_workload_identity_federation_secret_fqdn" in message
+    assert "Available by_dbt_target keys: 'dev-via-sso'" in message
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -364,6 +548,7 @@ def _render_deployment_config(
     *,
     target_database: str = "analytics",
     target_schema: str = "dbt_user",
+    target_name: str = "dev",
     top_level_vars: dict[str, object] | None = None,
 ) -> dict[str, object]:
     macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/config.sql"
@@ -372,27 +557,58 @@ def _render_deployment_config(
     )
 
     top_level_vars = top_level_vars or {}
+    package_namespace = SimpleNamespace(
+        iceberg_sync_as_list=_as_list,
+        iceberg_sync_defaulted_var=_defaulted_var,
+        iceberg_sync_deployment_var=lambda current_vars, key, default=None: _deployment_var(
+            top_level_vars,
+            current_vars,
+            key,
+            default,
+        ),
+        iceberg_sync_workload_identity_federation_by_dbt_target_entry_var=(
+            lambda entry_settings, entry_label, field_key: (
+                _workload_identity_federation_by_dbt_target_entry_var(
+                    entry_settings,
+                    entry_label,
+                    field_key,
+                )
+            )
+        ),
+        iceberg_sync_workload_identity_federation_config_hint=(
+            lambda current_vars, key: _workload_identity_federation_config_hint(
+                current_vars,
+                key,
+                target_name=target_name,
+            )
+        ),
+        iceberg_sync_workload_identity_federation_deployment_var=(
+            lambda current_vars, key, default=None: _workload_identity_federation_deployment_var(
+                top_level_vars,
+                current_vars,
+                key,
+                default,
+                target_name=target_name,
+            )
+        ),
+        iceberg_sync_normalize_object_identifier=_normalize_object_identifier,
+        iceberg_sync_object_fqn=_object_fqn,
+        iceberg_sync_quote_object_identifier=_quote_object_identifier,
+        iceberg_sync_relation_from_fqn=_relation_from_fqn,
+        iceberg_sync_required_var=_required_var,
+        iceberg_sync_raise=_raise,
+    )
     rendered = template.render(
         {
             "var": lambda name, default=None: (
                 vars_dict if name == "iceberg_sync" else top_level_vars.get(name, default)
             ),
-            "target": SimpleNamespace(database=target_database, schema=target_schema),
-            "dbt_snowflake_iceberg_sync": SimpleNamespace(
-                iceberg_sync_as_list=_as_list,
-                iceberg_sync_defaulted_var=_defaulted_var,
-                iceberg_sync_deployment_var=lambda current_vars, key, default=None: _deployment_var(
-                    top_level_vars,
-                    current_vars,
-                    key,
-                    default,
-                ),
-                iceberg_sync_normalize_object_identifier=_normalize_object_identifier,
-                iceberg_sync_object_fqn=_object_fqn,
-                iceberg_sync_quote_object_identifier=_quote_object_identifier,
-                iceberg_sync_relation_from_fqn=_relation_from_fqn,
-                iceberg_sync_required_var=_required_var,
+            "target": SimpleNamespace(
+                database=target_database,
+                schema=target_schema,
+                name=target_name,
             ),
+            "dbt_snowflake_iceberg_sync": package_namespace,
             "return": lambda item: json.dumps(item, sort_keys=True),
         }
     )
@@ -456,6 +672,85 @@ def _deployment_var(
     default: object,
 ) -> object:
     return top_level_vars.get(f"iceberg_sync_{key}", _defaulted_var(vars_dict, key, default))
+
+
+def _workload_identity_federation_by_dbt_target_entry_var(
+    entry_settings: object,
+    entry_label: str,
+    key: str,
+) -> object:
+    if entry_settings is None:
+        return None
+    if not isinstance(entry_settings, dict):
+        raise RuntimeError(
+            "iceberg_sync: "
+            "vars.iceberg_sync.google_cloud_workload_identity_federation_by_dbt_target"
+            f"['{entry_label}'] must be a mapping"
+        )
+    entry_value = entry_settings.get(key)
+    if entry_value is not None and entry_value != "":
+        return entry_value
+    return None
+
+
+def _workload_identity_federation_deployment_var(
+    top_level_vars: dict[str, object],
+    vars_dict: dict[str, object],
+    key: str,
+    default: object,
+    *,
+    target_name: str,
+) -> object:
+    override = top_level_vars.get(f"iceberg_sync_{key}")
+    if override is not None and override != "":
+        return override
+
+    by_dbt_target = vars_dict.get("google_cloud_workload_identity_federation_by_dbt_target")
+    if by_dbt_target is not None and not isinstance(by_dbt_target, dict):
+        raise RuntimeError(
+            "iceberg_sync: "
+            "vars.iceberg_sync.google_cloud_workload_identity_federation_by_dbt_target "
+            "must be a mapping"
+        )
+    if isinstance(by_dbt_target, dict):
+        for entry_label, entry_settings in (
+            (target_name, by_dbt_target.get(target_name)),
+            ("default", by_dbt_target.get("default")),
+        ):
+            entry_value = _workload_identity_federation_by_dbt_target_entry_var(
+                entry_settings,
+                entry_label,
+                key,
+            )
+            if entry_value is not None:
+                return entry_value
+
+    return _defaulted_var(vars_dict, key, default)
+
+
+def _workload_identity_federation_config_hint(
+    vars_dict: dict[str, object],
+    key: str,
+    *,
+    target_name: str,
+) -> str:
+    by_dbt_target = vars_dict.get("google_cloud_workload_identity_federation_by_dbt_target", {})
+    map_keys = []
+    if isinstance(by_dbt_target, dict):
+        map_keys = sorted(f"'{map_key}'" for map_key in by_dbt_target)
+    map_keys_text = ", ".join(map_keys) if map_keys else "(none)"
+    has_default = isinstance(by_dbt_target, dict) and by_dbt_target.get("default") is not None
+    default_hint = " or ['default']" if has_default else " (no 'default' entry)"
+    return (
+        f"Configure vars.iceberg_sync.{key} (or top-level var iceberg_sync_{key}), "
+        f"vars.iceberg_sync.google_cloud_workload_identity_federation_by_dbt_target['{target_name}']"
+        f"{default_hint}. Available by_dbt_target keys: {map_keys_text} "
+        "when google_cloud_auth_method='workload_identity_federation'"
+    )
+
+
+def _raise(message: str) -> None:
+    raise RuntimeError(f"iceberg_sync: {message}")
 
 
 def _required_var(vars_dict: dict[str, object], key: str) -> object:

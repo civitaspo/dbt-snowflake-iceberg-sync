@@ -128,9 +128,9 @@
   {%- endif -%}
 
   {%- set deployment = payload['deployment'] -%}
-  {%- if deployment['google_cloud_auth_method'] not in ['service_account_key', 'workload_identity_federation'] -%}
+  {%- if deployment['google_cloud_auth_method'] not in ['service_account_credentials_json', 'workload_identity_federation'] -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      "google_cloud_auth_method must be 'service_account_key' or 'workload_identity_federation'"
+      "google_cloud_auth_method must be 'service_account_credentials_json' or 'workload_identity_federation'"
     ) -%}
   {%- endif -%}
   {%- if deployment['google_cloud_auth_method'] == 'workload_identity_federation' -%}

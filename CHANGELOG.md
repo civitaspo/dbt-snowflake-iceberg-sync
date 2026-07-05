@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 0.4.1 - 2026-07-05
+
+### Added
+
+- Added `google_cloud_workload_identity_federation_by_dbt_target` for
+  per-target workload identity federation settings keyed by `target.name`.
+- Added `iceberg_sync_workload_identity_federation_deployment_var` to resolve
+  workload identity federation fields with precedence:
+  top-level override vars, by-dbt-target map, `default` entry, then flat
+  `vars.iceberg_sync` keys.
+- Added clearer compiler errors that list available by-dbt-target keys when
+  workload identity federation settings are missing.
+
+### Changed
+
+- Renamed `google_cloud_auth_method=service_account_key` to
+  `service_account_credentials_json`.
+- Documented by-dbt-target workload identity federation configuration and
+  resolution order in the README.
+
 ## 0.4.0 - 2026-07-05
 
 ### Added

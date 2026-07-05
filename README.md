@@ -41,7 +41,7 @@ BigQuery:
 - A network rule and external access integration for BigQuery API calls.
 - A Snowflake secret for Google Cloud auth:
   - a generic secret containing the Google Cloud service account JSON when
-    `google_cloud_auth_method=service_account_key` (default), or
+    `google_cloud_auth_method=service_account_credentials_json` (default), or
   - a workload identity federation secret when
     `google_cloud_auth_method=workload_identity_federation`.
 - A database/schema where the package procedure can be installed.
@@ -84,12 +84,13 @@ Deployment vars:
 | `handler_import_name` | No | `iceberg_sync_procedure` | Import directory name mounted into the Snowflake Python runtime. |
 | `handler_name` | No | `<handler_import_name>.handler.main` | Python procedure entry point. |
 | `external_access_integrations` | No | `[]` | External access integrations granted to the procedure. |
-| `google_cloud_auth_method` | No | `service_account_key` | Google Cloud auth mode. Supported values are `service_account_key` and `workload_identity_federation`. |
-| `google_cloud_service_account_secret_fqdn` | Yes for `service_account_key` | None | Fully qualified Snowflake secret containing the Google Cloud service account JSON. |
-| `google_cloud_service_account_secret_alias` | No | `google_cloud_service_account_credentials_json` | Secret alias read by the Python handler for `service_account_key`. |
+| `google_cloud_auth_method` | No | `service_account_credentials_json` | Google Cloud auth mode. Supported values are `service_account_credentials_json` and `workload_identity_federation`. |
+| `google_cloud_service_account_secret_fqdn` | Yes for `service_account_credentials_json` | None | Fully qualified Snowflake secret containing the Google Cloud service account JSON. |
+| `google_cloud_service_account_secret_alias` | No | `google_cloud_service_account_credentials_json` | Secret alias read by the Python handler for `service_account_credentials_json`. |
 | `google_cloud_workload_identity_federation_secret_fqdn` | Yes for `workload_identity_federation` | None | Three-part name of the Snowflake workload identity federation secret used by `SYSTEM$ISSUE_WORKLOAD_IDENTITY_FEDERATION_TOKEN`. |
 | `google_cloud_workload_identity_federation_audience` | Yes for `workload_identity_federation` | None | Google Cloud workload identity provider resource name, for example `//iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool_id>/providers/<provider_id>`. |
 | `google_cloud_service_account_impersonation` | No | None | Optional Google Cloud service account email to impersonate after the STS token exchange. |
+| `google_cloud_workload_identity_federation_by_dbt_target` | No | None | Map of `target.name` to per-target workload identity federation settings. Each entry uses the same keys as the flat vars above. An optional `default` entry is used when `target.name` is not present in the map. |
 | `run_log_table` | No | `<procedure_database>.<procedure_schema>.ICEBERG_SYNC_RUN_LOG` | Three-part relation used for procedure run logs. |
 
 ## Required Google Cloud IAM Setup
@@ -127,11 +128,44 @@ In this mode the procedure issues a short-lived JWT with
 `google-auth` identity-pool credentials, and optionally impersonates a service
 account. The installer does not bind a `SECRETS = (...)` clause for workload identity federation auth.
 
-Per-target overrides can be passed as top-level dbt vars such as
+When each dbt target needs a different workload identity provider, secret, or
+impersonation service account, use
+`google_cloud_workload_identity_federation_by_dbt_target`:
+
+```yaml
+vars:
+  iceberg_sync:
+    google_cloud_auth_method: workload_identity_federation
+    google_cloud_workload_identity_federation_by_dbt_target:
+      dev:
+        google_cloud_workload_identity_federation_secret_fqdn: ANALYTICS.SECRETS.WORKLOAD_IDENTITY_FEDERATION_DEV
+        google_cloud_workload_identity_federation_audience: //iam.googleapis.com/projects/111111111111/locations/global/workloadIdentityPools/dev-pool/providers/dev-provider
+        google_cloud_service_account_impersonation: sync-dev@example-project.iam.gserviceaccount.com
+      stg:
+        google_cloud_workload_identity_federation_secret_fqdn: ANALYTICS.SECRETS.WORKLOAD_IDENTITY_FEDERATION_STG
+        google_cloud_workload_identity_federation_audience: //iam.googleapis.com/projects/222222222222/locations/global/workloadIdentityPools/stg-pool/providers/stg-provider
+        google_cloud_service_account_impersonation: sync-stg@example-project.iam.gserviceaccount.com
+      default:
+        google_cloud_workload_identity_federation_secret_fqdn: ANALYTICS.SECRETS.WORKLOAD_IDENTITY_FEDERATION_DEFAULT
+        google_cloud_workload_identity_federation_audience: //iam.googleapis.com/projects/000000000000/locations/global/workloadIdentityPools/example-pool/providers/example-provider
+```
+
+dbt does not expose keys nested under `vars.<target.name>` to `var('foo')`.
+The package therefore resolves workload identity federation settings from this
+map using `target.name` explicitly.
+
+For each workload identity federation field, resolution order is:
+
+1. Top-level dbt vars such as `iceberg_sync_google_cloud_workload_identity_federation_audience` or CLI `--vars` overrides
+2. `google_cloud_workload_identity_federation_by_dbt_target[target.name]`
+3. `google_cloud_workload_identity_federation_by_dbt_target['default']`
+4. Flat `vars.iceberg_sync.google_cloud_workload_identity_federation_*` keys
+
+Per-target overrides can also be passed as top-level dbt vars such as
 `iceberg_sync_google_cloud_auth_method`, `iceberg_sync_google_cloud_workload_identity_federation_secret_fqdn`, and
 `iceberg_sync_google_cloud_workload_identity_federation_audience`. This is useful when a shared project file keeps
 common package settings under `vars.iceberg_sync` but each target needs a
-different workload identity provider or secret.
+different workload identity provider or secret at runtime.
 
 The workload identity federation transfer integration test
 (`test_dbt_select_smoke_workload_identity_federation`) uses the `select` export
