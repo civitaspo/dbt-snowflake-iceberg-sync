@@ -374,7 +374,9 @@ def test_deployment_config_prefers_by_dbt_target_over_flat_workload_identity_fed
             "//iam.googleapis.com/projects/flat/locations/global/"
             "workloadIdentityPools/flat/providers/flat"
         ),
-        "google_cloud_service_account_impersonation": "flat@example-project.iam.gserviceaccount.com",
+        "google_cloud_service_account_impersonation": (
+            "flat@example-project.iam.gserviceaccount.com"
+        ),
         "google_cloud_workload_identity_federation_by_dbt_target": {
             "dev-via-sso": {
                 "google_cloud_workload_identity_federation_secret_fqdn": (
@@ -444,7 +446,9 @@ def test_deployment_config_falls_back_to_flat_when_by_dbt_target_has_no_match():
             "//iam.googleapis.com/projects/flat/locations/global/"
             "workloadIdentityPools/flat/providers/flat"
         ),
-        "google_cloud_service_account_impersonation": "flat@example-project.iam.gserviceaccount.com",
+        "google_cloud_service_account_impersonation": (
+            "flat@example-project.iam.gserviceaccount.com"
+        ),
         "google_cloud_workload_identity_federation_by_dbt_target": {
             "dev-via-sso": {
                 "google_cloud_workload_identity_federation_secret_fqdn": (
@@ -676,7 +680,8 @@ def _workload_identity_federation_deployment_var(
     by_dbt_target = vars_dict.get("google_cloud_workload_identity_federation_by_dbt_target")
     if by_dbt_target is not None and not isinstance(by_dbt_target, dict):
         raise RuntimeError(
-            "iceberg_sync: vars.iceberg_sync.google_cloud_workload_identity_federation_by_dbt_target "
+            "iceberg_sync: "
+            "vars.iceberg_sync.google_cloud_workload_identity_federation_by_dbt_target "
             "must be a mapping"
         )
     if isinstance(by_dbt_target, dict):
