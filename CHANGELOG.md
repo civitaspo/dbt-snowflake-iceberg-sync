@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.4.1 - 2026-07-05
+## 0.4.2 - 2026-07-05
 
 ### Added
 
@@ -21,6 +21,11 @@
   `service_account_credentials_json`.
 - Documented by-dbt-target workload identity federation configuration and
   resolution order in the README.
+
+## 0.4.1 - 2026-07-05
+
+_Skipped: the `v0.4.1` tag name was reserved by a deleted immutable GitHub
+release and cannot be recreated._
 
 ## 0.4.0 - 2026-07-05
 
