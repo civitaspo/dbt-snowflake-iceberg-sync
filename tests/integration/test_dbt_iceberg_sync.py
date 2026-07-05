@@ -34,6 +34,10 @@ class IntegrationContext:
     external_access_integration: str
     secret_fqdn: str
     secret_alias: str
+    google_cloud_auth_method: str
+    google_cloud_workload_identity_federation_secret_fqdn: str | None
+    google_cloud_workload_identity_federation_audience: str | None
+    google_cloud_service_account_impersonation: str | None
     bigquery_project_id: str
     bigquery_dataset_id: str
     bigquery_location: str
@@ -46,6 +50,52 @@ class IntegrationContext:
 def test_dbt_extract_smoke(tmp_path: Path):
     context = _integration_context(tmp_path, "smoke")
     model_name = f"iceberg_sync_smoke_{context.run_id}"
+    export_prefix = _export_prefix(context, model_name)
+    models = {
+        model_name: _extract_model_sql(
+            context,
+            model_name=model_name,
+            table_id=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TABLE_ID"),
+            export_predicate_type="none",
+            base_location=export_prefix,
+            export_prefix=export_prefix,
+        )
+    }
+
+    _write_project(context, models)
+    try:
+        _run_dbt(context, "deps")
+        _run_dbt(context, "run", "--select", model_name)
+        _assert_models(
+            context,
+            [
+                _assertion(
+                    context,
+                    model_name,
+                    expected_modes=["full_refresh"],
+                    expected_rows=_optional_int_env(
+                        "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TABLE_EXPECTED_ROWS"
+                    ),
+                )
+            ],
+        )
+    finally:
+        _cleanup(context, [model_name])
+
+
+def test_dbt_extract_smoke_workload_identity_federation(tmp_path: Path):
+    if not os.environ.get("DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SECRET_FQDN"):
+        pytest.skip(
+            "Set DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SECRET_FQDN "
+            "to run the workload identity federation transfer test."
+        )
+
+    context = _integration_context(
+        tmp_path,
+        "wif_smoke",
+        auth_method="workload_identity_federation",
+    )
+    model_name = f"iceberg_sync_wif_smoke_{context.run_id}"
     export_prefix = _export_prefix(context, model_name)
     models = {
         model_name: _extract_model_sql(
@@ -790,9 +840,36 @@ def test_dbt_invalid_parameter_combinations(tmp_path: Path):
         _cleanup(context, list(models))
 
 
-def _integration_context(tmp_path: Path, prefix: str) -> IntegrationContext:
+def _integration_context(
+    tmp_path: Path,
+    prefix: str,
+    *,
+    auth_method: str = "service_account_key",
+) -> IntegrationContext:
     if os.environ.get("DBT_SNOWFLAKE_ICEBERG_SYNC_RUN_INTEGRATION") != "1":
         pytest.skip("set DBT_SNOWFLAKE_ICEBERG_SYNC_RUN_INTEGRATION=1 to run")
+
+    if auth_method == "workload_identity_federation":
+        wif_secret_fqdn = _required_env(
+            "DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SECRET_FQDN"
+        )
+        wif_audience = _required_env(
+            "DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_AUDIENCE"
+        )
+        wif_impersonation = os.environ.get(
+            "DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SERVICE_ACCOUNT"
+        )
+        secret_fqdn = ""
+        secret_alias = ""
+    else:
+        wif_secret_fqdn = None
+        wif_audience = None
+        wif_impersonation = None
+        secret_fqdn = _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_SECRET_FQDN")
+        secret_alias = os.environ.get(
+            "DBT_SNOWFLAKE_ICEBERG_SYNC_SECRET_ALIAS",
+            "google_cloud_service_account_credentials_json",
+        )
 
     run_id = uuid.uuid4().hex[:12]
     snowflake_database = _required_env("SNOWFLAKE_DATABASE")
@@ -835,11 +912,12 @@ def _integration_context(tmp_path: Path, prefix: str) -> IntegrationContext:
         external_access_integration=_required_env(
             "DBT_SNOWFLAKE_ICEBERG_SYNC_EXTERNAL_ACCESS_INTEGRATION"
         ),
-        secret_fqdn=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_SECRET_FQDN"),
-        secret_alias=os.environ.get(
-            "DBT_SNOWFLAKE_ICEBERG_SYNC_SECRET_ALIAS",
-            "google_cloud_service_account_credentials_json",
-        ),
+        secret_fqdn=secret_fqdn,
+        secret_alias=secret_alias,
+        google_cloud_auth_method=auth_method,
+        google_cloud_workload_identity_federation_secret_fqdn=wif_secret_fqdn,
+        google_cloud_workload_identity_federation_audience=wif_audience,
+        google_cloud_service_account_impersonation=wif_impersonation,
         bigquery_project_id=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_PROJECT_ID"),
         bigquery_dataset_id=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATASET_ID"),
         bigquery_location=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_LOCATION"),
@@ -855,6 +933,32 @@ def _write_project(context: IntegrationContext, models: dict[str, str]) -> None:
         f"packages:\n  - local: {context.package_path}\n",
         encoding="utf-8",
     )
+    auth_lines = [
+        f"                google_cloud_auth_method: {context.google_cloud_auth_method}",
+    ]
+    if context.google_cloud_auth_method == "service_account_key":
+        auth_lines.extend(
+            [
+                f"                google_cloud_service_account_secret_fqdn: {context.secret_fqdn}",
+                f"                google_cloud_service_account_secret_alias: {context.secret_alias}",
+            ]
+        )
+    else:
+        auth_lines.extend(
+            [
+                "                google_cloud_workload_identity_federation_secret_fqdn: "
+                f"{context.google_cloud_workload_identity_federation_secret_fqdn}",
+                "                google_cloud_workload_identity_federation_audience: "
+                f"{context.google_cloud_workload_identity_federation_audience}",
+            ]
+        )
+        if context.google_cloud_service_account_impersonation:
+            auth_lines.append(
+                "                google_cloud_service_account_impersonation: "
+                f"{context.google_cloud_service_account_impersonation}"
+            )
+    auth_block = "\n".join(auth_lines)
+
     (context.project_dir / "dbt_project.yml").write_text(
         textwrap.dedent(
             f"""
@@ -879,8 +983,7 @@ def _write_project(context: IntegrationContext, models: dict[str, str]) -> None:
                 handler_local_path: {json.dumps(str(context.package_path / "procedure"))}
                 external_access_integrations:
                   - {context.external_access_integration}
-                google_cloud_service_account_secret_fqdn: {context.secret_fqdn}
-                google_cloud_service_account_secret_alias: {context.secret_alias}
+{auth_block}
             """
         ).lstrip(),
         encoding="utf-8",
