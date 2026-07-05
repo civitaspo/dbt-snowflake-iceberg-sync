@@ -48,6 +48,24 @@
   ) }}
 {%- endmacro %}
 
+{% macro iceberg_sync_workload_identity_federation_by_dbt_target_entry_var(entry_settings, entry_label, key) -%}
+  {%- if entry_settings is none -%}
+    {{ return(none) }}
+  {%- endif -%}
+  {%- if entry_settings is not mapping -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "vars.iceberg_sync.google_cloud_workload_identity_federation_by_dbt_target['"
+      ~ entry_label
+      ~ "'] must be a mapping"
+    ) -%}
+  {%- endif -%}
+  {%- set entry_value = entry_settings.get(key, none) -%}
+  {%- if entry_value is not none and entry_value != "" -%}
+    {{ return(entry_value) }}
+  {%- endif -%}
+  {{ return(none) }}
+{%- endmacro %}
+
 {% macro iceberg_sync_workload_identity_federation_deployment_var(vars_dict, key, default=none) -%}
   {%- set override = var('iceberg_sync_' ~ key, none) -%}
   {%- if override is not none and override != "" -%}
@@ -60,30 +78,19 @@
     ) -%}
   {%- endif -%}
   {%- if by_dbt_target is mapping -%}
-    {%- set target_settings = by_dbt_target.get(target.name, none) -%}
-    {%- if target_settings is mapping -%}
-      {%- set target_value = target_settings.get(key, none) -%}
-      {%- if target_value is not none and target_value != "" -%}
-        {{ return(target_value) }}
-      {%- endif -%}
-    {%- elif target_settings is not none -%}
-      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        "vars.iceberg_sync.google_cloud_workload_identity_federation_by_dbt_target['"
-        ~ target.name
-        ~ "'] must be a mapping"
+    {%- for entry_label, entry_settings in [
+      (target.name, by_dbt_target.get(target.name, none)),
+      ('default', by_dbt_target.get('default', none))
+    ] -%}
+      {%- set entry_value = dbt_snowflake_iceberg_sync.iceberg_sync_workload_identity_federation_by_dbt_target_entry_var(
+        entry_settings,
+        entry_label,
+        key
       ) -%}
-    {%- endif -%}
-    {%- set default_settings = by_dbt_target.get('default', none) -%}
-    {%- if default_settings is mapping -%}
-      {%- set default_value = default_settings.get(key, none) -%}
-      {%- if default_value is not none and default_value != "" -%}
-        {{ return(default_value) }}
+      {%- if entry_value is not none -%}
+        {{ return(entry_value) }}
       {%- endif -%}
-    {%- elif default_settings is not none -%}
-      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        "vars.iceberg_sync.google_cloud_workload_identity_federation_by_dbt_target['default'] must be a mapping"
-      ) -%}
-    {%- endif -%}
+    {%- endfor -%}
   {%- endif -%}
   {{ return(dbt_snowflake_iceberg_sync.iceberg_sync_defaulted_var(
     vars_dict,

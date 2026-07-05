@@ -566,6 +566,15 @@ def _render_deployment_config(
             key,
             default,
         ),
+        iceberg_sync_workload_identity_federation_by_dbt_target_entry_var=(
+            lambda entry_settings, entry_label, field_key: (
+                _workload_identity_federation_by_dbt_target_entry_var(
+                    entry_settings,
+                    entry_label,
+                    field_key,
+                )
+            )
+        ),
         iceberg_sync_workload_identity_federation_config_hint=(
             lambda current_vars, key: _workload_identity_federation_config_hint(
                 current_vars,
@@ -665,6 +674,25 @@ def _deployment_var(
     return top_level_vars.get(f"iceberg_sync_{key}", _defaulted_var(vars_dict, key, default))
 
 
+def _workload_identity_federation_by_dbt_target_entry_var(
+    entry_settings: object,
+    entry_label: str,
+    key: str,
+) -> object:
+    if entry_settings is None:
+        return None
+    if not isinstance(entry_settings, dict):
+        raise RuntimeError(
+            "iceberg_sync: "
+            f"vars.iceberg_sync.google_cloud_workload_identity_federation_by_dbt_target['{entry_label}'] "
+            "must be a mapping"
+        )
+    entry_value = entry_settings.get(key)
+    if entry_value is not None and entry_value != "":
+        return entry_value
+    return None
+
+
 def _workload_identity_federation_deployment_var(
     top_level_vars: dict[str, object],
     vars_dict: dict[str, object],
@@ -685,16 +713,17 @@ def _workload_identity_federation_deployment_var(
             "must be a mapping"
         )
     if isinstance(by_dbt_target, dict):
-        target_settings = by_dbt_target.get(target_name)
-        if isinstance(target_settings, dict):
-            target_value = target_settings.get(key)
-            if target_value is not None and target_value != "":
-                return target_value
-        default_settings = by_dbt_target.get("default")
-        if isinstance(default_settings, dict):
-            default_value = default_settings.get(key)
-            if default_value is not None and default_value != "":
-                return default_value
+        for entry_label, entry_settings in (
+            (target_name, by_dbt_target.get(target_name)),
+            ("default", by_dbt_target.get("default")),
+        ):
+            entry_value = _workload_identity_federation_by_dbt_target_entry_var(
+                entry_settings,
+                entry_label,
+                key,
+            )
+            if entry_value is not None:
+                return entry_value
 
     return _defaulted_var(vars_dict, key, default)
 
