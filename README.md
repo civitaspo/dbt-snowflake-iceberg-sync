@@ -133,6 +133,14 @@ Per-target overrides can be passed as top-level dbt vars such as
 common package settings under `vars.iceberg_sync` but each target needs a
 different workload identity provider or secret.
 
+The workload identity federation transfer integration test
+(`test_dbt_select_smoke_workload_identity_federation`) uses the `select` export
+strategy to materialize one generated row into a writable BigQuery staging
+dataset. It does not read from or write to caller-owned production fixture
+tables. Configure a Snowflake-controlled Google Cloud project and staging dataset
+where the impersonated service account can create staging tables and run extract
+jobs.
+
 ## Procedure Installation
 
 Install or update the Snowflake procedure from `on-run-start`:
@@ -566,6 +574,8 @@ DBT_SNOWFLAKE_ICEBERG_SYNC_EXTERNAL_ACCESS_INTEGRATION
 DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SECRET_FQDN
 DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_AUDIENCE
 DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SERVICE_ACCOUNT
+DBT_SNOWFLAKE_ICEBERG_SYNC_WIF_TRANSFER_BIGQUERY_PROJECT_ID
+DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_STAGING_DATASET_ID
 DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_PROJECT_ID
 DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_LOCATION
 DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATASET_ID

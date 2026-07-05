@@ -83,26 +83,41 @@ def test_dbt_extract_smoke(tmp_path: Path):
         _cleanup(context, [model_name])
 
 
-def test_dbt_extract_smoke_workload_identity_federation(tmp_path: Path):
+def test_dbt_select_smoke_workload_identity_federation(tmp_path: Path):
     if not os.environ.get("DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SECRET_FQDN"):
         pytest.skip(
             "Set DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SECRET_FQDN "
             "to run the workload identity federation transfer test."
         )
 
+    staging_dataset_id = _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_STAGING_DATASET_ID")
     context = _integration_context(
         tmp_path,
         "wif_smoke",
         auth_method="workload_identity_federation",
+        bigquery_project_id=_required_env(
+            "DBT_SNOWFLAKE_ICEBERG_SYNC_WIF_TRANSFER_BIGQUERY_PROJECT_ID"
+        ),
+        bigquery_dataset_id=staging_dataset_id,
     )
     model_name = f"iceberg_sync_wif_smoke_{context.run_id}"
+    table_id = f"wif_smoke_{context.run_id}"
     export_prefix = _export_prefix(context, model_name)
     models = {
-        model_name: _extract_model_sql(
+        model_name: _select_model_sql(
             context,
             model_name=model_name,
-            table_id=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TABLE_ID"),
-            export_predicate_type="none",
+            model_sql=textwrap.dedent(
+                """
+                SELECT
+                  1 AS smoke_id,
+                  'wif-smoke' AS smoke_label
+                """
+            ).strip(),
+            predicates=[],
+            predicate_type="none",
+            table_id=table_id,
+            staging_dataset_id=staging_dataset_id,
             base_location=export_prefix,
             export_prefix=export_prefix,
         )
@@ -119,9 +134,9 @@ def test_dbt_extract_smoke_workload_identity_federation(tmp_path: Path):
                     context,
                     model_name,
                     expected_modes=["full_refresh"],
-                    expected_rows=_optional_int_env(
-                        "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TABLE_EXPECTED_ROWS"
-                    ),
+                    expected_rows=1,
+                    expected_source_job_reference_counts=[2],
+                    require_staging_table=True,
                 )
             ],
         )
@@ -845,6 +860,8 @@ def _integration_context(
     prefix: str,
     *,
     auth_method: str = "service_account_key",
+    bigquery_project_id: str | None = None,
+    bigquery_dataset_id: str | None = None,
 ) -> IntegrationContext:
     if os.environ.get("DBT_SNOWFLAKE_ICEBERG_SYNC_RUN_INTEGRATION") != "1":
         pytest.skip("set DBT_SNOWFLAKE_ICEBERG_SYNC_RUN_INTEGRATION=1 to run")
@@ -918,8 +935,10 @@ def _integration_context(
         google_cloud_workload_identity_federation_secret_fqdn=wif_secret_fqdn,
         google_cloud_workload_identity_federation_audience=wif_audience,
         google_cloud_service_account_impersonation=wif_impersonation,
-        bigquery_project_id=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_PROJECT_ID"),
-        bigquery_dataset_id=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATASET_ID"),
+        bigquery_project_id=bigquery_project_id
+        or _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_PROJECT_ID"),
+        bigquery_dataset_id=bigquery_dataset_id
+        or _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATASET_ID"),
         bigquery_location=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_LOCATION"),
     )
 
