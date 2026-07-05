@@ -684,8 +684,8 @@ def _workload_identity_federation_by_dbt_target_entry_var(
     if not isinstance(entry_settings, dict):
         raise RuntimeError(
             "iceberg_sync: "
-            f"vars.iceberg_sync.google_cloud_workload_identity_federation_by_dbt_target['{entry_label}'] "
-            "must be a mapping"
+            "vars.iceberg_sync.google_cloud_workload_identity_federation_by_dbt_target"
+            f"['{entry_label}'] must be a mapping"
         )
     entry_value = entry_settings.get(key)
     if entry_value is not None and entry_value != "":
