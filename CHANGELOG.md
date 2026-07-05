@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-07-05
+
+### Added
+
+- Added Snowflake outbound Workload Identity Federation auth with
+  `google_cloud_auth_method=workload_identity_federation`.
+- Added deployment config for
+  `google_cloud_workload_identity_federation_secret_fqdn`,
+  `google_cloud_workload_identity_federation_audience`, and optional
+  `google_cloud_service_account_impersonation`.
+- Added top-level dbt override vars such as
+  `iceberg_sync_google_cloud_auth_method` and
+  `iceberg_sync_google_cloud_workload_identity_federation_*` for per-target
+  auth settings.
+- Added opt-in integration tests for workload identity federation auth and
+  transfer smoke coverage.
+
+### Changed
+
+- Omitted the procedure `SECRETS = (...)` clause when workload identity
+  federation auth is selected.
+- Documented workload identity federation setup, integration environment
+  variables, and the writable BigQuery staging dataset used by the transfer
+  smoke test.
+
 ## 0.3.3 - 2026-06-24
 
 ### Fixed

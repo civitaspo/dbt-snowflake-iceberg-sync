@@ -22,7 +22,7 @@ Add the package to `packages.yml`:
 ```yaml
 packages:
   - git: https://github.com/civitaspo/dbt-snowflake-iceberg-sync.git
-    revision: v0.3.3
+    revision: v0.4.0
 ```
 
 Then run:
