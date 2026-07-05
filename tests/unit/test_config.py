@@ -24,14 +24,6 @@ def test_parse_config_defaults(base_payload):
     assert config.run_log.fail_on_error is False
 
 
-def test_parse_config_accepts_legacy_service_account_key_alias(payload_factory):
-    config = parse_config(
-        payload_factory(deployment__google_cloud_auth_method="service_account_key")
-    )
-
-    assert config.deployment.google_cloud_auth_method == "service_account_credentials_json"
-
-
 def test_parse_config_normalizes_only_snowflake_object_identifiers(payload_factory):
     payload = payload_factory(
         target_relation__database="analytics",

@@ -84,7 +84,7 @@ Deployment vars:
 | `handler_import_name` | No | `iceberg_sync_procedure` | Import directory name mounted into the Snowflake Python runtime. |
 | `handler_name` | No | `<handler_import_name>.handler.main` | Python procedure entry point. |
 | `external_access_integrations` | No | `[]` | External access integrations granted to the procedure. |
-| `google_cloud_auth_method` | No | `service_account_credentials_json` | Google Cloud auth mode. Supported values are `service_account_credentials_json` and `workload_identity_federation`. The legacy value `service_account_key` is still accepted as an alias. |
+| `google_cloud_auth_method` | No | `service_account_credentials_json` | Google Cloud auth mode. Supported values are `service_account_credentials_json` and `workload_identity_federation`. |
 | `google_cloud_service_account_secret_fqdn` | Yes for `service_account_credentials_json` | None | Fully qualified Snowflake secret containing the Google Cloud service account JSON. |
 | `google_cloud_service_account_secret_alias` | No | `google_cloud_service_account_credentials_json` | Secret alias read by the Python handler for `service_account_credentials_json`. |
 | `google_cloud_workload_identity_federation_secret_fqdn` | Yes for `workload_identity_federation` | None | Three-part name of the Snowflake workload identity federation secret used by `SYSTEM$ISSUE_WORKLOAD_IDENTITY_FEDERATION_TOKEN`. |

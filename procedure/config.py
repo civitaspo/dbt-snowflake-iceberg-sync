@@ -16,7 +16,6 @@ PREDICATE_TYPES = {"auto", "none", "partition_decorator", "table_suffix", "where
 INCREMENTAL_STRATEGIES = {"delete+copy"}
 STORAGE_SERIALIZATION_POLICIES = {"COMPATIBLE", "OPTIMIZED"}
 GOOGLE_CLOUD_AUTH_METHODS = {"service_account_credentials_json", "workload_identity_federation"}
-LEGACY_GOOGLE_CLOUD_AUTH_METHODS = {"service_account_key"}
 FORBIDDEN_MODEL_CONFIG_KEYS = {
     "credentials",
     "credential",
@@ -179,10 +178,8 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         google_cloud_service_account_secret_alias=deployment_payload.get(
             "google_cloud_service_account_secret_alias"
         ),
-        google_cloud_auth_method=_normalize_google_cloud_auth_method(
-            _defaulted(
-                deployment_payload, "google_cloud_auth_method", "service_account_credentials_json"
-            )
+        google_cloud_auth_method=_defaulted(
+            deployment_payload, "google_cloud_auth_method", "service_account_credentials_json"
         ),
         google_cloud_workload_identity_federation_secret_fqdn=_optional_secret_fqdn(
             deployment_payload.get("google_cloud_workload_identity_federation_secret_fqdn")
@@ -473,12 +470,6 @@ def _required(value: dict[str, Any], key: str, field_name: str) -> str:
     if result is None or result == "":
         raise ConfigError(f"{field_name} is required")
     return str(result)
-
-
-def _normalize_google_cloud_auth_method(value: str) -> str:
-    if value in LEGACY_GOOGLE_CLOUD_AUTH_METHODS:
-        return "service_account_credentials_json"
-    return value
 
 
 def _defaulted(value: dict[str, Any], key: str, default: str) -> str:
