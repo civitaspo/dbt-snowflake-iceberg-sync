@@ -22,21 +22,6 @@
 - Documented by-dbt-target workload identity federation configuration and
   resolution order in the README.
 
-## 0.4.2 - 2026-07-05
-
-_Skipped: the `v0.4.2` tag name was reserved by a deleted immutable GitHub
-release and cannot be recreated._
-
-## 0.4.1 - 2026-07-05
-
-_Skipped: the `v0.4.1` tag name was reserved by a deleted immutable GitHub
-release and cannot be recreated._
-
-## 0.4.3 - 2026-07-05
-
-_Skipped: the `v0.4.3` tag name was reserved by a deleted immutable GitHub
-release and cannot be recreated._
-
 ## 0.4.0 - 2026-07-05
 
 ### Added
