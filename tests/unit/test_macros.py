@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -529,6 +530,111 @@ def test_deployment_config_keeps_credential_and_handler_path_vars_required(missi
         _render_deployment_config(vars_dict)
 
 
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (
+            "dbt_packages/dbt_snowflake_iceberg_sync/procedure",
+            os.path.abspath("dbt_packages/dbt_snowflake_iceberg_sync/procedure"),
+        ),
+        (
+            "dbt_packages/dbt_snowflake_iceberg_sync/procedure/",
+            os.path.abspath("dbt_packages/dbt_snowflake_iceberg_sync/procedure/"),
+        ),
+        (
+            "/absolute/path/to/dbt_packages/dbt_snowflake_iceberg_sync/procedure",
+            "/absolute/path/to/dbt_packages/dbt_snowflake_iceberg_sync/procedure",
+        ),
+        (
+            "/absolute/path/to/dbt_packages/dbt_snowflake_iceberg_sync/procedure/",
+            "/absolute/path/to/dbt_packages/dbt_snowflake_iceberg_sync/procedure/",
+        ),
+    ],
+)
+def test_absolute_local_path_resolves_relative_and_keeps_absolute(path: str, expected: str):
+    assert _render_absolute_local_path(path) == expected
+
+
+def test_absolute_local_path_prefers_dbt_project_dir_over_cwd_abspath():
+    rendered = _render_absolute_local_path(
+        "dbt_packages/dbt_snowflake_iceberg_sync/procedure",
+        project_dir="/workspace/consumer",
+    )
+
+    assert rendered == (
+        "/workspace/consumer/dbt_packages/dbt_snowflake_iceberg_sync/procedure"
+    )
+
+
+def test_absolute_local_path_uses_dbt_project_dir_without_modules_os():
+    rendered = _render_absolute_local_path(
+        "dbt_packages/dbt_snowflake_iceberg_sync/procedure",
+        modules_os=None,
+        project_dir="/workspace/consumer",
+    )
+
+    assert rendered == (
+        "/workspace/consumer/dbt_packages/dbt_snowflake_iceberg_sync/procedure"
+    )
+
+
+def test_absolute_local_path_warns_and_keeps_relative_without_resolution():
+    warnings: list[str] = []
+
+    rendered = _render_absolute_local_path(
+        "dbt_packages/dbt_snowflake_iceberg_sync/procedure",
+        modules_os=None,
+        project_dir="",
+        warnings=warnings,
+    )
+
+    assert rendered == "dbt_packages/dbt_snowflake_iceberg_sync/procedure"
+    assert warnings
+    assert "DBT_PROJECT_DIR" in warnings[0]
+
+
+def test_deployment_config_absoluteizes_relative_handler_local_path():
+    config = _render_deployment_config(_minimal_deployment_vars())
+
+    assert config["handler_local_path"] == os.path.abspath(
+        "dbt_packages/dbt_snowflake_iceberg_sync/procedure"
+    )
+    assert config["handler_local_path"].startswith("/")
+
+
+def test_deployment_config_prefers_dbt_project_dir_for_relative_handler_local_path(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("DBT_PROJECT_DIR", "/workspace/consumer")
+
+    config = _render_deployment_config(_minimal_deployment_vars())
+
+    assert config["handler_local_path"] == (
+        "/workspace/consumer/dbt_packages/dbt_snowflake_iceberg_sync/procedure"
+    )
+
+
+def test_deployment_config_keeps_absolute_handler_local_path():
+    vars_dict = _minimal_deployment_vars()
+    vars_dict["handler_local_path"] = (
+        "/tmp/dbt_packages/dbt_snowflake_iceberg_sync/procedure"
+    )
+
+    config = _render_deployment_config(vars_dict)
+
+    assert config["handler_local_path"] == (
+        "/tmp/dbt_packages/dbt_snowflake_iceberg_sync/procedure"
+    )
+
+
+def test_install_put_uses_absolute_file_uri_from_deployment_config():
+    config = _render_deployment_config(_minimal_deployment_vars())
+    put_path = f"file://{config['handler_local_path'].rstrip('/')}/__init__.py"
+
+    assert put_path.startswith("file:///")
+    assert put_path.endswith("/__init__.py")
+
+
 def test_model_config_reads_meta_iceberg_sync_only():
     value = _render_model_config(
         config_name="google_cloud_project_id",
@@ -746,6 +852,7 @@ def _render_deployment_config(
     top_level_vars = top_level_vars or {}
     package_namespace = SimpleNamespace(
         iceberg_sync_as_list=_as_list,
+        iceberg_sync_absolute_local_path=_absolute_local_path,
         iceberg_sync_defaulted_var=_defaulted_var,
         iceberg_sync_deployment_var=lambda current_vars, key, default=None: _deployment_var(
             top_level_vars,
@@ -796,6 +903,9 @@ def _render_deployment_config(
                 name=target_name,
             ),
             "dbt_snowflake_iceberg_sync": package_namespace,
+            "modules": SimpleNamespace(os=os),
+            "env_var": lambda name, default="": os.environ.get(name, default),
+            "exceptions": SimpleNamespace(warn=lambda message: None),
             "return": lambda item: json.dumps(item, sort_keys=True),
         }
     )
@@ -843,6 +953,53 @@ def _render_normalized_snowflake_type(value: str) -> str:
             "value": value,
         }
     ).strip()
+
+
+def _render_absolute_local_path(
+    path: str,
+    *,
+    modules_os: object | None = os,
+    project_dir: str = "",
+    warnings: list[str] | None = None,
+) -> str:
+    macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/config.sql"
+    template = Environment(extensions=["jinja2.ext.do"]).from_string(
+        macro_path.read_text(encoding="utf-8")
+        + "\n{{ iceberg_sync_absolute_local_path(path) }}"
+    )
+    warning_sink = warnings if warnings is not None else []
+    context: dict[str, object] = {
+        "env_var": lambda name, default="": project_dir if name == "DBT_PROJECT_DIR" else default,
+        "exceptions": SimpleNamespace(warn=lambda message: warning_sink.append(message)),
+        "return": _jinja_return,
+        "path": path,
+    }
+    if modules_os is not None:
+        context["modules"] = SimpleNamespace(os=modules_os)
+    try:
+        return template.render(context).strip()
+    except _JinjaReturn as returned:
+        return str(returned.value)
+
+
+class _JinjaReturn(Exception):
+    def __init__(self, value: object) -> None:
+        self.value = value
+        super().__init__(str(value))
+
+
+def _jinja_return(value: object) -> object:
+    raise _JinjaReturn(value)
+
+
+def _absolute_local_path(path: object) -> str:
+    local_path = str(path)
+    if local_path.startswith("/"):
+        return local_path
+    project_dir = os.environ.get("DBT_PROJECT_DIR", "")
+    if project_dir:
+        return f"{project_dir.rstrip('/')}/{local_path.lstrip('/')}"
+    return os.path.abspath(local_path)
 
 
 def _defaulted_var(vars_dict: dict[str, object], key: str, default: object) -> object:

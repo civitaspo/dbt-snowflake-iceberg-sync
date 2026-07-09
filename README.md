@@ -51,7 +51,7 @@ Example deployment vars:
 ```yaml
 vars:
   iceberg_sync:
-    handler_local_path: /absolute/path/to/dbt_packages/dbt_snowflake_iceberg_sync/procedure
+    handler_local_path: dbt_packages/dbt_snowflake_iceberg_sync/procedure
 
     external_access_integrations: [BIGQUERY_API]
     google_cloud_service_account_secret_fqdn: ANALYTICS.SECRETS.GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON
@@ -74,7 +74,7 @@ Deployment vars:
 
 | Var | Required | Default | Description |
 | --- | --- | --- | --- |
-| `handler_local_path` | Yes | None | Local path to the package `procedure/` directory uploaded by the installer. Use an absolute path with dbt Fusion. |
+| `handler_local_path` | Yes | None | Local path to the package `procedure/` directory uploaded by the installer. Relative paths (for example `dbt_packages/dbt_snowflake_iceberg_sync/procedure`) are absolute-ized before Snowflake `PUT`, preferring `DBT_PROJECT_DIR` when set and otherwise resolving against the process working directory. Absolute paths are accepted unchanged. |
 | `google_cloud_service_account_secret_fqdn` | Yes | None | Fully qualified Snowflake secret containing the Google Cloud service account JSON. |
 | `procedure_database` | No | `target.database` | Database where the package procedure and default helper objects are installed. |
 | `procedure_schema` | No | `target.schema` | Schema where the package procedure and default helper objects are installed. |
@@ -115,7 +115,7 @@ service account key, set:
 ```yaml
 vars:
   iceberg_sync:
-    handler_local_path: /absolute/path/to/dbt_packages/dbt_snowflake_iceberg_sync/procedure
+    handler_local_path: dbt_packages/dbt_snowflake_iceberg_sync/procedure
     external_access_integrations: [BIGQUERY_API]
     google_cloud_auth_method: workload_identity_federation
     google_cloud_workload_identity_federation_secret_fqdn: ANALYTICS.SECRETS.WORKLOAD_IDENTITY_FEDERATION_DEFAULT

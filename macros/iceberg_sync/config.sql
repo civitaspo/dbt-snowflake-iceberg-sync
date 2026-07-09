@@ -7,6 +7,30 @@
   {{ return(vars_dict.get(key)) }}
 {%- endmacro %}
 
+{% macro iceberg_sync_absolute_local_path(path) -%}
+  {#- Absolute-ize relative handler paths for Snowflake PUT.
+      dbt Fusion (ADBC) does not resolve relative file:// paths against CWD.
+      Prefer DBT_PROJECT_DIR when set so project-root-relative paths stay correct
+      when the CLI cwd differs from the dbt project (--project-dir, monorepos). -#}
+  {%- set local_path = path | string -%}
+  {%- if local_path.startswith('/') -%}
+    {{ return(local_path) }}
+  {%- endif -%}
+  {%- set project_dir = env_var('DBT_PROJECT_DIR', '') | string -%}
+  {%- if project_dir != '' -%}
+    {{ return(project_dir.rstrip('/') ~ '/' ~ local_path.lstrip('/')) }}
+  {%- endif -%}
+  {%- if modules is defined and modules.os is defined -%}
+    {{ return(modules.os.path.abspath(local_path)) }}
+  {%- endif -%}
+  {%- do exceptions.warn(
+    "iceberg_sync: relative handler_local_path='" ~ local_path ~ "' could not be "
+    ~ "resolved to an absolute path. Export DBT_PROJECT_DIR or pass an absolute "
+    ~ "path so Snowflake PUT works under dbt Fusion."
+  ) -%}
+  {{ return(local_path) }}
+{%- endmacro %}
+
 {% macro iceberg_sync_defaulted_var(vars_dict, key, default) -%}
   {%- if vars_dict.get(key, none) is none or vars_dict.get(key) == "" -%}
     {{ return(default) }}
@@ -153,9 +177,11 @@
     'handler_name',
     handler_import_name ~ '.handler.main'
   ) -%}
-  {%- set handler_local_path = dbt_snowflake_iceberg_sync.iceberg_sync_required_var(
-    vars_dict,
-    'handler_local_path'
+  {%- set handler_local_path = dbt_snowflake_iceberg_sync.iceberg_sync_absolute_local_path(
+    dbt_snowflake_iceberg_sync.iceberg_sync_required_var(
+      vars_dict,
+      'handler_local_path'
+    )
   ) -%}
   {%- set google_cloud_auth_method = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_var(
     vars_dict,
