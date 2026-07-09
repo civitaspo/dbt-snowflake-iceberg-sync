@@ -626,6 +626,15 @@ def _minimal_deployment_vars() -> dict[str, object]:
     }
 
 
+class _MacroReturn(Exception):
+    def __init__(self, value: object):
+        self.value = value
+
+
+def _macro_return(value: object) -> None:
+    raise _MacroReturn(value)
+
+
 def _model_node_with_meta(meta_iceberg_sync: dict[str, object]) -> SimpleNamespace:
     meta: dict[str, object] = {}
     if meta_iceberg_sync:
@@ -661,17 +670,20 @@ def _render_model_config(
             else {}
         )
     )
-    rendered = template.render(
-        {
-            "model_node": model_node,
-            "config_name": config_name,
-            "default": default,
-            "config": _ConfigGet(top_level),
-            "dbt_snowflake_iceberg_sync": package,
-            "return": lambda item: json.dumps(item, sort_keys=True),
-        }
-    )
-    return json.loads(rendered.strip())
+    try:
+        template.render(
+            {
+                "model_node": model_node,
+                "config_name": config_name,
+                "default": default,
+                "config": _ConfigGet(top_level),
+                "dbt_snowflake_iceberg_sync": package,
+                "return": _macro_return,
+            }
+        )
+    except _MacroReturn as returned:
+        return returned.value
+    raise AssertionError("iceberg_sync_model_config did not return a value")
 
 
 def _render_model_config_as_list(
@@ -713,7 +725,7 @@ def _render_forbidden_model_config_validation(
             "model_node": model_node,
             "config": _ConfigGet(top_level),
             "dbt_snowflake_iceberg_sync": package,
-            "return": lambda item: item,
+            "return": _macro_return,
         }
     )
 
