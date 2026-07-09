@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dbt-snowflake-iceberg-sync"
-version = "0.4.4"
+version = "0.4.5"
 description = "dbt materialization for syncing external data into Snowflake-managed Iceberg tables."
 readme = "README.md"
 requires-python = ">=3.11"
