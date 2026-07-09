@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.5 - 2026-07-09
+
 ### Fixed
 
 - Read unsupported `partition_by` and `cluster_by` model options from
