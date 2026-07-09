@@ -312,8 +312,8 @@ and quoted in internal table DDL and exposed view SQL.
 | `materialization_strategy` | No | `incremental` | `incremental` or `full_refresh`. `full_refresh` always reloads the target table. |
 | `incremental_strategy` | No | `delete+copy` | Incremental load strategy. Only `delete+copy` is supported. |
 | `incremental_predicate` | Conditional | None | Snowflake SQL predicate used to delete rows from the internal Iceberg table during incremental runs. Required when `bigquery_export_incremental_predicates` is non-empty, and must be absent when that list is empty. |
-| `partition_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. |
-| `cluster_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. |
+| `partition_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. Read from `meta.iceberg_sync` first, with legacy top-level config fallback. |
+| `cluster_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. Read from `meta.iceberg_sync` first, with legacy top-level config fallback. |
 | `iceberg_sync_retry_max_attempts` | No | `3` | Compatibility retry setting for the legacy full-run procedure path. The dbt-side materialization issues Snowflake load statements directly and does not retry failed `COPY INTO` statements inside Snowflake Scripting. |
 | `iceberg_sync_retry_initial_delay_seconds` | No | `5` | Compatibility retry delay for the legacy full-run procedure path. |
 | `iceberg_sync_retry_max_delay_seconds` | No | `60` | Compatibility maximum retry delay for the legacy full-run procedure path. |

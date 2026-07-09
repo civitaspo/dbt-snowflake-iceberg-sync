@@ -529,6 +529,89 @@ def test_deployment_config_keeps_credential_and_handler_path_vars_required(missi
         _render_deployment_config(vars_dict)
 
 
+def test_model_config_reads_meta_iceberg_sync_only():
+    value = _render_model_config(
+        config_name="google_cloud_project_id",
+        default=None,
+        top_level={},
+        meta_iceberg_sync={"google_cloud_project_id": "meta-project"},
+    )
+
+    assert value == "meta-project"
+
+
+def test_model_config_falls_back_to_legacy_top_level():
+    value = _render_model_config(
+        config_name="google_cloud_project_id",
+        default=None,
+        top_level={"google_cloud_project_id": "top-level-project"},
+        meta_iceberg_sync={},
+    )
+
+    assert value == "top-level-project"
+
+
+def test_model_config_prefers_meta_iceberg_sync_over_top_level():
+    value = _render_model_config(
+        config_name="google_cloud_project_id",
+        default=None,
+        top_level={"google_cloud_project_id": "top-level-project"},
+        meta_iceberg_sync={"google_cloud_project_id": "meta-project"},
+    )
+
+    assert value == "meta-project"
+
+
+@pytest.mark.parametrize(
+    ("config_name", "meta_value", "expected"),
+    [
+        ("partition_by", ["event_date"], ["event_date"]),
+        ("cluster_by", "event_name", ["event_name"]),
+        ("partition_by", [], []),
+        ("cluster_by", None, []),
+    ],
+)
+def test_model_config_reads_partition_and_cluster_from_meta(
+    config_name: str,
+    meta_value: object,
+    expected: list[object],
+):
+    meta_iceberg_sync = {}
+    if meta_value is not None:
+        meta_iceberg_sync[config_name] = meta_value
+
+    value = _render_model_config_as_list(
+        config_name=config_name,
+        top_level={},
+        meta_iceberg_sync=meta_iceberg_sync,
+    )
+
+    assert value == expected
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["top_level", "meta"],
+)
+def test_forbidden_credential_keys_rejected_from_top_level_and_meta(source: str):
+    top_level: dict[str, object] = {}
+    meta_iceberg_sync: dict[str, object] = {}
+    if source == "top_level":
+        top_level["google_cloud_service_account_secret_fqdn"] = "secret.fqdn"
+    else:
+        meta_iceberg_sync["google_cloud_service_account_secret_fqdn"] = "secret.fqdn"
+
+    with pytest.raises(
+        RuntimeError,
+        match="credential material must not be set in model config: "
+        "google_cloud_service_account_secret_fqdn",
+    ):
+        _render_forbidden_model_config_validation(
+            top_level=top_level,
+            meta_iceberg_sync=meta_iceberg_sync,
+        )
+
+
 class _FakeAdapter:
     def quote(self, value: str) -> str:
         return '"' + value.replace('"', '""') + '"'
@@ -541,6 +624,110 @@ def _minimal_deployment_vars() -> dict[str, object]:
             "SYSTEM.SECRETS.GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON"
         ),
     }
+
+
+class _MacroReturn(Exception):
+    def __init__(self, value: object):
+        self.value = value
+
+
+def _macro_return(value: object) -> None:
+    raise _MacroReturn(value)
+
+
+def _model_node_with_meta(meta_iceberg_sync: dict[str, object]) -> SimpleNamespace:
+    meta: dict[str, object] = {}
+    if meta_iceberg_sync:
+        meta["iceberg_sync"] = meta_iceberg_sync
+    return SimpleNamespace(config=SimpleNamespace(meta=meta))
+
+
+class _ConfigGet:
+    def __init__(self, values: dict[str, object]):
+        self._values = values
+
+    def get(self, key: str, default: object = None) -> object:
+        return self._values.get(key, default)
+
+
+def _render_model_config(
+    *,
+    config_name: str,
+    default: object,
+    top_level: dict[str, object],
+    meta_iceberg_sync: dict[str, object],
+) -> object:
+    validation_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/validation.sql"
+    template = Environment(extensions=["jinja2.ext.do"]).from_string(
+        validation_path.read_text(encoding="utf-8")
+        + "\n{{ iceberg_sync_model_config(model_node, config_name, default) }}"
+    )
+    model_node = _model_node_with_meta(meta_iceberg_sync)
+    package = SimpleNamespace(
+        iceberg_sync_model_meta=lambda node: (
+            node.config.meta.get("iceberg_sync", {})
+            if getattr(node.config, "meta", None)
+            else {}
+        )
+    )
+    try:
+        template.render(
+            {
+                "model_node": model_node,
+                "config_name": config_name,
+                "default": default,
+                "config": _ConfigGet(top_level),
+                "dbt_snowflake_iceberg_sync": package,
+                "return": _macro_return,
+            }
+        )
+    except _MacroReturn as returned:
+        return returned.value
+    raise AssertionError("iceberg_sync_model_config did not return a value")
+
+
+def _render_model_config_as_list(
+    *,
+    config_name: str,
+    top_level: dict[str, object],
+    meta_iceberg_sync: dict[str, object],
+) -> list[object]:
+    value = _render_model_config(
+        config_name=config_name,
+        default=[],
+        top_level=top_level,
+        meta_iceberg_sync=meta_iceberg_sync,
+    )
+    return _as_list(value)
+
+
+def _render_forbidden_model_config_validation(
+    *,
+    top_level: dict[str, object],
+    meta_iceberg_sync: dict[str, object],
+) -> None:
+    validation_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/validation.sql"
+    template = Environment(extensions=["jinja2.ext.do"]).from_string(
+        validation_path.read_text(encoding="utf-8")
+        + "\n{{ iceberg_sync_validate_forbidden_model_configs(model_node) }}"
+    )
+    model_node = _model_node_with_meta(meta_iceberg_sync)
+    package = SimpleNamespace(
+        iceberg_sync_model_meta=lambda node: (
+            node.config.meta.get("iceberg_sync", {})
+            if getattr(node.config, "meta", None)
+            else {}
+        ),
+        iceberg_sync_raise=_raise,
+    )
+    template.render(
+        {
+            "model_node": model_node,
+            "config": _ConfigGet(top_level),
+            "dbt_snowflake_iceberg_sync": package,
+            "return": _macro_return,
+        }
+    )
 
 
 def _render_deployment_config(

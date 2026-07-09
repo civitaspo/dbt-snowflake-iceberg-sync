@@ -289,8 +289,12 @@
 {% macro iceberg_sync_collect_config(model_sql, target_relation, model_node, dbt_full_refresh=False) -%}
   {%- do dbt_snowflake_iceberg_sync.iceberg_sync_validate_forbidden_model_configs(model_node) -%}
 
-  {%- set partition_by = dbt_snowflake_iceberg_sync.iceberg_sync_as_list(config.get('partition_by', [])) -%}
-  {%- set cluster_by = dbt_snowflake_iceberg_sync.iceberg_sync_as_list(config.get('cluster_by', [])) -%}
+  {%- set partition_by = dbt_snowflake_iceberg_sync.iceberg_sync_as_list(
+    dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'partition_by', [])
+  ) -%}
+  {%- set cluster_by = dbt_snowflake_iceberg_sync.iceberg_sync_as_list(
+    dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'cluster_by', [])
+  ) -%}
   {%- set deployment = dbt_snowflake_iceberg_sync.iceberg_sync_deployment_config() -%}
   {%- set target_payload = dbt_snowflake_iceberg_sync.iceberg_sync_relation_payload(target_relation) -%}
   {%- set internal_payload = {

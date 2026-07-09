@@ -44,6 +44,29 @@ def test_iceberg_sync_dbt_run_orchestrates_snowflake_work_in_dbt(
     assert not any("000603" in sql or "300005" in sql for sql in normalized_statements)
 
 
+def test_iceberg_sync_dbt_run_orchestrates_with_meta_iceberg_sync_config(
+    tmp_path: Path,
+    monkeypatch,
+):
+    run_result, executed_sql = _run_dbt_iceberg_sync_model(
+        tmp_path,
+        monkeypatch,
+        [
+            {"status": "running", "export_state": {"phase": "extract"}},
+            _successful_export_result(),
+        ],
+        config_style="meta",
+    )
+
+    normalized_statements = [_normalize_sql(call["sql"]) for call in executed_sql]
+
+    assert run_result.success
+    assert any(sql.startswith("call ") for sql in normalized_statements)
+    assert any("create iceberg table if not exists" in sql for sql in normalized_statements)
+    assert any("copy into" in sql for sql in normalized_statements)
+    assert any("create or replace view" in sql for sql in normalized_statements)
+
+
 def test_iceberg_sync_dbt_run_surfaces_procedure_failure(
     tmp_path: Path,
     monkeypatch,
@@ -140,6 +163,7 @@ def _run_dbt_iceberg_sync_model(
     procedure_results: list[dict[str, object]],
     *,
     model_config_extra: str = "",
+    config_style: str = "legacy",
 ):
     repo_root = Path(__file__).resolve().parents[2]
     project_dir = tmp_path / "project"
@@ -195,15 +219,39 @@ def _run_dbt_iceberg_sync_model(
         ),
         encoding="utf-8",
     )
-    extra_config_sql = ""
-    if model_config_extra:
-        extra_config_sql = ",\n" + textwrap.indent(
-            model_config_extra.strip(),
-            "                ",
+    if config_style == "meta":
+        extra_meta_sql = ""
+        if model_config_extra:
+            extra_meta_sql = ",\n" + textwrap.indent(
+                model_config_extra.strip(),
+                "                    ",
+            )
+        model_sql = textwrap.dedent(
+            f"""
+            {{{{ config(
+                materialized='iceberg_sync',
+                meta={{
+                    'iceberg_sync': {{
+                        'google_cloud_project_id': 'project',
+                        'bigquery_dataset_id': 'dataset',
+                        'bigquery_table_id': 'table',
+                        'bigquery_location': 'US',
+                        'bigquery_export_location': '@test_db.test_schema.test_stage/path',
+                        'iceberg_table_external_volume': 'test_volume'{extra_meta_sql}
+                    }}
+                }}
+            ) }}}}
+            select 1 as id
+            """
         )
-
-    (models_dir / "model.sql").write_text(
-        textwrap.dedent(
+    else:
+        extra_config_sql = ""
+        if model_config_extra:
+            extra_config_sql = ",\n" + textwrap.indent(
+                model_config_extra.strip(),
+                "                ",
+            )
+        model_sql = textwrap.dedent(
             f"""
             {{{{ config(
                 materialized='iceberg_sync',
@@ -217,9 +265,9 @@ def _run_dbt_iceberg_sync_model(
             ) }}}}
             select 1 as id
             """
-        ),
-        encoding="utf-8",
-    )
+        )
+
+    (models_dir / "model.sql").write_text(model_sql, encoding="utf-8")
 
     executed_sql: list[dict[str, object]] = []
 
