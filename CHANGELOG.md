@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.4.6 - 2026-07-09
+
+### Fixed
+
+- Absolute-ize relative `vars.iceberg_sync.handler_local_path` values before
+  Snowflake `PUT file://...` so dbt Fusion (ADBC) and dbt Core both succeed with
+  the common `dbt_packages/.../procedure` path. Absolute paths are left unchanged.
+
 ## 0.4.5 - 2026-07-09
 
 ### Fixed

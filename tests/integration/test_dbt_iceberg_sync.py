@@ -83,6 +83,47 @@ def test_dbt_extract_smoke(tmp_path: Path):
         _cleanup(context, [model_name])
 
 
+def test_dbt_install_with_relative_handler_local_path(tmp_path: Path):
+    """Relative handler_local_path must absolute-ize before PUT (Fusion + core)."""
+    context = _integration_context(tmp_path, "relpath")
+    model_name = f"iceberg_sync_relpath_{context.run_id}"
+    export_prefix = _export_prefix(context, model_name)
+    models = {
+        model_name: _extract_model_sql(
+            context,
+            model_name=model_name,
+            table_id=_required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TABLE_ID"),
+            export_predicate_type="none",
+            base_location=export_prefix,
+            export_prefix=export_prefix,
+        )
+    }
+
+    _write_project(
+        context,
+        models,
+        handler_local_path="dbt_packages/dbt_snowflake_iceberg_sync/procedure",
+    )
+    try:
+        _run_dbt(context, "deps")
+        _run_dbt(context, "run", "--select", model_name)
+        _assert_models(
+            context,
+            [
+                _assertion(
+                    context,
+                    model_name,
+                    expected_modes=["full_refresh"],
+                    expected_rows=_optional_int_env(
+                        "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TABLE_EXPECTED_ROWS"
+                    ),
+                )
+            ],
+        )
+    finally:
+        _cleanup(context, [model_name])
+
+
 def test_dbt_select_smoke_workload_identity_federation(tmp_path: Path):
     if not os.environ.get("DBT_SNOWFLAKE_ICEBERG_SYNC_WORKLOAD_IDENTITY_FEDERATION_SECRET_FQDN"):
         pytest.skip(
@@ -943,7 +984,12 @@ def _integration_context(
     )
 
 
-def _write_project(context: IntegrationContext, models: dict[str, str]) -> None:
+def _write_project(
+    context: IntegrationContext,
+    models: dict[str, str],
+    *,
+    handler_local_path: str | None = None,
+) -> None:
     (context.project_dir / "models").mkdir(parents=True)
     (context.project_dir / "macros").mkdir(parents=True)
     context.profiles_dir.mkdir(parents=True)
@@ -979,6 +1025,9 @@ def _write_project(context: IntegrationContext, models: dict[str, str]) -> None:
                 f"{context.google_cloud_service_account_impersonation}"
             )
     auth_block = "\n".join(auth_lines)
+    resolved_handler_local_path = handler_local_path or str(
+        context.package_path / "procedure"
+    )
 
     (context.project_dir / "dbt_project.yml").write_text(
         textwrap.dedent(
@@ -1001,7 +1050,7 @@ def _write_project(context: IntegrationContext, models: dict[str, str]) -> None:
                 handler_stage_path: procedure
                 handler_import_name: iceberg_sync_procedure_{context.run_id}
                 handler_name: iceberg_sync_procedure_{context.run_id}.handler.main
-                handler_local_path: {json.dumps(str(context.package_path / "procedure"))}
+                handler_local_path: {json.dumps(resolved_handler_local_path)}
                 external_access_integrations:
                   - {context.external_access_integration}
 {auth_block}
