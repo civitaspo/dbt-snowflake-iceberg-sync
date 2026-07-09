@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- Read unsupported `partition_by` and `cluster_by` model options from
+  `meta.iceberg_sync` as well as legacy top-level config, so dbt Fusion projects
+  reject non-empty values consistently instead of silently ignoring them.
+
 ## 0.4.4 - 2026-07-05
 
 ### Added
