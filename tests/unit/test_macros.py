@@ -555,7 +555,18 @@ def test_absolute_local_path_resolves_relative_and_keeps_absolute(path: str, exp
     assert _render_absolute_local_path(path) == expected
 
 
-def test_absolute_local_path_falls_back_to_dbt_project_dir_without_modules_os():
+def test_absolute_local_path_prefers_dbt_project_dir_over_cwd_abspath():
+    rendered = _render_absolute_local_path(
+        "dbt_packages/dbt_snowflake_iceberg_sync/procedure",
+        project_dir="/workspace/consumer",
+    )
+
+    assert rendered == (
+        "/workspace/consumer/dbt_packages/dbt_snowflake_iceberg_sync/procedure"
+    )
+
+
+def test_absolute_local_path_uses_dbt_project_dir_without_modules_os():
     rendered = _render_absolute_local_path(
         "dbt_packages/dbt_snowflake_iceberg_sync/procedure",
         modules_os=None,
@@ -589,6 +600,18 @@ def test_deployment_config_absoluteizes_relative_handler_local_path():
         "dbt_packages/dbt_snowflake_iceberg_sync/procedure"
     )
     assert config["handler_local_path"].startswith("/")
+
+
+def test_deployment_config_prefers_dbt_project_dir_for_relative_handler_local_path(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("DBT_PROJECT_DIR", "/workspace/consumer")
+
+    config = _render_deployment_config(_minimal_deployment_vars())
+
+    assert config["handler_local_path"] == (
+        "/workspace/consumer/dbt_packages/dbt_snowflake_iceberg_sync/procedure"
+    )
 
 
 def test_deployment_config_keeps_absolute_handler_local_path():
@@ -973,6 +996,9 @@ def _absolute_local_path(path: object) -> str:
     local_path = str(path)
     if local_path.startswith("/"):
         return local_path
+    project_dir = os.environ.get("DBT_PROJECT_DIR", "")
+    if project_dir:
+        return f"{project_dir.rstrip('/')}/{local_path.lstrip('/')}"
     return os.path.abspath(local_path)
 
 

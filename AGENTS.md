@@ -80,8 +80,9 @@ uv run pytest -m integration tests/integration
 To run integration tests with dbt Fusion, set
 `DBT_SNOWFLAKE_ICEBERG_SYNC_DBT_EXECUTABLE` to the `dbtf` executable. Relative
 or absolute `vars.iceberg_sync.handler_local_path` values both work; the package
-absolute-izes relative paths before Snowflake `PUT file://...` so Fusion does
-not depend on the CLI working directory.
+absolute-izes relative paths before Snowflake `PUT file://...`, preferring
+`DBT_PROJECT_DIR` when set so Fusion and `--project-dir` runs do not depend on
+the CLI working directory.
 
 The tests may create temporary Snowflake procedures, views, Iceberg tables, run
 logs, BigQuery extract jobs, and GCS files under generated prefixes. They should

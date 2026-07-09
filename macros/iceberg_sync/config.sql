@@ -9,17 +9,19 @@
 
 {% macro iceberg_sync_absolute_local_path(path) -%}
   {#- Absolute-ize relative handler paths for Snowflake PUT.
-      dbt Fusion (ADBC) does not resolve relative file:// paths against CWD. -#}
+      dbt Fusion (ADBC) does not resolve relative file:// paths against CWD.
+      Prefer DBT_PROJECT_DIR when set so project-root-relative paths stay correct
+      when the CLI cwd differs from the dbt project (--project-dir, monorepos). -#}
   {%- set local_path = path | string -%}
   {%- if local_path.startswith('/') -%}
     {{ return(local_path) }}
   {%- endif -%}
-  {%- if modules is defined and modules.os is defined -%}
-    {{ return(modules.os.path.abspath(local_path)) }}
-  {%- endif -%}
   {%- set project_dir = env_var('DBT_PROJECT_DIR', '') | string -%}
   {%- if project_dir != '' -%}
     {{ return(project_dir.rstrip('/') ~ '/' ~ local_path.lstrip('/')) }}
+  {%- endif -%}
+  {%- if modules is defined and modules.os is defined -%}
+    {{ return(modules.os.path.abspath(local_path)) }}
   {%- endif -%}
   {%- do exceptions.warn(
     "iceberg_sync: relative handler_local_path='" ~ local_path ~ "' could not be "
