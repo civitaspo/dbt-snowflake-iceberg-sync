@@ -211,17 +211,20 @@
     none
   ) -%}
   {%- if google_cloud_auth_method == 'service_account_credentials_json' -%}
-    {%- set google_cloud_service_account_secret_fqdn = (
-      dbt_snowflake_iceberg_sync.iceberg_sync_object_fqn(
-        dbt_snowflake_iceberg_sync.iceberg_sync_required_var(
-          vars_dict,
-          'google_cloud_service_account_secret_fqdn'
-        ),
-        'vars.iceberg_sync.google_cloud_service_account_secret_fqdn',
-        3,
-        3
-      )
+    {%- set raw_google_cloud_service_account_secret_fqdn = vars_dict.get(
+      'google_cloud_service_account_secret_fqdn',
+      none
     ) -%}
+    {%- if raw_google_cloud_service_account_secret_fqdn is not none and raw_google_cloud_service_account_secret_fqdn != "" -%}
+      {%- set google_cloud_service_account_secret_fqdn = (
+        dbt_snowflake_iceberg_sync.iceberg_sync_object_fqn(
+          raw_google_cloud_service_account_secret_fqdn,
+          'vars.iceberg_sync.google_cloud_service_account_secret_fqdn',
+          3,
+          3
+        )
+      ) -%}
+    {%- endif -%}
   {%- else -%}
     {%- set raw_google_cloud_workload_identity_federation_secret_fqdn = dbt_snowflake_iceberg_sync.iceberg_sync_workload_identity_federation_deployment_var(
       vars_dict,
@@ -256,6 +259,19 @@
       ~ workload_identity_federation_secret_relation['identifier']
     ) -%}
   {%- endif -%}
+  {%- set parquet_file_format_default = (
+    procedure_database ~ '.' ~ procedure_schema ~ '.ICEBERG_SYNC_PARQUET_FILE_FORMAT'
+  ) -%}
+  {%- set parquet_file_format = dbt_snowflake_iceberg_sync.iceberg_sync_object_fqn(
+    dbt_snowflake_iceberg_sync.iceberg_sync_defaulted_var(
+      vars_dict,
+      'parquet_file_format',
+      parquet_file_format_default
+    ),
+    'vars.iceberg_sync.parquet_file_format',
+    1,
+    3
+  ) -%}
   {%- set external_access_integrations = [] -%}
   {%- for integration in dbt_snowflake_iceberg_sync.iceberg_sync_as_list(
     vars_dict.get('external_access_integrations', [])
@@ -287,6 +303,7 @@
     'handler_local_path': handler_local_path,
     'external_access_integrations': external_access_integrations,
     'run_log_table': run_log_table,
+    'parquet_file_format': parquet_file_format,
     'google_cloud_service_account_secret_fqdn': google_cloud_service_account_secret_fqdn,
     'google_cloud_service_account_secret_alias': google_cloud_service_account_secret_alias,
     'google_cloud_auth_method': google_cloud_auth_method,
@@ -336,9 +353,10 @@
   {%- set materialization_strategy = dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'materialization_strategy', none) -%}
   {%- set incremental_strategy = dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'incremental_strategy', none) -%}
   {%- set incremental_predicate = dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'incremental_predicate', none) -%}
+  {%- set resolved_source_type = source_type or 'bigquery' -%}
 
   {%- set payload = {
-    'source_type': source_type or 'bigquery',
+    'source_type': resolved_source_type,
     'materialization_strategy': materialization_strategy or 'incremental',
     'incremental_strategy': incremental_strategy or 'delete+copy',
     'incremental_predicate': incremental_predicate,
@@ -368,25 +386,6 @@
     'run_log': {
       'fail_on_error': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_sync_run_log_fail_on_error', false)
     },
-    'bigquery': {
-      'export_strategy': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_strategy', none) or 'extract',
-      'project_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'google_cloud_project_id'),
-      'dataset_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_dataset_id'),
-      'table_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_table_id'),
-      'location': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_location'),
-      'export_location': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_export_location'),
-      'export_compression': (dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_compression', none) or 'ZSTD') | upper,
-      'export_predicate_type': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_predicate_type', none) or 'auto',
-      'full_refresh_predicates': dbt_snowflake_iceberg_sync.iceberg_sync_as_list(dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_full_refresh_predicates', [])),
-      'incremental_predicates': dbt_snowflake_iceberg_sync.iceberg_sync_as_list(dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_incremental_predicates', [])),
-      'staging_dataset_id': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_staging_dataset_id', none),
-      'staging_table_expiration_hours': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_staging_table_expiration_hours', 24),
-      'staging_table_reuse': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_staging_table_reuse', true),
-      'force_rebuild_staging_table': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'force_rebuild_staging_table', false),
-      'skip_missing_tables': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_extract_skip_missing_tables', false),
-      'export_poll_interval_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 'bigquery_export_poll_interval_seconds', 30),
-      'export_poll_timeout_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 'bigquery_export_poll_timeout_seconds', 3600)
-    },
     'iceberg_table': {
       'external_volume': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'iceberg_table_external_volume'),
       'base_location': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_table_base_location', none),
@@ -402,6 +401,64 @@
       'enable_data_compaction': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'iceberg_table_enable_data_compaction', true)
     }
   } -%}
+  {%- if resolved_source_type == 's3_parquet' -%}
+    {%- do payload.update({
+      's3_parquet': dbt_snowflake_iceberg_sync.iceberg_sync_collect_s3_parquet_config(model_node)
+    }) -%}
+  {%- else -%}
+    {%- do payload.update({
+      'bigquery': dbt_snowflake_iceberg_sync.iceberg_sync_collect_bigquery_config(model_node)
+    }) -%}
+  {%- endif -%}
   {%- do dbt_snowflake_iceberg_sync.iceberg_sync_validate_payload(payload) -%}
   {{ return(payload) }}
+{%- endmacro %}
+
+{% macro iceberg_sync_collect_bigquery_config(model_node) -%}
+  {{ return({
+    'export_strategy': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_strategy', none) or 'extract',
+    'project_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'google_cloud_project_id'),
+    'dataset_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_dataset_id'),
+    'table_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_table_id'),
+    'location': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_location'),
+    'export_location': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_export_location'),
+    'export_compression': (dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_compression', none) or 'ZSTD') | upper,
+    'export_predicate_type': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_predicate_type', none) or 'auto',
+    'full_refresh_predicates': dbt_snowflake_iceberg_sync.iceberg_sync_as_list(dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_full_refresh_predicates', [])),
+    'incremental_predicates': dbt_snowflake_iceberg_sync.iceberg_sync_as_list(dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_incremental_predicates', [])),
+    'staging_dataset_id': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_staging_dataset_id', none),
+    'staging_table_expiration_hours': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_staging_table_expiration_hours', 24),
+    'staging_table_reuse': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_staging_table_reuse', true),
+    'force_rebuild_staging_table': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'force_rebuild_staging_table', false),
+    'skip_missing_tables': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_extract_skip_missing_tables', false),
+    'export_poll_interval_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 'bigquery_export_poll_interval_seconds', 30),
+    'export_poll_timeout_seconds': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 'bigquery_export_poll_timeout_seconds', 3600)
+  }) }}
+{%- endmacro %}
+
+{% macro iceberg_sync_normalize_path_list(value) -%}
+  {%- set values = dbt_snowflake_iceberg_sync.iceberg_sync_as_list(value) -%}
+  {%- if values | length == 0 -%}
+    {{ return(['']) }}
+  {%- endif -%}
+  {%- set normalized = [] -%}
+  {%- for item in values -%}
+    {%- do normalized.append((item | string | trim).strip('/')) -%}
+  {%- endfor -%}
+  {{ return(normalized) }}
+{%- endmacro %}
+
+{% macro iceberg_sync_collect_s3_parquet_config(model_node) -%}
+  {{ return({
+    'location': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 's3_parquet_location'),
+    'file_pattern': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 's3_parquet_file_pattern', none),
+    'full_refresh_paths': dbt_snowflake_iceberg_sync.iceberg_sync_normalize_path_list(
+      dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 's3_parquet_full_refresh_paths', [''])
+    ),
+    'incremental_paths': dbt_snowflake_iceberg_sync.iceberg_sync_normalize_path_list(
+      dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 's3_parquet_incremental_paths', [''])
+    ),
+    'skip_missing_location': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 's3_parquet_skip_missing_location', false),
+    'infer_schema_max_file_count': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 's3_parquet_infer_schema_max_file_count', 16, true)
+  }) }}
 {%- endmacro %}

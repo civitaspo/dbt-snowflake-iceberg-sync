@@ -27,22 +27,28 @@
 {%- endmacro %}
 
 {% macro iceberg_sync_predicates_for_mode(payload, effective_mode) -%}
+  {%- if payload['source_type'] == 's3_parquet' -%}
+    {%- if effective_mode == 'full_refresh' -%}
+      {{ return(payload['s3_parquet']['full_refresh_paths']) }}
+    {%- endif -%}
+    {{ return(payload['s3_parquet']['incremental_paths']) }}
+  {%- endif -%}
   {%- if effective_mode == 'full_refresh' -%}
     {{ return(payload['bigquery']['full_refresh_predicates']) }}
   {%- endif -%}
   {{ return(payload['bigquery']['incremental_predicates']) }}
 {%- endmacro %}
 
-{% macro iceberg_sync_parse_stage_location(export_location) -%}
+{% macro iceberg_sync_parse_stage_location(export_location, field_name='bigquery_export_location') -%}
   {%- if not export_location.startswith('@') -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      'bigquery_export_location must start with @'
+      field_name ~ ' must start with @'
     ) -%}
   {%- endif -%}
   {%- set raw = export_location[1:] -%}
   {%- if raw == '' or raw.startswith('~') or raw.startswith('%') -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      'bigquery_export_location must be a named Snowflake stage, not a user or table stage'
+      field_name ~ ' must be a named Snowflake stage, not a user or table stage'
     ) -%}
   {%- endif -%}
   {%- if '/' in raw -%}
@@ -54,14 +60,23 @@
   {%- endif -%}
   {{ return({
     'stage_fqn': dbt_snowflake_iceberg_sync.iceberg_sync_object_fqn(
-      stage_raw, 'bigquery_export_location stage', 1, 3
+      stage_raw, field_name ~ ' stage', 1, 3
     ),
     'stage_path': stage_path
   }) }}
 {%- endmacro %}
 
-{% macro iceberg_sync_resolve_stage_location(export_location, run_id) -%}
-  {%- set parsed = dbt_snowflake_iceberg_sync.iceberg_sync_parse_stage_location(export_location) -%}
+{% macro iceberg_sync_resolve_stage_location(
+  export_location,
+  run_id=none,
+  allowed_schemes=['gcs://'],
+  field_name='bigquery_export_location',
+  cloud_label='GCS'
+) -%}
+  {%- set parsed = dbt_snowflake_iceberg_sync.iceberg_sync_parse_stage_location(
+    export_location,
+    field_name
+  ) -%}
   {%- set stage_fqn = parsed['stage_fqn'] -%}
   {%- set stage_path = parsed['stage_path'] -%}
   {%- set stage_table = run_query('DESC STAGE ' ~ stage_fqn) -%}
@@ -84,19 +99,84 @@
       {%- set url_text = (urls[0] | string).strip().rstrip('/') -%}
     {%- endif -%}
   {%- endif -%}
-  {%- if not url_text.startswith('gcs://') -%}
+  {%- set scheme_check = namespace(ok=false) -%}
+  {%- for scheme in allowed_schemes -%}
+    {%- if url_text.startswith(scheme) -%}
+      {%- set scheme_check.ok = true -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- if not scheme_check.ok -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      'bigquery_export_location must reference a Snowflake stage backed by GCS'
+      field_name ~ ' must reference a Snowflake stage backed by ' ~ cloud_label
     ) -%}
   {%- endif -%}
-  {%- set run_path = (stage_path ~ '/' ~ run_id).strip('/') -%}
-  {%- set run_stage_location = '@' ~ stage_fqn ~ '/' ~ run_path -%}
-  {%- set gcs_base = 'gs://' ~ url_text.removeprefix('gcs://') -%}
+  {%- set run_path_parts = [] -%}
+  {%- if stage_path -%}
+    {%- do run_path_parts.append(stage_path) -%}
+  {%- endif -%}
+  {%- if run_id -%}
+    {%- do run_path_parts.append(run_id) -%}
+  {%- endif -%}
+  {%- set run_path = run_path_parts | join('/') -%}
+  {%- if run_path -%}
+    {%- set run_stage_location = '@' ~ stage_fqn ~ '/' ~ run_path -%}
+  {%- else -%}
+    {%- set run_stage_location = '@' ~ stage_fqn -%}
+  {%- endif -%}
+  {%- if url_text.startswith('gcs://') -%}
+    {%- set remote_base = 'gs://' ~ url_text.removeprefix('gcs://') -%}
+  {%- else -%}
+    {%- set remote_base = url_text -%}
+  {%- endif -%}
+  {%- if run_path -%}
+    {%- set remote_run_uri = (remote_base.rstrip('/') ~ '/' ~ run_path).strip() -%}
+  {%- else -%}
+    {%- set remote_run_uri = remote_base.rstrip('/') -%}
+  {%- endif -%}
   {{ return({
     'stage_fqn': stage_fqn,
     'stage_path': stage_path,
+    'stage_url': url_text,
     'run_stage_location': run_stage_location,
-    'gcs_run_uri': (gcs_base.rstrip('/') ~ '/' ~ run_path).strip()
+    'remote_run_uri': remote_run_uri,
+    'gcs_run_uri': remote_run_uri
+  }) }}
+{%- endmacro %}
+
+{% macro iceberg_sync_resolve_s3_parquet_locations(payload, effective_mode) -%}
+  {%- set s3 = payload['s3_parquet'] -%}
+  {%- set stage = dbt_snowflake_iceberg_sync.iceberg_sync_resolve_stage_location(
+    s3['location'],
+    none,
+    ['s3://', 's3gov://', 's3china://'],
+    's3_parquet_location',
+    'S3'
+  ) -%}
+  {%- set paths = dbt_snowflake_iceberg_sync.iceberg_sync_predicates_for_mode(
+    payload,
+    effective_mode
+  ) -%}
+  {%- set locations = [] -%}
+  {%- for path_suffix in paths -%}
+    {%- if path_suffix -%}
+      {%- set stage_location = stage['run_stage_location'].rstrip('/') ~ '/' ~ path_suffix -%}
+      {%- set remote_uri = stage['remote_run_uri'].rstrip('/') ~ '/' ~ path_suffix -%}
+    {%- else -%}
+      {%- set stage_location = stage['run_stage_location'] -%}
+      {%- set remote_uri = stage['remote_run_uri'] -%}
+    {%- endif -%}
+    {%- do locations.append({
+      'stage_location': stage_location,
+      'remote_uri': remote_uri,
+      'pattern': s3['file_pattern'],
+      'force': true,
+      'path_suffix': path_suffix
+    }) -%}
+  {%- endfor -%}
+  {{ return({
+    'stage': stage,
+    'locations': locations,
+    'destination_uri': stage['remote_run_uri']
   }) }}
 {%- endmacro %}
 
@@ -130,8 +210,13 @@
   {%- set ns = namespace(result=dbt_snowflake_iceberg_sync.iceberg_sync_call_export_action(
     start_payload, 'iceberg_sync_start_export'
   )) -%}
-  {%- set interval_seconds = payload['bigquery']['export_poll_interval_seconds'] -%}
-  {%- set timeout_seconds = payload['bigquery']['export_poll_timeout_seconds'] -%}
+  {%- if payload['source_type'] == 's3_parquet' -%}
+    {%- set interval_seconds = 1 -%}
+    {%- set timeout_seconds = 1 -%}
+  {%- else -%}
+    {%- set interval_seconds = payload['bigquery']['export_poll_interval_seconds'] -%}
+    {%- set timeout_seconds = payload['bigquery']['export_poll_timeout_seconds'] -%}
+  {%- endif -%}
   {%- set max_polls = ((timeout_seconds / interval_seconds) | int) + 1 -%}
   {%- for attempt in range(max_polls) -%}
     {%- if ns.result.get('status') == 'success' -%}
@@ -145,13 +230,13 @@
       {{ return(skipped_result) }}
     {%- elif ns.result.get('status') != 'running' -%}
       {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        ns.result.get('error_message', 'BigQuery export failed')
+        ns.result.get('error_message', 'source export failed')
       ) -%}
     {%- endif -%}
     {%- if attempt + 1 < max_polls -%}
       {%- set wait_milliseconds = ((interval_seconds * 1000) | int) -%}
       {%- if wait_milliseconds > 0 -%}
-        {%- call statement('iceberg_sync_wait_for_bigquery_' ~ attempt, auto_begin=False) -%}
+        {%- call statement('iceberg_sync_wait_for_export_' ~ attempt, auto_begin=False) -%}
           CALL SYSTEM$WAIT({{ wait_milliseconds }}, 'MILLISECONDS')
         {%- endcall -%}
       {%- endif -%}
@@ -163,7 +248,7 @@
     {%- endif -%}
   {%- endfor -%}
   {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-    'BigQuery export did not finish before bigquery_export_poll_timeout_seconds'
+    'source export did not finish before the configured poll timeout'
   ) -%}
 {%- endmacro %}
 
@@ -271,25 +356,41 @@ COPY GRANTS
   {{ return('DELETE FROM ' ~ internal_relation ~ ' WHERE ' ~ payload['incremental_predicate']) }}
 {%- endmacro %}
 
-{% macro iceberg_sync_copy_sql(payload, stage_run_location) -%}
+{% macro iceberg_sync_copy_sql(payload, stage_run_location, pattern=none, force=false) -%}
   {%- set internal_relation = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_payload(
     payload['internal_relation']
   ) -%}
-  {{ return(
-    'COPY INTO ' ~ internal_relation ~ '\n'
-    ~ 'FROM ' ~ stage_run_location.rstrip('/') ~ '/\n'
-    ~ 'FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)\n'
-    ~ 'LOAD_MODE = ADD_FILES_COPY\n'
-    ~ 'MATCH_BY_COLUMN_NAME = CASE_SENSITIVE\n'
-    ~ 'PURGE = FALSE'
-  ) }}
+  {%- set parts = [
+    'COPY INTO ' ~ internal_relation,
+    'FROM ' ~ stage_run_location.rstrip('/') ~ '/',
+    'FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)',
+    'LOAD_MODE = ADD_FILES_COPY',
+    'MATCH_BY_COLUMN_NAME = CASE_SENSITIVE',
+    'PURGE = FALSE'
+  ] -%}
+  {%- if pattern -%}
+    {%- do parts.append(
+      'PATTERN = ' ~ dbt_snowflake_iceberg_sync.iceberg_sync_sql_string_literal(pattern)
+    ) -%}
+  {%- endif -%}
+  {%- if force -%}
+    {%- do parts.append('FORCE = TRUE') -%}
+  {%- endif -%}
+  {{ return(parts | join('\n')) }}
 {%- endmacro %}
 
-{% macro iceberg_sync_run_load(payload, effective_mode, stage_run_location) -%}
+{% macro iceberg_sync_run_load(payload, effective_mode, load_locations) -%}
   {%- call statement('main', auto_begin=False) -%}
     BEGIN;
     {{ dbt_snowflake_iceberg_sync.iceberg_sync_delete_sql(payload, effective_mode) }};
-    {{ dbt_snowflake_iceberg_sync.iceberg_sync_copy_sql(payload, stage_run_location) }};
+    {%- for location in load_locations %}
+    {{ dbt_snowflake_iceberg_sync.iceberg_sync_copy_sql(
+      payload,
+      location['stage_location'],
+      location.get('pattern'),
+      location.get('force', false)
+    ) }};
+    {%- endfor %}
     COMMIT;
   {%- endcall -%}
   {{ return({

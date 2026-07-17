@@ -261,3 +261,28 @@ def test_schema_compatibility_rejects_nested_field_reorder():
 
     with pytest.raises(SchemaError, match="nested field order changed"):
         validate_schema_compatibility(existing, desired)
+
+
+def test_map_parquet_infer_schema_orders_and_normalizes_types():
+    from procedure.schema import map_parquet_infer_schema
+
+    columns = map_parquet_infer_schema(
+        [
+            {"COLUMN_NAME": "CustomerName", "TYPE": "TEXT", "NULLABLE": True, "ORDER_ID": 2},
+            {"COLUMN_NAME": "OrderID", "TYPE": "NUMBER(19,0)", "NULLABLE": False, "ORDER_ID": 1},
+        ]
+    )
+
+    assert [column.source_name for column in columns] == ["OrderID", "CustomerName"]
+    assert columns[0].snowflake_type == "BIGINT"
+    assert columns[0].nullable is False
+    assert columns[1].snowflake_type == "VARCHAR"
+
+
+def test_map_parquet_infer_schema_rejects_unsupported_types():
+    from procedure.schema import map_parquet_infer_schema
+
+    with pytest.raises(SchemaError, match="not supported"):
+        map_parquet_infer_schema(
+            [{"COLUMN_NAME": "geo", "TYPE": "GEOGRAPHY", "NULLABLE": True, "ORDER_ID": 1}]
+        )

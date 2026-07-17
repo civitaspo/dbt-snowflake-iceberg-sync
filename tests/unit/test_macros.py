@@ -368,9 +368,7 @@ def test_deployment_config_prefers_by_dbt_target_over_flat_workload_identity_fed
     vars_dict = {
         "handler_local_path": "dbt_packages/dbt_snowflake_iceberg_sync/procedure",
         "google_cloud_auth_method": "workload_identity_federation",
-        "google_cloud_workload_identity_federation_secret_fqdn": (
-            "analytics.auth.flat_secret"
-        ),
+        "google_cloud_workload_identity_federation_secret_fqdn": ("analytics.auth.flat_secret"),
         "google_cloud_workload_identity_federation_audience": (
             "//iam.googleapis.com/projects/flat/locations/global/"
             "workloadIdentityPools/flat/providers/flat"
@@ -440,9 +438,7 @@ def test_deployment_config_falls_back_to_flat_when_by_dbt_target_has_no_match():
     vars_dict = {
         "handler_local_path": "dbt_packages/dbt_snowflake_iceberg_sync/procedure",
         "google_cloud_auth_method": "workload_identity_federation",
-        "google_cloud_workload_identity_federation_secret_fqdn": (
-            "analytics.auth.flat_secret"
-        ),
+        "google_cloud_workload_identity_federation_secret_fqdn": ("analytics.auth.flat_secret"),
         "google_cloud_workload_identity_federation_audience": (
             "//iam.googleapis.com/projects/flat/locations/global/"
             "workloadIdentityPools/flat/providers/flat"
@@ -520,14 +516,24 @@ def test_deployment_config_normalizes_external_access_integrations(
 
 @pytest.mark.parametrize(
     "missing_key",
-    ["handler_local_path", "google_cloud_service_account_secret_fqdn"],
+    ["handler_local_path"],
 )
-def test_deployment_config_keeps_credential_and_handler_path_vars_required(missing_key: str):
+def test_deployment_config_keeps_handler_path_var_required(missing_key: str):
     vars_dict = _minimal_deployment_vars()
     vars_dict.pop(missing_key)
 
     with pytest.raises(RuntimeError, match=f"vars.iceberg_sync.{missing_key} is required"):
         _render_deployment_config(vars_dict)
+
+
+def test_deployment_config_allows_missing_google_cloud_secret_for_s3_only_installs():
+    vars_dict = _minimal_deployment_vars()
+    vars_dict.pop("google_cloud_service_account_secret_fqdn")
+
+    config = _render_deployment_config(vars_dict)
+
+    assert config["google_cloud_service_account_secret_fqdn"] is None
+    assert "ICEBERG_SYNC_PARQUET_FILE_FORMAT" in config["parquet_file_format"]
 
 
 @pytest.mark.parametrize(
@@ -561,9 +567,7 @@ def test_absolute_local_path_prefers_dbt_project_dir_over_cwd_abspath():
         project_dir="/workspace/consumer",
     )
 
-    assert rendered == (
-        "/workspace/consumer/dbt_packages/dbt_snowflake_iceberg_sync/procedure"
-    )
+    assert rendered == ("/workspace/consumer/dbt_packages/dbt_snowflake_iceberg_sync/procedure")
 
 
 def test_absolute_local_path_uses_dbt_project_dir_without_modules_os():
@@ -573,9 +577,7 @@ def test_absolute_local_path_uses_dbt_project_dir_without_modules_os():
         project_dir="/workspace/consumer",
     )
 
-    assert rendered == (
-        "/workspace/consumer/dbt_packages/dbt_snowflake_iceberg_sync/procedure"
-    )
+    assert rendered == ("/workspace/consumer/dbt_packages/dbt_snowflake_iceberg_sync/procedure")
 
 
 def test_absolute_local_path_warns_and_keeps_relative_without_resolution():
@@ -616,9 +618,7 @@ def test_deployment_config_prefers_dbt_project_dir_for_relative_handler_local_pa
 
 def test_deployment_config_keeps_absolute_handler_local_path():
     vars_dict = _minimal_deployment_vars()
-    vars_dict["handler_local_path"] = (
-        "/tmp/dbt_packages/dbt_snowflake_iceberg_sync/procedure"
-    )
+    vars_dict["handler_local_path"] = "/tmp/dbt_packages/dbt_snowflake_iceberg_sync/procedure"
 
     config = _render_deployment_config(vars_dict)
 
@@ -771,9 +771,7 @@ def _render_model_config(
     model_node = _model_node_with_meta(meta_iceberg_sync)
     package = SimpleNamespace(
         iceberg_sync_model_meta=lambda node: (
-            node.config.meta.get("iceberg_sync", {})
-            if getattr(node.config, "meta", None)
-            else {}
+            node.config.meta.get("iceberg_sync", {}) if getattr(node.config, "meta", None) else {}
         )
     )
     try:
@@ -820,9 +818,7 @@ def _render_forbidden_model_config_validation(
     model_node = _model_node_with_meta(meta_iceberg_sync)
     package = SimpleNamespace(
         iceberg_sync_model_meta=lambda node: (
-            node.config.meta.get("iceberg_sync", {})
-            if getattr(node.config, "meta", None)
-            else {}
+            node.config.meta.get("iceberg_sync", {}) if getattr(node.config, "meta", None) else {}
         ),
         iceberg_sync_raise=_raise,
     )
@@ -964,8 +960,7 @@ def _render_absolute_local_path(
 ) -> str:
     macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/config.sql"
     template = Environment(extensions=["jinja2.ext.do"]).from_string(
-        macro_path.read_text(encoding="utf-8")
-        + "\n{{ iceberg_sync_absolute_local_path(path) }}"
+        macro_path.read_text(encoding="utf-8") + "\n{{ iceberg_sync_absolute_local_path(path) }}"
     )
     warning_sink = warnings if warnings is not None else []
     context: dict[str, object] = {

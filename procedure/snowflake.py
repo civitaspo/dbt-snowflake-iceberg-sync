@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .config import RelationConfig
+from .config import GCS_STAGE_SCHEMES, S3_STAGE_SCHEMES, RelationConfig
 from .errors import ConfigError, SnowflakeExecutionError
 from .schema import SnowflakeColumn, ViewColumn, columns_from_snowflake_describe
 from .sql import (
@@ -19,7 +20,9 @@ from .sql import (
     delete_sql,
     desc_stage_sql,
     drop_iceberg_table_sql,
+    infer_schema_sql,
     insert_run_log_sql,
+    list_files_sql,
     relation_sql,
 )
 from .utils import quote_fqn, quote_stage_fqn, sql_string
@@ -30,7 +33,15 @@ class StageLocation:
     stage_fqn: str
     stage_path: str
     run_stage_location: str
-    gcs_run_uri: str
+    remote_run_uri: str
+    stage_url: str
+
+
+@dataclass(frozen=True)
+class StageFile:
+    name: str
+    size: int | None = None
+    last_modified: str | None = None
 
 
 class SnowflakeClient:
@@ -93,28 +104,64 @@ class SnowflakeClient:
     ) -> None:
         self.execute(create_or_replace_view_sql(target, internal, columns))
 
-    def resolve_stage_location(self, export_location: str, run_id: str) -> StageLocation:
-        stage_fqn, stage_path = parse_stage_location(export_location)
+    def resolve_stage_location(
+        self,
+        export_location: str,
+        run_id: str | None = None,
+        *,
+        allowed_schemes: Sequence[str] = GCS_STAGE_SCHEMES,
+        field_name: str = "bigquery_export_location",
+        cloud_label: str = "GCS",
+    ) -> StageLocation:
+        stage_fqn, stage_path = parse_stage_location(export_location, field_name=field_name)
         rows = self.execute(desc_stage_sql(stage_fqn))
         url = _stage_url(rows)
-        if not url.startswith("gcs://"):
+        if not any(url.startswith(scheme) for scheme in allowed_schemes):
             raise ConfigError(
-                "bigquery_export_location must reference a Snowflake stage backed by GCS"
+                f"{field_name} must reference a Snowflake stage backed by {cloud_label}"
             )
-        run_path = "/".join(part.strip("/") for part in (stage_path, run_id) if part.strip("/"))
+        path_parts = [part for part in (stage_path, run_id or "") if part and str(part).strip("/")]
+        run_path = "/".join(part.strip("/") for part in path_parts)
         run_stage_location = f"@{stage_fqn}/{run_path}" if run_path else f"@{stage_fqn}"
-        export_url = "gs://" + url.removeprefix("gcs://")
-        gcs_run_uri = "/".join(
-            part.strip("/") for part in (export_url, run_path) if part.strip("/")
-        )
-        if not gcs_run_uri.startswith("gs://"):
-            gcs_run_uri = "gs://" + gcs_run_uri.removeprefix("gs:/").lstrip("/")
+        remote_run_uri = _remote_uri_for_stage_url(url, run_path)
         return StageLocation(
             stage_fqn=stage_fqn,
             stage_path=stage_path,
             run_stage_location=run_stage_location,
-            gcs_run_uri=gcs_run_uri,
+            remote_run_uri=remote_run_uri,
+            stage_url=url,
         )
+
+    def list_stage_files(self, stage_location: str) -> list[StageFile]:
+        rows = self.execute(list_files_sql(stage_location))
+        files: list[StageFile] = []
+        for row in rows:
+            data = _row_to_mapping(row)
+            name = data.get("name") or data.get("NAME")
+            if not name:
+                continue
+            size_value = data.get("size") or data.get("SIZE")
+            last_modified = data.get("last_modified") or data.get("LAST_MODIFIED")
+            files.append(
+                StageFile(
+                    name=str(name),
+                    size=int(size_value) if size_value not in (None, "") else None,
+                    last_modified=str(last_modified) if last_modified not in (None, "") else None,
+                )
+            )
+        return files
+
+    def infer_parquet_schema(
+        self,
+        *,
+        location: str,
+        file_format: str,
+        files: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        rows = self.execute(
+            infer_schema_sql(location=location, file_format=file_format, files=files)
+        )
+        return [_row_to_mapping(row) for row in rows]
 
     def begin(self) -> None:
         self.execute("BEGIN")
@@ -128,8 +175,22 @@ class SnowflakeClient:
     def delete_from_iceberg(self, relation: RelationConfig, predicate: str | None) -> None:
         self.execute(delete_sql(relation, predicate))
 
-    def copy_into_iceberg(self, relation: RelationConfig, stage_run_location: str) -> None:
-        self.execute(copy_into_sql(relation, stage_run_location))
+    def copy_into_iceberg(
+        self,
+        relation: RelationConfig,
+        stage_run_location: str,
+        *,
+        pattern: str | None = None,
+        force: bool = False,
+    ) -> None:
+        self.execute(
+            copy_into_sql(
+                relation,
+                stage_run_location,
+                pattern=pattern,
+                force=force,
+            )
+        )
 
     def ensure_run_log(self, relation: RelationConfig | None) -> None:
         if relation is not None:
@@ -140,13 +201,17 @@ class SnowflakeClient:
             self.execute(insert_run_log_sql(relation, payload))
 
 
-def parse_stage_location(export_location: str) -> tuple[str, str]:
+def parse_stage_location(
+    export_location: str,
+    *,
+    field_name: str = "bigquery_export_location",
+) -> tuple[str, str]:
     if not export_location.startswith("@"):
-        raise ConfigError("bigquery_export_location must start with @")
+        raise ConfigError(f"{field_name} must start with @")
     raw = export_location[1:]
     if not raw or raw.startswith(("~", "%")):
         raise ConfigError(
-            "bigquery_export_location must be a named Snowflake stage, not a user or table stage"
+            f"{field_name} must be a named Snowflake stage, not a user or table stage"
         )
     if "/" in raw:
         stage_raw, stage_path = raw.split("/", 1)
@@ -154,11 +219,62 @@ def parse_stage_location(export_location: str) -> tuple[str, str]:
         stage_raw, stage_path = raw, ""
     raw_parts = stage_raw.split(".")
     if any(part == "" for part in raw_parts):
-        raise ConfigError("bigquery_export_location contains an invalid stage name")
+        raise ConfigError(f"{field_name} contains an invalid stage name")
     stage_parts = [part.strip('"') for part in raw_parts]
     if any(part == "" for part in stage_parts) or not 1 <= len(stage_parts) <= 3:
-        raise ConfigError("bigquery_export_location contains an invalid stage name")
+        raise ConfigError(f"{field_name} contains an invalid stage name")
     return quote_stage_fqn(stage_parts), stage_path.strip("/")
+
+
+def stage_relative_file_name(
+    listed_name: str,
+    *,
+    stage_url: str,
+    stage_path: str = "",
+) -> str:
+    """Convert a LIST name into a path relative to the stage root URL."""
+
+    name = listed_name.strip().lstrip("/")
+    stage_url_normalized = stage_url.rstrip("/")
+    remote_prefixes = (
+        stage_url_normalized,
+        _gs_uri_from_gcs(stage_url_normalized),
+    )
+    for prefix in remote_prefixes:
+        if name.startswith(prefix + "/"):
+            name = name[len(prefix) + 1 :]
+            break
+        if name == prefix:
+            name = ""
+            break
+
+    stage_path_normalized = stage_path.strip("/")
+    if stage_path_normalized:
+        if name.startswith(stage_path_normalized + "/"):
+            name = name[len(stage_path_normalized) + 1 :]
+        elif name == stage_path_normalized:
+            name = ""
+    return name.lstrip("/")
+
+
+def is_s3_stage_url(url: str) -> bool:
+    return any(url.startswith(scheme) for scheme in S3_STAGE_SCHEMES)
+
+
+def _remote_uri_for_stage_url(url: str, run_path: str) -> str:
+    remote_base = "gs://" + url.removeprefix("gcs://") if url.startswith("gcs://") else url
+    remote_run_uri = "/".join(
+        part.strip("/") for part in (remote_base, run_path) if part and part.strip("/")
+    )
+    if url.startswith("gcs://") and not remote_run_uri.startswith("gs://"):
+        remote_run_uri = "gs://" + remote_run_uri.removeprefix("gs:/").lstrip("/")
+    return remote_run_uri
+
+
+def _gs_uri_from_gcs(url: str) -> str:
+    if url.startswith("gcs://"):
+        return "gs://" + url.removeprefix("gcs://")
+    return url
 
 
 def _stage_url(rows: list[Any]) -> str:

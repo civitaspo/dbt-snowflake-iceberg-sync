@@ -107,7 +107,10 @@
     'google_cloud_auth_method',
     'google_cloud_workload_identity_federation_secret_fqdn',
     'google_cloud_workload_identity_federation_audience',
-    'google_cloud_service_account_impersonation'
+    'google_cloud_service_account_impersonation',
+    'aws_access_key_id',
+    'aws_secret_access_key',
+    'aws_session_token'
   ] -%}
   {%- set model_meta = dbt_snowflake_iceberg_sync.iceberg_sync_model_meta(model_node) -%}
   {%- for key in forbidden -%}
@@ -122,9 +125,24 @@
   {%- endfor -%}
 {%- endmacro %}
 
+{% macro iceberg_sync_validate_named_stage_location(location, field_name) -%}
+  {%- if not location or not location.startswith('@') -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      field_name ~ " must be a named Snowflake stage location"
+    ) -%}
+  {%- endif -%}
+  {%- if location.startswith('@~') or location.startswith('@%') -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      field_name ~ " must be a named Snowflake stage, not a user or table stage"
+    ) -%}
+  {%- endif -%}
+{%- endmacro %}
+
 {% macro iceberg_sync_validate_payload(payload) -%}
-  {%- if payload['source_type'] != 'bigquery' -%}
-    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise("source_type must be 'bigquery'") -%}
+  {%- if payload['source_type'] not in ['bigquery', 's3_parquet'] -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "source_type must be 'bigquery' or 's3_parquet'"
+    ) -%}
   {%- endif -%}
 
   {%- set deployment = payload['deployment'] -%}
@@ -207,6 +225,33 @@
     ) -%}
   {%- endif -%}
 
+  {%- if payload['partition_by'] | length > 0 -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "partition_by is not supported by iceberg_sync in the first scope"
+    ) -%}
+  {%- endif -%}
+  {%- if payload['cluster_by'] | length > 0 -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "cluster_by is not supported by iceberg_sync in the first scope"
+    ) -%}
+  {%- endif -%}
+
+  {%- if payload['source_type'] == 'bigquery' -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_validate_bigquery_payload(payload) -%}
+  {%- else -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_validate_s3_parquet_payload(payload) -%}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro iceberg_sync_validate_bigquery_payload(payload) -%}
+  {%- set deployment = payload['deployment'] -%}
+  {%- if deployment['google_cloud_auth_method'] == 'service_account_credentials_json'
+    and not deployment['google_cloud_service_account_secret_fqdn'] -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "vars.iceberg_sync.google_cloud_service_account_secret_fqdn is required for source_type='bigquery' when google_cloud_auth_method='service_account_credentials_json'"
+    ) -%}
+  {%- endif -%}
+
   {%- set bq = payload['bigquery'] -%}
   {%- if bq['export_strategy'] not in ['extract', 'select'] -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
@@ -243,16 +288,10 @@
       "bigquery_export_poll_interval_seconds must not exceed bigquery_export_poll_timeout_seconds"
     ) -%}
   {%- endif -%}
-  {%- if not bq['export_location'] or not bq['export_location'].startswith('@') -%}
-    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      "bigquery_export_location must be a named Snowflake stage location"
-    ) -%}
-  {%- endif -%}
-  {%- if bq['export_location'].startswith('@~') or bq['export_location'].startswith('@%') -%}
-    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      "bigquery_export_location must be a named Snowflake stage, not a user or table stage"
-    ) -%}
-  {%- endif -%}
+  {%- do dbt_snowflake_iceberg_sync.iceberg_sync_validate_named_stage_location(
+    bq['export_location'],
+    'bigquery_export_location'
+  ) -%}
   {%- if bq['export_strategy'] == 'select' and not bq['staging_dataset_id'] -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
       "bigquery_staging_dataset_id is required when bigquery_export_strategy='select'"
@@ -274,22 +313,55 @@
     ) -%}
   {%- endif -%}
 
-  {%- if payload['partition_by'] | length > 0 -%}
-    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      "partition_by is not supported by iceberg_sync in the first scope"
-    ) -%}
-  {%- endif -%}
-  {%- if payload['cluster_by'] | length > 0 -%}
-    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      "cluster_by is not supported by iceberg_sync in the first scope"
-    ) -%}
-  {%- endif -%}
-
   {%- set has_bq_incremental = bq['incremental_predicates'] | length > 0 -%}
   {%- set has_snowflake_incremental = payload['incremental_predicate'] is not none and payload['incremental_predicate'] != "" -%}
   {%- if has_bq_incremental != has_snowflake_incremental -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
       "incremental BigQuery predicates and incremental_predicate must be both present or both absent"
+    ) -%}
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro iceberg_sync_validate_s3_parquet_payload(payload) -%}
+  {%- set s3 = payload['s3_parquet'] -%}
+  {%- if payload['model']['sql'] | trim -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "model SQL is not supported with source_type='s3_parquet'"
+    ) -%}
+  {%- endif -%}
+  {%- do dbt_snowflake_iceberg_sync.iceberg_sync_validate_named_stage_location(
+    s3['location'],
+    's3_parquet_location'
+  ) -%}
+  {%- if s3['infer_schema_max_file_count'] < 1 -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "s3_parquet_infer_schema_max_file_count must be at least 1"
+    ) -%}
+  {%- endif -%}
+  {%- if s3['file_pattern'] is not none and s3['file_pattern'] == "" -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "s3_parquet_file_pattern must not be empty when set"
+    ) -%}
+  {%- endif -%}
+  {%- for path in s3['full_refresh_paths'] + s3['incremental_paths'] -%}
+    {%- if path.startswith('@') or '://' in path -%}
+      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+        "s3_parquet path suffixes must be relative to s3_parquet_location, not absolute stage or URI paths"
+      ) -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- set has_custom_incremental_paths = not (
+    s3['incremental_paths'] | length == 1 and s3['incremental_paths'][0] == ''
+  ) -%}
+  {%- set has_snowflake_incremental = payload['incremental_predicate'] is not none and payload['incremental_predicate'] != "" -%}
+  {%- if has_custom_incremental_paths != has_snowflake_incremental -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "s3_parquet_incremental_paths and incremental_predicate must be both present or both absent"
+    ) -%}
+  {%- endif -%}
+  {%- if not payload['deployment'].get('parquet_file_format') -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "deployment.parquet_file_format is required when source_type='s3_parquet'"
     ) -%}
   {%- endif -%}
 {%- endmacro %}

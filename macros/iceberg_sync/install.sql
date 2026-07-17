@@ -8,6 +8,7 @@
   {%- set handler_local_path = deployment['handler_local_path'] -%}
   {%- set external_access_integrations = deployment['external_access_integrations'] -%}
   {%- set run_log_table = deployment['run_log_table'] -%}
+  {%- set parquet_file_format = deployment['parquet_file_format'] -%}
   {%- set google_cloud_auth_method = deployment['google_cloud_auth_method'] -%}
   {%- set google_cloud_service_account_secret_fqdn = deployment['google_cloud_service_account_secret_fqdn'] -%}
   {%- set google_cloud_service_account_secret_alias = deployment['google_cloud_service_account_secret_alias'] -%}
@@ -25,12 +26,21 @@
     'sources/base.py',
     'sources/registry.py',
     'sources/__init__.py',
-    'sources/bigquery.py'
+    'sources/bigquery.py',
+    'sources/s3_parquet.py'
   ] -%}
 
   {% call statement('iceberg_sync_create_handler_stage') -%}
     CREATE STAGE IF NOT EXISTS {{ handler_stage }}
   {%- endcall %}
+
+  {%- if parquet_file_format is not none -%}
+    {% call statement('iceberg_sync_create_parquet_file_format') -%}
+      CREATE FILE FORMAT IF NOT EXISTS {{ parquet_file_format }}
+      TYPE = PARQUET
+      USE_VECTORIZED_SCANNER = TRUE
+    {%- endcall %}
+  {%- endif -%}
 
   {%- if run_log_table is not none -%}
     {%- set run_log_relation = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_payload(run_log_table) -%}
@@ -83,7 +93,8 @@
     {%- if external_access_integrations | length > 0 %}
     EXTERNAL_ACCESS_INTEGRATIONS = ({{ external_access_integrations | join(', ') }})
     {%- endif %}
-    {%- if google_cloud_auth_method == 'service_account_credentials_json' %}
+    {%- if google_cloud_auth_method == 'service_account_credentials_json'
+      and google_cloud_service_account_secret_fqdn is not none %}
     SECRETS = ('{{ google_cloud_service_account_secret_alias }}' = {{ google_cloud_service_account_secret_fqdn }})
     {%- endif %}
     EXECUTE AS CALLER

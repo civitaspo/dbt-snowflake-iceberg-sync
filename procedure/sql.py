@@ -59,13 +59,57 @@ def delete_sql(relation: RelationConfig, predicate: str | None) -> str:
     return f"DELETE FROM {relation_sql(relation)}"
 
 
-def copy_into_sql(relation: RelationConfig, stage_run_location: str) -> str:
-    return f"""COPY INTO {relation_sql(relation)}
-FROM {stage_run_location.rstrip("/")}/
-FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)
-LOAD_MODE = ADD_FILES_COPY
-MATCH_BY_COLUMN_NAME = CASE_SENSITIVE
-PURGE = FALSE"""
+def copy_into_sql(
+    relation: RelationConfig,
+    stage_run_location: str,
+    *,
+    pattern: str | None = None,
+    force: bool = False,
+) -> str:
+    lines = [
+        f"COPY INTO {relation_sql(relation)}",
+        f"FROM {stage_run_location.rstrip('/')}/",
+        "FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)",
+        "LOAD_MODE = ADD_FILES_COPY",
+        "MATCH_BY_COLUMN_NAME = CASE_SENSITIVE",
+        "PURGE = FALSE",
+    ]
+    if pattern:
+        lines.append(f"PATTERN = {sql_string(pattern)}")
+    if force:
+        lines.append("FORCE = TRUE")
+    return "\n".join(lines)
+
+
+def list_files_sql(stage_location: str) -> str:
+    return f"LIST {stage_location.rstrip('/')}"
+
+
+def infer_schema_sql(
+    *,
+    location: str,
+    file_format: str,
+    files: list[str] | None = None,
+    kind: str = "ICEBERG",
+) -> str:
+    parts = [
+        f"LOCATION => {sql_string(location)}",
+        f"FILE_FORMAT => {sql_string(file_format)}",
+        f"KIND => {sql_string(kind)}",
+    ]
+    if files:
+        file_list = ", ".join(sql_string(name) for name in files)
+        parts.append(f"FILES => ({file_list})")
+    joined = ",\n    ".join(parts)
+    return f"SELECT *\nFROM TABLE(\n  INFER_SCHEMA(\n    {joined}\n  )\n)\nORDER BY ORDER_ID"
+
+
+def create_parquet_file_format_sql(file_format_fqn: str) -> str:
+    return (
+        f"CREATE FILE FORMAT IF NOT EXISTS {file_format_fqn}\n"
+        "TYPE = PARQUET\n"
+        "USE_VECTORIZED_SCANNER = TRUE"
+    )
 
 
 def create_or_replace_view_sql(

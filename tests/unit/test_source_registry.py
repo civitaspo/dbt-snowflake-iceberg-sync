@@ -90,3 +90,17 @@ def test_bigquery_adapter_surfaces_auth_errors(payload_factory, monkeypatch):
 def test_create_source_adapter_honors_explicit_empty_factory_map(base_payload):
     with pytest.raises(IcebergSyncError, match="unsupported source_type"):
         registry.create_source_adapter(parse_config(base_payload), factories={})
+
+
+def test_s3_parquet_adapter_requires_session(s3_parquet_payload):
+    with pytest.raises(IcebergSyncError, match="requires a Snowflake session"):
+        registry.create_source_adapter(parse_config(s3_parquet_payload))
+
+
+def test_s3_parquet_adapter_builds_from_session(s3_parquet_payload):
+    class Session:
+        pass
+
+    adapter = registry.create_source_adapter(parse_config(s3_parquet_payload), session=Session())
+
+    assert adapter.source_type == "s3_parquet"

@@ -1,4 +1,4 @@
-"""BigQuery to Snowflake Iceberg schema mapping."""
+"""Source schema mapping helpers for Snowflake Iceberg sync."""
 
 from __future__ import annotations
 
@@ -34,6 +34,12 @@ UNSUPPORTED_TYPES = {
     "TIME",
 }
 
+UNSUPPORTED_PARQUET_TYPE_MARKERS = {
+    "GEOGRAPHY",
+    "GEOMETRY",
+    "VECTOR",
+}
+
 
 @dataclass(frozen=True)
 class SnowflakeColumn:
@@ -56,6 +62,15 @@ class ViewColumn:
 
 def map_bigquery_schema(fields: list[dict[str, Any]]) -> list[SnowflakeColumn]:
     columns = [_map_field(field) for field in fields]
+    validate_view_aliases(columns)
+    return columns
+
+
+def map_parquet_infer_schema(fields: list[dict[str, Any]]) -> list[SnowflakeColumn]:
+    """Map Snowflake INFER_SCHEMA rows into Iceberg DDL column objects."""
+
+    ordered = sorted(fields, key=_infer_schema_order)
+    columns = [_map_infer_schema_field(field) for field in ordered]
     validate_view_aliases(columns)
     return columns
 
@@ -189,6 +204,60 @@ def columns_from_snowflake_describe(rows: list[Any]) -> list[SnowflakeColumn]:
             )
         )
     return columns
+
+
+def _infer_schema_order(field: dict[str, Any]) -> int:
+    order = field.get("ORDER_ID")
+    if order is None:
+        order = field.get("order_id")
+    try:
+        return int(order)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _map_infer_schema_field(field: dict[str, Any]) -> SnowflakeColumn:
+    name = (
+        field.get("COLUMN_NAME")
+        or field.get("column_name")
+        or field.get("name")
+        or field.get("NAME")
+    )
+    if not name:
+        raise SchemaError("INFER_SCHEMA field is missing COLUMN_NAME")
+    type_name = (
+        field.get("TYPE") or field.get("type") or field.get("EXPRESSION") or field.get("expression")
+    )
+    if not type_name:
+        raise SchemaError(f"INFER_SCHEMA field {name!r} is missing TYPE")
+    snowflake_type = _normalize_infer_schema_type(str(type_name))
+    nullable_value = field.get("NULLABLE")
+    if nullable_value is None:
+        nullable_value = field.get("nullable")
+    if nullable_value is None:
+        nullable = True
+    elif isinstance(nullable_value, bool):
+        nullable = nullable_value
+    else:
+        nullable = str(nullable_value).strip().upper() in {"TRUE", "Y", "YES", "1"}
+    return SnowflakeColumn(
+        source_name=str(name),
+        snowflake_type=snowflake_type,
+        nullable=nullable,
+    )
+
+
+def _normalize_infer_schema_type(type_name: str) -> str:
+    result = type_name.strip()
+    upper = result.upper()
+    for marker in UNSUPPORTED_PARQUET_TYPE_MARKERS:
+        if marker in upper:
+            raise SchemaError(f"Parquet/INFER_SCHEMA type {type_name} is not supported")
+    result = re.sub(r"\bTEXT\b", "VARCHAR", result, flags=re.IGNORECASE)
+    result = re.sub(r"\bSTRING\b", "VARCHAR", result, flags=re.IGNORECASE)
+    result = re.sub(r"\bFLOAT\b", "DOUBLE", result, flags=re.IGNORECASE)
+    result = re.sub(r"\bNUMBER\(19,\s*0\)", "BIGINT", result, flags=re.IGNORECASE)
+    return result
 
 
 def _row_to_mapping(row: Any) -> dict[str, Any]:

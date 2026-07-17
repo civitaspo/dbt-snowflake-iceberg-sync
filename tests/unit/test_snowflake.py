@@ -127,7 +127,7 @@ def test_resolve_stage_location_uses_gs_uri_for_bigquery_export():
     )
 
     assert location.run_stage_location == '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/prefix/run-id'
-    assert location.gcs_run_uri == "gs://bucket/base/prefix/run-id"
+    assert location.remote_run_uri == "gs://bucket/base/prefix/run-id"
 
 
 def test_resolve_stage_location_rejects_non_gcs_stage():
@@ -138,6 +138,35 @@ def test_resolve_stage_location_rejects_non_gcs_stage():
             "@ANALYTICS.PUBLIC.EXPORT_STAGE/prefix",
             "run-id",
         )
+
+
+def test_resolve_stage_location_accepts_s3_stage_when_allowed():
+    session = StaticSession([{"property": "URL", "property_value": '["s3://bucket/base/"]'}])
+
+    location = SnowflakeClient(session).resolve_stage_location(
+        "@ANALYTICS.PUBLIC.EXPORT_STAGE/prefix",
+        None,
+        allowed_schemes=("s3://", "s3gov://", "s3china://"),
+        field_name="s3_parquet_location",
+        cloud_label="S3",
+    )
+
+    assert location.run_stage_location == '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/prefix'
+    assert location.remote_run_uri == "s3://bucket/base/prefix"
+    assert location.stage_url == "s3://bucket/base"
+
+
+def test_stage_relative_file_name_strips_stage_url_and_path():
+    from procedure.snowflake import stage_relative_file_name
+
+    assert (
+        stage_relative_file_name(
+            "s3://bucket/base/data/part-000.parquet",
+            stage_url="s3://bucket/base",
+            stage_path="data",
+        )
+        == "part-000.parquet"
+    )
 
 
 def test_execute_tracks_query_ids():

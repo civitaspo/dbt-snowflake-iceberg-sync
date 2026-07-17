@@ -1004,8 +1004,7 @@ def _write_project(
     if context.google_cloud_auth_method == "service_account_credentials_json":
         auth_lines.extend(
             [
-                "                google_cloud_service_account_secret_fqdn: "
-                f"{context.secret_fqdn}",
+                f"                google_cloud_service_account_secret_fqdn: {context.secret_fqdn}",
                 "                google_cloud_service_account_secret_alias: "
                 f"{context.secret_alias}",
             ]
@@ -1025,9 +1024,7 @@ def _write_project(
                 f"{context.google_cloud_service_account_impersonation}"
             )
     auth_block = "\n".join(auth_lines)
-    resolved_handler_local_path = handler_local_path or str(
-        context.package_path / "procedure"
-    )
+    resolved_handler_local_path = handler_local_path or str(context.package_path / "procedure")
 
     (context.project_dir / "dbt_project.yml").write_text(
         textwrap.dedent(
