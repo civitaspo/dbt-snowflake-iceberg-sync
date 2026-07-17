@@ -335,27 +335,12 @@ class IcebergSyncRunner:
         export_result: SourceExportResult,
     ) -> list[dict[str, Any]]:
         if config.source_type == "s3_parquet":
-            locations: list[dict[str, Any]] = []
-            for segment in export_result.segments:
-                if int(segment.get("file_count") or 0) <= 0:
-                    continue
-                locations.append(
-                    {
-                        "stage_location": segment.get("stage_location") or default_stage_location,
-                        "pattern": (
-                            config.s3_parquet.file_pattern
-                            if config.s3_parquet is not None
-                            else None
-                        ),
-                        "force": True,
-                    }
-                )
+            from .sources.s3_parquet import load_locations_from_segments
+
+            locations = load_locations_from_segments(list(export_result.segments))
             return locations or [
                 {
                     "stage_location": default_stage_location,
-                    "pattern": (
-                        config.s3_parquet.file_pattern if config.s3_parquet is not None else None
-                    ),
                     "force": True,
                 }
             ]
@@ -441,6 +426,7 @@ class IcebergSyncRunner:
                     config.internal_relation,
                     str(location["stage_location"]),
                     pattern=location.get("pattern"),
+                    files=location.get("files"),
                     force=bool(location.get("force")),
                 )
             self.snowflake.commit()

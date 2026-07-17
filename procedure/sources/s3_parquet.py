@@ -11,6 +11,9 @@ from ..schema import SnowflakeColumn, map_parquet_infer_schema
 from ..snowflake import SnowflakeClient, stage_relative_file_name
 from .base import SourceExecutionContext, SourceExportResult
 
+# Snowflake COPY FILES clause accepts at most 1000 paths per statement.
+COPY_FILES_BATCH_SIZE = 1000
+
 
 class S3ParquetSourceAdapter:
     source_type = "s3_parquet"
@@ -89,7 +92,7 @@ class S3ParquetSourceAdapter:
                         "query_id": query_ids[-1],
                     }
                 )
-            filtered = []
+            segment_files: list[str] = []
             total_bytes = 0
             for stage_file in listed:
                 relative_name = stage_relative_file_name(
@@ -111,7 +114,7 @@ class S3ParquetSourceAdapter:
                     continue
                 if s3.file_pattern and not re.search(s3.file_pattern, candidate):
                     continue
-                filtered.append(stage_file)
+                segment_files.append(candidate)
                 if stage_file.size is not None:
                     total_bytes += stage_file.size
                 matched_name = candidate
@@ -122,8 +125,9 @@ class S3ParquetSourceAdapter:
                 {
                     "stage_location": stage_location,
                     "path_suffix": path_suffix,
-                    "file_count": len(filtered),
+                    "file_count": len(segment_files),
                     "total_bytes": total_bytes,
+                    "files": segment_files,
                 }
             )
 
@@ -166,15 +170,7 @@ class S3ParquetSourceAdapter:
             "segments": segments,
             "job_references": job_references,
             "staging_table_reference": None,
-            "load_locations": [
-                {
-                    "stage_location": segment["stage_location"],
-                    "pattern": s3.file_pattern,
-                    "force": True,
-                }
-                for segment in segments
-                if segment["file_count"] > 0
-            ],
+            "load_locations": load_locations_from_segments(segments),
         }
 
     def poll_export(
@@ -183,6 +179,24 @@ class S3ParquetSourceAdapter:
         state: dict[str, Any],
     ) -> dict[str, Any]:
         return state
+
+
+def load_locations_from_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    locations: list[dict[str, Any]] = []
+    for segment in segments:
+        files = [str(name) for name in (segment.get("files") or []) if name]
+        if not files:
+            continue
+        stage_location = str(segment["stage_location"])
+        for offset in range(0, len(files), COPY_FILES_BATCH_SIZE):
+            locations.append(
+                {
+                    "stage_location": stage_location,
+                    "files": files[offset : offset + COPY_FILES_BATCH_SIZE],
+                    "force": True,
+                }
+            )
+    return locations
 
 
 def _join_stage_location(base_location: str, path_suffix: str) -> str:

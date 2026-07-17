@@ -77,7 +77,14 @@ def test_s3_parquet_rejects_model_sql(s3_payload_factory):
 def test_s3_parquet_pairs_incremental_paths_with_predicate(s3_payload_factory):
     payload = s3_payload_factory(s3_parquet__incremental_paths=["dt=2026-01-01"])
 
-    with pytest.raises(ConfigError, match="incremental_predicate"):
+    with pytest.raises(ConfigError, match="custom s3_parquet_incremental_paths"):
+        parse_config(payload)
+
+
+def test_s3_parquet_rejects_default_paths_with_incremental_predicate(s3_payload_factory):
+    payload = s3_payload_factory(incremental_predicate="\"order_date\" = '2026-01-01'")
+
+    with pytest.raises(ConfigError, match="custom s3_parquet_incremental_paths"):
         parse_config(payload)
 
 
@@ -156,6 +163,41 @@ def test_s3_adapter_applies_file_pattern_and_caps_infer_files(s3_payload_factory
     infer_call = [call for call in snowflake.calls if call[0] == "infer"][0]
     assert infer_call[3] == ["keep-new.parquet"]
     assert state["segments"][0]["file_count"] == 2
+    assert state["segments"][0]["files"] == ["keep-old.parquet", "keep-new.parquet"]
+    assert state["load_locations"] == [
+        {
+            "stage_location": '@"ANALYTICS"."PUBLIC"."S3_EXPORT_STAGE"/orders',
+            "files": ["keep-old.parquet", "keep-new.parquet"],
+            "force": True,
+        }
+    ]
+
+
+def test_copy_into_sql_emits_files_and_force(s3_parquet_payload):
+    config = parse_config(s3_parquet_payload)
+    sql = copy_into_sql(
+        config.internal_relation,
+        '@"ANALYTICS"."PUBLIC"."S3_EXPORT_STAGE"/orders',
+        files=["keep.parquet", "other.parquet"],
+        force=True,
+    )
+
+    assert "FILES = ('keep.parquet', 'other.parquet')" in sql
+    assert "PATTERN =" not in sql
+    assert "FORCE = TRUE" in sql
+
+
+def test_copy_into_sql_emits_pattern_and_force(s3_parquet_payload):
+    config = parse_config(s3_parquet_payload)
+    sql = copy_into_sql(
+        config.internal_relation,
+        '@"ANALYTICS"."PUBLIC"."S3_EXPORT_STAGE"/orders',
+        pattern=r".*[.]parquet",
+        force=True,
+    )
+
+    assert "PATTERN = '.*[.]parquet'" in sql
+    assert "FORCE = TRUE" in sql
 
 
 def test_s3_adapter_skips_empty_location_when_configured(s3_payload_factory):
@@ -187,19 +229,6 @@ def test_s3_adapter_poll_export_is_passthrough(s3_parquet_payload):
     state = {"status": "success", "schema_fields": []}
 
     assert adapter.poll_export(parse_config(s3_parquet_payload), state) is state
-
-
-def test_copy_into_sql_emits_pattern_and_force(s3_parquet_payload):
-    config = parse_config(s3_parquet_payload)
-    sql = copy_into_sql(
-        config.internal_relation,
-        '@"ANALYTICS"."PUBLIC"."S3_EXPORT_STAGE"/orders',
-        pattern=r".*[.]parquet",
-        force=True,
-    )
-
-    assert "PATTERN = '.*[.]parquet'" in sql
-    assert "FORCE = TRUE" in sql
 
 
 def test_infer_schema_and_file_format_sql_renderers():

@@ -42,6 +42,9 @@ def base_payload() -> dict[str, Any]:
                 "schema": "UTIL",
                 "identifier": "ICEBERG_SYNC_RUN_LOG",
             },
+            "google_cloud_service_account_secret_fqdn": (
+                "ANALYTICS.SECRETS.GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON"
+            ),
             "google_cloud_service_account_secret_alias": (
                 "google_cloud_service_account_credentials_json"
             ),

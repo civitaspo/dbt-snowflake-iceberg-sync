@@ -356,7 +356,7 @@ COPY GRANTS
   {{ return('DELETE FROM ' ~ internal_relation ~ ' WHERE ' ~ payload['incremental_predicate']) }}
 {%- endmacro %}
 
-{% macro iceberg_sync_copy_sql(payload, stage_run_location, pattern=none, force=false) -%}
+{% macro iceberg_sync_copy_sql(payload, stage_run_location, pattern=none, files=none, force=false) -%}
   {%- set internal_relation = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_payload(
     payload['internal_relation']
   ) -%}
@@ -368,7 +368,15 @@ COPY GRANTS
     'MATCH_BY_COLUMN_NAME = CASE_SENSITIVE',
     'PURGE = FALSE'
   ] -%}
-  {%- if pattern -%}
+  {%- if files is not none and (files | length) > 0 -%}
+    {%- set file_literals = [] -%}
+    {%- for file_name in files -%}
+      {%- do file_literals.append(
+        dbt_snowflake_iceberg_sync.iceberg_sync_sql_string_literal(file_name)
+      ) -%}
+    {%- endfor -%}
+    {%- do parts.append('FILES = (' ~ (file_literals | join(', ')) ~ ')') -%}
+  {%- elif pattern -%}
     {%- do parts.append(
       'PATTERN = ' ~ dbt_snowflake_iceberg_sync.iceberg_sync_sql_string_literal(pattern)
     ) -%}
@@ -388,6 +396,7 @@ COPY GRANTS
       payload,
       location['stage_location'],
       location.get('pattern'),
+      location.get('files'),
       location.get('force', false)
     ) }};
     {%- endfor %}

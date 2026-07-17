@@ -97,8 +97,10 @@ class FakeSnowflake:
         if self.fail_delete:
             raise SnowflakeExecutionError("delete failed")
 
-    def copy_into_iceberg(self, relation, stage_run_location, *, pattern=None, force=False):
-        self.calls.append(("copy", stage_run_location, pattern, force))
+    def copy_into_iceberg(
+        self, relation, stage_run_location, *, pattern=None, files=None, force=False
+    ):
+        self.calls.append(("copy", stage_run_location, pattern, files, force))
         if self.copy_errors:
             raise self.copy_errors.pop(0)
         if self.fail_copy:
@@ -403,7 +405,9 @@ def test_retryable_snowflake_internal_error_retries_and_succeeds(payload_factory
         ("full_refresh", "gs://bucket/dbt/run")
     ]
     assert (
-        snowflake.calls.count(("copy", '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/dbt/run', None, False))
+        snowflake.calls.count(
+            ("copy", '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/dbt/run', None, None, False)
+        )
         == 2
     )
 

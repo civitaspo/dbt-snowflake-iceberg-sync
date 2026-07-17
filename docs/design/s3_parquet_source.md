@@ -42,7 +42,7 @@ Model options under `meta.iceberg_sync`:
 | --- | --- | --- | --- |
 | `source_type` | Yes | — | `s3_parquet` |
 | `s3_parquet_location` | Yes | — | `@DB.SCHEMA.STAGE[/prefix]` named stage |
-| `s3_parquet_file_pattern` | No | none | Regex relative to each load location |
+| `s3_parquet_file_pattern` | No | none | Regex relative to each load location; matched files are loaded via COPY `FILES` |
 | `s3_parquet_full_refresh_paths` | No | `['']` | Subpaths under the location for full refresh |
 | `s3_parquet_incremental_paths` | No | `['']` | Subpaths for incremental runs |
 | `s3_parquet_skip_missing_location` | No | `false` | Skip the run when no files match |

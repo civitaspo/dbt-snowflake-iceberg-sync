@@ -181,6 +181,7 @@ class SnowflakeClient:
         stage_run_location: str,
         *,
         pattern: str | None = None,
+        files: list[str] | None = None,
         force: bool = False,
     ) -> None:
         self.execute(
@@ -188,6 +189,7 @@ class SnowflakeClient:
                 relation,
                 stage_run_location,
                 pattern=pattern,
+                files=files,
                 force=force,
             )
         )

@@ -64,6 +64,7 @@ def copy_into_sql(
     stage_run_location: str,
     *,
     pattern: str | None = None,
+    files: list[str] | None = None,
     force: bool = False,
 ) -> str:
     lines = [
@@ -74,7 +75,10 @@ def copy_into_sql(
         "MATCH_BY_COLUMN_NAME = CASE_SENSITIVE",
         "PURGE = FALSE",
     ]
-    if pattern:
+    if files:
+        file_list = ", ".join(sql_string(name) for name in files)
+        lines.append(f"FILES = ({file_list})")
+    elif pattern:
         lines.append(f"PATTERN = {sql_string(pattern)}")
     if force:
         lines.append("FORCE = TRUE")

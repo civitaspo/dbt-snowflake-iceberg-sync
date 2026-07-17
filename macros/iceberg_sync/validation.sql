@@ -369,7 +369,7 @@
   {%- set has_snowflake_incremental = payload['incremental_predicate'] is not none and payload['incremental_predicate'] != "" -%}
   {%- if has_custom_incremental_paths != has_snowflake_incremental -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      "s3_parquet_incremental_paths and incremental_predicate must be both present or both absent"
+      "custom s3_parquet_incremental_paths (anything other than the default ['']) and incremental_predicate must be set together; use the default paths without incremental_predicate, or set both a custom path list and incremental_predicate"
     ) -%}
   {%- endif -%}
   {%- if not (

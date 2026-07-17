@@ -20,6 +20,13 @@
 
 - `INFER_SCHEMA` `FILE_FORMAT` now uses the deployment file-format identifier
   directly instead of wrapping a quoted FQN in a string literal.
+- S3 `s3_parquet_file_pattern` filtering now drives COPY `FILES` lists instead of
+  also applying Snowflake `PATTERN`, so planning and load use one matcher.
+- Procedure-side BigQuery validation now requires
+  `google_cloud_service_account_secret_fqdn` for
+  `service_account_credentials_json`, matching dbt compile-time checks.
+- Clarified the S3 incremental validation error when default
+  `s3_parquet_incremental_paths=['']` is paired with `incremental_predicate`.
 - Opt-in S3 integration scenarios gated by
   `DBT_SNOWFLAKE_ICEBERG_SYNC_S3_PARQUET_STAGE`.
 

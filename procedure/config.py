@@ -64,6 +64,7 @@ class DeploymentConfig:
     procedure_schema: str | None = None
     procedure_name: str | None = None
     run_log_table: RelationConfig | None = None
+    google_cloud_service_account_secret_fqdn: str | None = None
     google_cloud_service_account_secret_alias: str | None = None
     google_cloud_auth_method: str = "service_account_credentials_json"
     google_cloud_workload_identity_federation_secret_fqdn: str | None = None
@@ -210,6 +211,9 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         procedure_schema=_optional_object_identifier(deployment_payload.get("procedure_schema")),
         procedure_name=_optional_object_identifier(deployment_payload.get("procedure_name")),
         run_log_table=_optional_relation(deployment_payload.get("run_log_table"), "run_log_table"),
+        google_cloud_service_account_secret_fqdn=_optional_secret_fqdn(
+            deployment_payload.get("google_cloud_service_account_secret_fqdn")
+        ),
         google_cloud_service_account_secret_alias=deployment_payload.get(
             "google_cloud_service_account_secret_alias"
         ),
@@ -511,6 +515,14 @@ def _normalize_path_list(value: Any, field_name: str) -> tuple[str, ...]:
 def _validate_bigquery_config(config: IcebergSyncConfig) -> None:
     if config.bigquery is None:
         raise ConfigError("bigquery config is required when source_type='bigquery'")
+    if (
+        config.deployment.google_cloud_auth_method == "service_account_credentials_json"
+        and not config.deployment.google_cloud_service_account_secret_fqdn
+    ):
+        raise ConfigError(
+            "google_cloud_service_account_secret_fqdn is required for source_type='bigquery' "
+            "when google_cloud_auth_method='service_account_credentials_json'"
+        )
     if config.bigquery.export_strategy not in BIGQUERY_EXPORT_STRATEGIES:
         raise ConfigError("bigquery_export_strategy must be 'extract' or 'select'")
     if config.bigquery.export_strategy != "extract" and config.bigquery.skip_missing_tables:
@@ -585,8 +597,9 @@ def _validate_s3_parquet_config(config: IcebergSyncConfig) -> None:
     has_incremental_snowflake_predicate = bool(config.incremental_predicate)
     if has_custom_incremental_paths != has_incremental_snowflake_predicate:
         raise ConfigError(
-            "s3_parquet_incremental_paths and incremental_predicate must be both present "
-            "or both absent"
+            "custom s3_parquet_incremental_paths (anything other than the default ['']) "
+            "and incremental_predicate must be set together; use the default paths without "
+            "incremental_predicate, or set both a custom path list and incremental_predicate"
         )
     _validate_named_stage_location(config.s3_parquet.location, "s3_parquet_location")
     if not config.columns and not config.deployment.parquet_file_format:

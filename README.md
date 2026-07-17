@@ -520,7 +520,7 @@ These options apply when `source_type='s3_parquet'`.
 | Option | Required | Default | Description |
 | --- | --- | --- | --- |
 | `s3_parquet_location` | Yes | None | Named Snowflake stage location that resolves to an S3 prefix, for example `@DB.SCHEMA.STAGE/path`. User stages (`@~`) and table stages (`@%`) are rejected. |
-| `s3_parquet_file_pattern` | No | None | Regex relative to each load location; applied to `LIST` filtering and COPY `PATTERN`. |
+| `s3_parquet_file_pattern` | No | None | Regex relative to each load location. Applied during LIST planning with Python `re.search`; matched files are passed to COPY via `FILES` (not Snowflake `PATTERN`) so planning and load stay aligned. |
 | `s3_parquet_full_refresh_paths` | No | `['']` | Path suffixes under `s3_parquet_location` used for full refresh. `['']` means the location itself. |
 | `s3_parquet_incremental_paths` | No | `['']` | Path suffixes used for incremental runs. Custom values must be paired with `incremental_predicate`. |
 | `s3_parquet_skip_missing_location` | No | `false` | When `true`, a location with zero matching files skips the run instead of failing. |
