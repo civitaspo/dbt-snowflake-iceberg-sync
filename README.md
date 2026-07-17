@@ -4,8 +4,13 @@
 external source into a Snowflake-managed Iceberg table and exposes the dbt model
 as a Snowflake view.
 
-The first supported source type is BigQuery. The dbt materialization is
-Snowflake-only and is named `iceberg_sync`.
+Supported source types:
+
+- `bigquery` — export BigQuery tables/queries to a GCS-backed stage as Parquet
+- `s3_parquet` — load pre-existing Iceberg-compatible Parquet files from an
+  S3-backed Snowflake stage (Storage Integration managed by the user)
+
+The dbt materialization is Snowflake-only and is named `iceberg_sync`.
 
 ## Supported Versions
 
@@ -33,10 +38,16 @@ dbt deps
 
 ## Required Snowflake Setup
 
-You must create and manage the Snowflake resources that grant access to GCS and
-BigQuery:
+You must create and manage the Snowflake resources used by the chosen source
+type(s).
+
+Common to all source types:
 
 - A Snowflake-managed Iceberg external volume.
+- A database/schema where the package procedure can be installed.
+
+For BigQuery sources:
+
 - A GCS-backed Snowflake stage used as the BigQuery export destination.
 - A network rule and external access integration for BigQuery API calls.
 - A Snowflake secret for Google Cloud auth:
@@ -44,9 +55,15 @@ BigQuery:
     `google_cloud_auth_method=service_account_credentials_json` (default), or
   - a workload identity federation secret when
     `google_cloud_auth_method=workload_identity_federation`.
-- A database/schema where the package procedure can be installed.
 
-Example deployment vars:
+For S3 Parquet sources:
+
+- An S3-backed Snowflake stage with a Storage Integration that can `LIST` and
+  `COPY` the source Parquet prefixes.
+- The Iceberg external volume may live on any cloud supported by Snowflake;
+  `LOAD_MODE = ADD_FILES_COPY` performs a server-side copy into the volume.
+
+Example BigQuery deployment vars:
 
 ```yaml
 vars:
@@ -55,6 +72,14 @@ vars:
 
     external_access_integrations: [BIGQUERY_API]
     google_cloud_service_account_secret_fqdn: ANALYTICS.SECRETS.GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON
+```
+
+Example S3-only deployment vars (no Google Cloud secret required):
+
+```yaml
+vars:
+  iceberg_sync:
+    handler_local_path: dbt_packages/dbt_snowflake_iceberg_sync/procedure
 ```
 
 `procedure_database` defaults to the active dbt `target.database`, and
@@ -75,7 +100,7 @@ Deployment vars:
 | Var | Required | Default | Description |
 | --- | --- | --- | --- |
 | `handler_local_path` | Yes | None | Local path to the package `procedure/` directory uploaded by the installer. Relative paths (for example `dbt_packages/dbt_snowflake_iceberg_sync/procedure`) are absolute-ized before Snowflake `PUT`, preferring `DBT_PROJECT_DIR` when set and otherwise resolving against the process working directory. Absolute paths are accepted unchanged. |
-| `google_cloud_service_account_secret_fqdn` | Yes | None | Fully qualified Snowflake secret containing the Google Cloud service account JSON. |
+| `google_cloud_service_account_secret_fqdn` | Yes for BigQuery + `service_account_credentials_json` | None | Fully qualified Snowflake secret containing the Google Cloud service account JSON. Optional for S3-only installs. |
 | `procedure_database` | No | `target.database` | Database where the package procedure and default helper objects are installed. |
 | `procedure_schema` | No | `target.schema` | Schema where the package procedure and default helper objects are installed. |
 | `procedure_name` | No | `ICEBERG_SYNC` | Name of the Snowflake stored procedure. |
@@ -83,14 +108,14 @@ Deployment vars:
 | `handler_stage_path` | No | `procedure` | Directory prefix inside `handler_stage` for uploaded handler files. |
 | `handler_import_name` | No | `iceberg_sync_procedure` | Import directory name mounted into the Snowflake Python runtime. |
 | `handler_name` | No | `<handler_import_name>.handler.main` | Python procedure entry point. |
-| `external_access_integrations` | No | `[]` | External access integrations granted to the procedure. |
+| `external_access_integrations` | No | `[]` | External access integrations granted to the procedure. Required for BigQuery API calls. |
 | `google_cloud_auth_method` | No | `service_account_credentials_json` | Google Cloud auth mode. Supported values are `service_account_credentials_json` and `workload_identity_federation`. |
-| `google_cloud_service_account_secret_fqdn` | Yes for `service_account_credentials_json` | None | Fully qualified Snowflake secret containing the Google Cloud service account JSON. |
 | `google_cloud_service_account_secret_alias` | No | `google_cloud_service_account_credentials_json` | Secret alias read by the Python handler for `service_account_credentials_json`. |
 | `google_cloud_workload_identity_federation_secret_fqdn` | Yes for `workload_identity_federation` | None | Three-part name of the Snowflake workload identity federation secret used by `SYSTEM$ISSUE_WORKLOAD_IDENTITY_FEDERATION_TOKEN`. |
 | `google_cloud_workload_identity_federation_audience` | Yes for `workload_identity_federation` | None | Google Cloud workload identity provider resource name, for example `//iam.googleapis.com/projects/<project_number>/locations/global/workloadIdentityPools/<pool_id>/providers/<provider_id>`. |
 | `google_cloud_service_account_impersonation` | No | None | Optional Google Cloud service account email to impersonate after the STS token exchange. |
 | `google_cloud_workload_identity_federation_by_dbt_target` | No | None | Map of `target.name` to per-target workload identity federation settings. Each entry uses the same keys as the flat vars above. An optional `default` entry is used when `target.name` is not present in the map. |
+| `parquet_file_format` | No | `<procedure_database>.<procedure_schema>.ICEBERG_SYNC_PARQUET_FILE_FORMAT` | Named Parquet file format created by the installer and used by `s3_parquet` `INFER_SCHEMA`. |
 | `run_log_table` | No | `<procedure_database>.<procedure_schema>.ICEBERG_SYNC_RUN_LOG` | Three-part relation used for procedure run logs. |
 
 ## Required Google Cloud IAM Setup
@@ -281,6 +306,41 @@ from `my-gcp-project.analytics.orders`
 The procedure creates or reuses a deterministic staging table, exports it to GCS
 as Parquet, and then loads those files into the Snowflake-managed Iceberg table.
 
+## S3 Parquet Model
+
+Use `source_type: s3_parquet` when Iceberg-compatible Parquet files already exist
+on an S3-backed Snowflake stage. The package lists matching files, infers schema
+with Snowflake `INFER_SCHEMA`, and loads with `COPY INTO ... ADD_FILES_COPY`.
+S3 access comes from the stage Storage Integration; keep AWS credentials out of
+dbt model config.
+
+```sql
+{{
+  config(
+    materialized='iceberg_sync',
+    meta={
+      'iceberg_sync': {
+        'source_type': 's3_parquet',
+        'materialization_strategy': 'incremental',
+
+        's3_parquet_location': '@ANALYTICS.PUBLIC.S3_PARQUET_STAGE/orders',
+        's3_parquet_file_pattern': '.*[.]parquet',
+        's3_parquet_full_refresh_paths': ['dt=2026-05-29', 'dt=2026-05-30'],
+        's3_parquet_incremental_paths': ['dt=2026-05-30'],
+
+        'incremental_strategy': 'delete+copy',
+        'incremental_predicate': "\"order_date\" = '2026-05-30'",
+
+        'iceberg_table_external_volume': 'ICEBERG_EXTERNAL_VOLUME'
+      }
+    }
+  )
+}}
+```
+
+The model body must be empty. See `docs/design/s3_parquet_source.md` for load
+semantics (`FORCE = TRUE`, `PURGE = FALSE`) and schema-evolution limits.
+
 ## Materialization Options
 
 All options in this section are dbt model configs under `meta.iceberg_sync`.
@@ -288,13 +348,12 @@ Keeping package-specific keys under `meta` is required by dbt Fusion. dbt Core
 also accepts the same `meta.iceberg_sync` shape, and this package still reads
 legacy top-level config keys for existing dbt Core projects. The materialization
 separates common options from source-specific options so future source types can
-define their own required fields. In the current release, `source_type='bigquery'`
-is the only supported source type, so every working model uses the BigQuery
-option group below.
+define their own required fields. Supported source types are `bigquery` and
+`s3_parquet`.
 
-Credential material is not a materialization option. Keep service account JSON
-and secret names in Snowflake resources and `vars.iceberg_sync`; model configs
-that contain credential-like keys are rejected.
+Credential material is not a materialization option. Keep service account JSON,
+AWS keys, and secret names in Snowflake resources and `vars.iceberg_sync`; model
+configs that contain credential-like keys are rejected.
 
 Snowflake object identifiers managed by the package, including relation
 database, schema, table, view, procedure, run-log, and named stage identifiers,
@@ -308,10 +367,10 @@ and quoted in internal table DDL and exposed view SQL.
 | Option | Required | Default | Description |
 | --- | --- | --- | --- |
 | `materialized` | Yes | None | Must be `iceberg_sync`. |
-| `source_type` | No | `bigquery` | Source adapter to use. Only `bigquery` is supported in this release. |
+| `source_type` | No | `bigquery` | Source adapter to use. Supported values: `bigquery`, `s3_parquet`. |
 | `materialization_strategy` | No | `incremental` | `incremental` or `full_refresh`. `full_refresh` always reloads the target table. |
 | `incremental_strategy` | No | `delete+copy` | Incremental load strategy. Only `delete+copy` is supported. |
-| `incremental_predicate` | Conditional | None | Snowflake SQL predicate used to delete rows from the internal Iceberg table during incremental runs. Required when `bigquery_export_incremental_predicates` is non-empty, and must be absent when that list is empty. |
+| `incremental_predicate` | Conditional | None | Snowflake SQL predicate used to delete rows from the internal Iceberg table during incremental runs. For BigQuery, required when `bigquery_export_incremental_predicates` is non-empty. For S3 Parquet, required when `s3_parquet_incremental_paths` is customized away from the default `['']`. Must be absent when the matching source incremental list is empty/default. |
 | `partition_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. Read from `meta.iceberg_sync` first, with legacy top-level config fallback. |
 | `cluster_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. Read from `meta.iceberg_sync` first, with legacy top-level config fallback. |
 | `iceberg_sync_retry_max_attempts` | No | `3` | Compatibility retry setting for the legacy full-run procedure path. The dbt-side materialization issues Snowflake load statements directly and does not retry failed `COPY INTO` statements inside Snowflake Scripting. |
@@ -425,6 +484,23 @@ FROM (
 ) AS __dbt_iceberg_sync_src
 WHERE (<predicate 1>) OR (<predicate 2>)
 ```
+
+### S3 Parquet Source Options
+
+These options apply when `source_type='s3_parquet'`.
+
+| Option | Required | Default | Description |
+| --- | --- | --- | --- |
+| `s3_parquet_location` | Yes | None | Named Snowflake stage location that resolves to an S3 prefix, for example `@DB.SCHEMA.STAGE/path`. User stages (`@~`) and table stages (`@%`) are rejected. |
+| `s3_parquet_file_pattern` | No | None | Regex relative to each load location; applied to `LIST` filtering and COPY `PATTERN`. |
+| `s3_parquet_full_refresh_paths` | No | `['']` | Path suffixes under `s3_parquet_location` used for full refresh. `['']` means the location itself. |
+| `s3_parquet_incremental_paths` | No | `['']` | Path suffixes used for incremental runs. Custom values must be paired with `incremental_predicate`. |
+| `s3_parquet_skip_missing_location` | No | `false` | When `true`, a location with zero matching files skips the run instead of failing. |
+| `s3_parquet_infer_schema_max_file_count` | No | `16` | Maximum number of files passed to `INFER_SCHEMA` (newest by `last_modified` when capped). |
+
+S3 Parquet loads always use `FORCE = TRUE` and `PURGE = FALSE`. Schema is
+detected with `INFER_SCHEMA(..., KIND => 'ICEBERG')` against the installer-managed
+Parquet file format (`vars.iceberg_sync.parquet_file_format`).
 
 ## Full Refresh Behavior
 
@@ -645,6 +721,8 @@ DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_INCREMENTAL_FULL_REFRESH_PREDICATES
 DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_INCREMENTAL_PREDICATES
 DBT_SNOWFLAKE_ICEBERG_SYNC_INCREMENTAL_PREDICATE
 DBT_SNOWFLAKE_ICEBERG_SYNC_INCREMENTAL_EXPECTED_ROWS
+
+DBT_SNOWFLAKE_ICEBERG_SYNC_S3_PARQUET_STAGE
 ```
 
 `SNOWFLAKE_AUTHENTICATOR` defaults to `externalbrowser` when unset.

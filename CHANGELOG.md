@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added
+
+- New `source_type: s3_parquet` loads pre-existing Iceberg-compatible Parquet
+  files from an S3-backed Snowflake stage into a Snowflake-managed Iceberg
+  table. Schema comes from `INFER_SCHEMA(KIND => 'ICEBERG')`. Access uses the
+  user-managed Storage Integration on the stage; the package does not handle
+  AWS credentials. See `docs/design/s3_parquet_source.md`.
+- Installer creates a named Parquet file format
+  (`vars.iceberg_sync.parquet_file_format`) used by S3 schema inference.
+- Opt-in S3 integration scenarios gated by
+  `DBT_SNOWFLAKE_ICEBERG_SYNC_S3_PARQUET_STAGE`.
+
+### Changed
+
+- Google Cloud service-account secret deployment vars are optional at procedure
+  install time so S3-only projects can install the handler without GCP secrets.
+  BigQuery models still require the secret when
+  `google_cloud_auth_method='service_account_credentials_json'`.
+- Stage resolution and procedure destination URI checks are source-aware
+  (`gcs://` for BigQuery, `s3://` family for `s3_parquet`).
+- Re-install the Snowflake procedure after upgrading so the new S3 adapter
+  module and Parquet file format are uploaded.
+
 ## 0.4.6 - 2026-07-09
 
 ### Fixed
