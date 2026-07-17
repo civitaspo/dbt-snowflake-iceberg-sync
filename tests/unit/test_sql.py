@@ -78,6 +78,17 @@ def test_create_view_preserves_source_case_and_aliases_lower_snake(base_payload)
     assert 'FROM "ANALYTICS"."PUBLIC"."__ORDERS"' in sql
 
 
+def test_create_view_uses_custom_expression_when_provided(base_payload):
+    config = parse_config(base_payload)
+
+    sql = create_or_replace_view_sql(
+        config.target_relation,
+        config.internal_relation,
+        [ViewColumn("AmountText", "amount", expression='TRY_TO_NUMBER("AmountText")')],
+    )
+
+    assert 'SELECT\n  TRY_TO_NUMBER("AmountText") AS "AMOUNT"' in sql
+
 def test_drop_iceberg_table_uses_if_exists(base_payload):
     config = parse_config(base_payload)
 

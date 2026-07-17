@@ -1,4 +1,4 @@
-"""BigQuery to Snowflake Iceberg schema mapping."""
+"""Source schema mapping helpers for Snowflake Iceberg sync."""
 
 from __future__ import annotations
 
@@ -34,6 +34,12 @@ UNSUPPORTED_TYPES = {
     "TIME",
 }
 
+UNSUPPORTED_PARQUET_TYPE_MARKERS = {
+    "GEOGRAPHY",
+    "GEOMETRY",
+    "VECTOR",
+}
+
 
 @dataclass(frozen=True)
 class SnowflakeColumn:
@@ -41,6 +47,8 @@ class SnowflakeColumn:
     snowflake_type: str
     nullable: bool = True
     fields: tuple[SnowflakeColumn, ...] = field(default_factory=tuple)
+    alias: str | None = None
+    expression: str | None = None
 
     @property
     def ddl(self) -> str:
@@ -52,6 +60,7 @@ class SnowflakeColumn:
 class ViewColumn:
     source_name: str
     alias: str
+    expression: str | None = None
 
 
 def map_bigquery_schema(fields: list[dict[str, Any]]) -> list[SnowflakeColumn]:
@@ -60,9 +69,36 @@ def map_bigquery_schema(fields: list[dict[str, Any]]) -> list[SnowflakeColumn]:
     return columns
 
 
+def map_parquet_infer_schema(fields: list[dict[str, Any]]) -> list[SnowflakeColumn]:
+    """Map Snowflake INFER_SCHEMA rows into Iceberg DDL column objects."""
+
+    ordered = sorted(fields, key=_infer_schema_order)
+    columns = [_map_infer_schema_field(field) for field in ordered]
+    validate_view_aliases(columns)
+    return columns
+
+
+def map_declared_columns(fields: list[dict[str, Any]]) -> list[SnowflakeColumn]:
+    """Map user-declared column definitions into Iceberg DDL columns."""
+
+    if not fields:
+        raise SchemaError("columns must not be empty when set")
+    columns = [_map_declared_schema_field(field, index) for index, field in enumerate(fields)]
+    names = [column.source_name for column in columns]
+    duplicate_names = sorted({name for name in names if names.count(name) > 1})
+    if duplicate_names:
+        raise SchemaError("columns contains duplicate column names: " + ", ".join(duplicate_names))
+    validate_view_aliases(columns)
+    return columns
+
+
 def view_columns(columns: list[SnowflakeColumn]) -> list[ViewColumn]:
     result = [
-        ViewColumn(source_name=column.source_name, alias=lower_snake(column.source_name))
+        ViewColumn(
+            source_name=column.source_name,
+            alias=column.alias or lower_snake(column.source_name),
+            expression=column.expression,
+        )
         for column in columns
     ]
     aliases = [column.alias for column in result]
@@ -189,6 +225,96 @@ def columns_from_snowflake_describe(rows: list[Any]) -> list[SnowflakeColumn]:
             )
         )
     return columns
+
+
+def _infer_schema_order(field: dict[str, Any]) -> int:
+    order = field.get("ORDER_ID")
+    if order is None:
+        order = field.get("order_id")
+    try:
+        return int(order)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _map_infer_schema_field(field: dict[str, Any]) -> SnowflakeColumn:
+    name = (
+        field.get("COLUMN_NAME")
+        or field.get("column_name")
+        or field.get("name")
+        or field.get("NAME")
+    )
+    if not name:
+        raise SchemaError("INFER_SCHEMA field is missing COLUMN_NAME")
+    type_name = (
+        field.get("TYPE") or field.get("type") or field.get("EXPRESSION") or field.get("expression")
+    )
+    if not type_name:
+        raise SchemaError(f"INFER_SCHEMA field {name!r} is missing TYPE")
+    snowflake_type = _normalize_infer_schema_type(str(type_name))
+    nullable_value = field.get("NULLABLE")
+    if nullable_value is None:
+        nullable_value = field.get("nullable")
+    if nullable_value is None:
+        nullable = True
+    elif isinstance(nullable_value, bool):
+        nullable = nullable_value
+    else:
+        nullable = str(nullable_value).strip().upper() in {"TRUE", "Y", "YES", "1"}
+    return SnowflakeColumn(
+        source_name=str(name),
+        snowflake_type=snowflake_type,
+        nullable=nullable,
+    )
+
+
+def _map_declared_schema_field(field: dict[str, Any], index: int) -> SnowflakeColumn:
+    if not isinstance(field, dict):
+        raise SchemaError(f"columns[{index}] must be an object")
+    name = field.get("name") or field.get("NAME") or field.get("COLUMN_NAME")
+    if name is None or str(name).strip() == "":
+        raise SchemaError(f"columns[{index}].name is required")
+    type_name = field.get("type") or field.get("TYPE")
+    if type_name is None or str(type_name).strip() == "":
+        raise SchemaError(f"columns[{index}].type is required")
+    snowflake_type = _normalize_infer_schema_type(str(type_name).strip())
+    nullable_value = field.get("nullable")
+    if nullable_value is None:
+        nullable_value = field.get("NULLABLE")
+    if nullable_value is None:
+        nullable = True
+    elif isinstance(nullable_value, bool):
+        nullable = nullable_value
+    else:
+        nullable = str(nullable_value).strip().upper() in {"TRUE", "Y", "YES", "1"}
+    alias_value = field.get("alias")
+    if alias_value is not None and str(alias_value).strip() == "":
+        raise SchemaError(f"columns[{index}].alias must not be empty when set")
+    alias = str(alias_value).strip() if alias_value is not None else None
+    expression_value = field.get("expression")
+    if expression_value is not None and str(expression_value).strip() == "":
+        raise SchemaError(f"columns[{index}].expression must not be empty when set")
+    expression = str(expression_value).strip() if expression_value is not None else None
+    return SnowflakeColumn(
+        source_name=str(name),
+        snowflake_type=snowflake_type,
+        nullable=nullable,
+        alias=alias,
+        expression=expression,
+    )
+
+
+def _normalize_infer_schema_type(type_name: str) -> str:
+    result = type_name.strip()
+    upper = result.upper()
+    for marker in UNSUPPORTED_PARQUET_TYPE_MARKERS:
+        if marker in upper:
+            raise SchemaError(f"Parquet/INFER_SCHEMA type {type_name} is not supported")
+    result = re.sub(r"\bTEXT\b", "VARCHAR", result, flags=re.IGNORECASE)
+    result = re.sub(r"\bSTRING\b", "VARCHAR", result, flags=re.IGNORECASE)
+    result = re.sub(r"\bFLOAT\b", "DOUBLE", result, flags=re.IGNORECASE)
+    result = re.sub(r"\bNUMBER\(19,\s*0\)", "BIGINT", result, flags=re.IGNORECASE)
+    return result
 
 
 def _row_to_mapping(row: Any) -> dict[str, Any]:

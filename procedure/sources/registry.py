@@ -8,9 +8,11 @@ from typing import Any
 from ..config import IcebergSyncConfig
 from ..errors import IcebergSyncError
 from ..google_cloud_auth import build_google_cloud_credentials
+from ..snowflake import SnowflakeClient
 from ..utils import load_snowflake_secret
 from .base import SourceAdapter
 from .bigquery import BigQueryRestClient, BigQuerySourceAdapter
+from .s3_parquet import S3ParquetSourceAdapter
 
 SourceAdapterFactory = Callable[[IcebergSyncConfig], SourceAdapter]
 
@@ -18,7 +20,10 @@ SourceAdapterFactory = Callable[[IcebergSyncConfig], SourceAdapter]
 def default_source_adapter_factories(
     *, session: Any | None = None
 ) -> dict[str, SourceAdapterFactory]:
-    return {"bigquery": lambda config: _bigquery_adapter(config, session=session)}
+    return {
+        "bigquery": lambda config: _bigquery_adapter(config, session=session),
+        "s3_parquet": lambda config: _s3_parquet_adapter(config, session=session),
+    }
 
 
 def create_source_adapter(
@@ -45,3 +50,13 @@ def _bigquery_adapter(
         secret_reader=load_snowflake_secret,
     )
     return BigQuerySourceAdapter(BigQueryRestClient(credentials))
+
+
+def _s3_parquet_adapter(
+    config: IcebergSyncConfig,
+    *,
+    session: Any | None = None,
+) -> SourceAdapter:
+    if session is None:
+        raise IcebergSyncError("s3_parquet source requires a Snowflake session")
+    return S3ParquetSourceAdapter(SnowflakeClient(session))

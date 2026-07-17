@@ -11,6 +11,10 @@ def test_parse_config_defaults(base_payload):
 
     assert config.source_type == "bigquery"
     assert config.deployment.google_cloud_auth_method == "service_account_credentials_json"
+    assert (
+        config.deployment.google_cloud_service_account_secret_fqdn
+        == "ANALYTICS.SECRETS.GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON"
+    )
     assert config.bigquery.export_strategy == "extract"
     assert config.bigquery.export_compression == "ZSTD"
     assert config.bigquery.skip_missing_tables is False
@@ -22,6 +26,13 @@ def test_parse_config_defaults(base_payload):
     assert config.retry.max_attempts == 3
     assert config.cleanup.created_table_on_failure is True
     assert config.run_log.fail_on_error is False
+
+
+def test_bigquery_requires_service_account_secret_fqdn(payload_factory):
+    payload = payload_factory(deployment__google_cloud_service_account_secret_fqdn=None)
+
+    with pytest.raises(ConfigError, match="google_cloud_service_account_secret_fqdn is required"):
+        parse_config(payload)
 
 
 def test_parse_config_normalizes_only_snowflake_object_identifiers(payload_factory):

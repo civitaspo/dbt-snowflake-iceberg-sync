@@ -8,7 +8,7 @@ from typing import Any
 from .errors import ConfigError
 from .utils import normalize_snowflake_object_identifier
 
-SUPPORTED_SOURCE_TYPES = {"bigquery"}
+SUPPORTED_SOURCE_TYPES = {"bigquery", "s3_parquet"}
 MATERIALIZATION_STRATEGIES = {"full_refresh", "incremental"}
 BIGQUERY_EXPORT_STRATEGIES = {"extract", "select"}
 BIGQUERY_PARQUET_EXPORT_COMPRESSIONS = {"GZIP", "NONE", "SNAPPY", "ZSTD"}
@@ -16,6 +16,8 @@ PREDICATE_TYPES = {"auto", "none", "partition_decorator", "table_suffix", "where
 INCREMENTAL_STRATEGIES = {"delete+copy"}
 STORAGE_SERIALIZATION_POLICIES = {"COMPATIBLE", "OPTIMIZED"}
 GOOGLE_CLOUD_AUTH_METHODS = {"service_account_credentials_json", "workload_identity_federation"}
+S3_STAGE_SCHEMES = ("s3://", "s3gov://", "s3china://")
+GCS_STAGE_SCHEMES = ("gcs://",)
 FORBIDDEN_MODEL_CONFIG_KEYS = {
     "credentials",
     "credential",
@@ -31,6 +33,9 @@ FORBIDDEN_MODEL_CONFIG_KEYS = {
     "google_cloud_workload_identity_federation_secret_fqdn",
     "google_cloud_workload_identity_federation_audience",
     "google_cloud_service_account_impersonation",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
 }
 
 
@@ -59,11 +64,13 @@ class DeploymentConfig:
     procedure_schema: str | None = None
     procedure_name: str | None = None
     run_log_table: RelationConfig | None = None
+    google_cloud_service_account_secret_fqdn: str | None = None
     google_cloud_service_account_secret_alias: str | None = None
     google_cloud_auth_method: str = "service_account_credentials_json"
     google_cloud_workload_identity_federation_secret_fqdn: str | None = None
     google_cloud_workload_identity_federation_audience: str | None = None
     google_cloud_service_account_impersonation: str | None = None
+    parquet_file_format: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +92,25 @@ class BigQueryConfig:
     skip_missing_tables: bool = False
     export_poll_interval_seconds: float = 30
     export_poll_timeout_seconds: float = 3600
+
+
+@dataclass(frozen=True)
+class DeclaredColumnConfig:
+    name: str
+    type: str
+    nullable: bool = True
+    alias: str | None = None
+    expression: str | None = None
+
+
+@dataclass(frozen=True)
+class S3ParquetConfig:
+    location: str
+    file_pattern: str | None = None
+    full_refresh_paths: tuple[str, ...] = field(default_factory=lambda: ("",))
+    incremental_paths: tuple[str, ...] = field(default_factory=lambda: ("",))
+    skip_missing_location: bool = False
+    infer_schema_max_file_count: int = 16
 
 
 @dataclass(frozen=True)
@@ -132,8 +158,10 @@ class IcebergSyncConfig:
     internal_relation: RelationConfig
     model: ModelConfig
     deployment: DeploymentConfig
-    bigquery: BigQueryConfig
     iceberg_table: IcebergTableConfig
+    bigquery: BigQueryConfig | None = None
+    s3_parquet: S3ParquetConfig | None = None
+    columns: tuple[DeclaredColumnConfig, ...] = field(default_factory=tuple)
     retry: RetryPolicyConfig = field(default_factory=RetryPolicyConfig)
     cleanup: CleanupConfig = field(default_factory=CleanupConfig)
     run_log: RunLogConfig = field(default_factory=RunLogConfig)
@@ -142,6 +170,14 @@ class IcebergSyncConfig:
     dbt_full_refresh: bool = False
 
     def predicates_for_mode(self, effective_mode: str) -> tuple[str, ...]:
+        if self.source_type == "s3_parquet":
+            if self.s3_parquet is None:
+                return ()
+            if effective_mode == "full_refresh":
+                return self.s3_parquet.full_refresh_paths
+            return self.s3_parquet.incremental_paths
+        if self.bigquery is None:
+            return ()
         if effective_mode == "full_refresh":
             return self.bigquery.full_refresh_predicates
         return self.bigquery.incremental_predicates
@@ -175,6 +211,9 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         procedure_schema=_optional_object_identifier(deployment_payload.get("procedure_schema")),
         procedure_name=_optional_object_identifier(deployment_payload.get("procedure_name")),
         run_log_table=_optional_relation(deployment_payload.get("run_log_table"), "run_log_table"),
+        google_cloud_service_account_secret_fqdn=_optional_secret_fqdn(
+            deployment_payload.get("google_cloud_service_account_secret_fqdn")
+        ),
         google_cloud_service_account_secret_alias=deployment_payload.get(
             "google_cloud_service_account_secret_alias"
         ),
@@ -190,41 +229,16 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         google_cloud_service_account_impersonation=_optional_string(
             deployment_payload.get("google_cloud_service_account_impersonation")
         ),
+        parquet_file_format=_optional_string(deployment_payload.get("parquet_file_format")),
     )
 
-    bq_payload = payload.get("bigquery", {})
-    bigquery = BigQueryConfig(
-        export_strategy=_defaulted(bq_payload, "export_strategy", "extract"),
-        project_id=_required(bq_payload, "project_id", "bigquery.project_id"),
-        dataset_id=_required(bq_payload, "dataset_id", "bigquery.dataset_id"),
-        table_id=_required(bq_payload, "table_id", "bigquery.table_id"),
-        location=_required(bq_payload, "location", "bigquery.location"),
-        export_location=_required(bq_payload, "export_location", "bigquery.export_location"),
-        export_compression=str(_defaulted(bq_payload, "export_compression", "ZSTD")).upper(),
-        export_predicate_type=_defaulted(bq_payload, "export_predicate_type", "auto"),
-        full_refresh_predicates=tuple(bq_payload.get("full_refresh_predicates") or ()),
-        incremental_predicates=tuple(bq_payload.get("incremental_predicates") or ()),
-        staging_dataset_id=bq_payload.get("staging_dataset_id"),
-        staging_table_expiration_hours=int(bq_payload.get("staging_table_expiration_hours", 24)),
-        staging_table_reuse=_coerce_bool(bq_payload.get("staging_table_reuse"), True),
-        force_rebuild_staging_table=_coerce_bool(
-            bq_payload.get("force_rebuild_staging_table"),
-            False,
-        ),
-        skip_missing_tables=_coerce_bool_strict(
-            bq_payload.get("skip_missing_tables"),
-            False,
-            "bigquery_extract_skip_missing_tables",
-        ),
-        export_poll_interval_seconds=_float(
-            bq_payload.get("export_poll_interval_seconds", 30),
-            "bigquery_export_poll_interval_seconds",
-        ),
-        export_poll_timeout_seconds=_float(
-            bq_payload.get("export_poll_timeout_seconds", 3600),
-            "bigquery_export_poll_timeout_seconds",
-        ),
-    )
+    source_type = _defaulted(payload, "source_type", "bigquery")
+    bigquery: BigQueryConfig | None = None
+    s3_parquet: S3ParquetConfig | None = None
+    if source_type == "bigquery":
+        bigquery = _parse_bigquery_config(payload.get("bigquery", {}))
+    elif source_type == "s3_parquet":
+        s3_parquet = _parse_s3_parquet_config(payload.get("s3_parquet", {}))
 
     iceberg_payload = payload.get("iceberg_table", {})
     iceberg_table = IcebergTableConfig(
@@ -294,7 +308,7 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
     )
 
     config = IcebergSyncConfig(
-        source_type=_defaulted(payload, "source_type", "bigquery"),
+        source_type=source_type,
         materialization_strategy=_defaulted(payload, "materialization_strategy", "incremental"),
         incremental_strategy=_defaulted(payload, "incremental_strategy", "delete+copy"),
         incremental_predicate=payload.get("incremental_predicate"),
@@ -303,6 +317,8 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         model=model,
         deployment=deployment,
         bigquery=bigquery,
+        s3_parquet=s3_parquet,
+        columns=_parse_declared_columns(payload.get("columns")),
         iceberg_table=iceberg_table,
         retry=retry,
         cleanup=cleanup,
@@ -317,24 +333,23 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
 
 def validate_config(config: IcebergSyncConfig) -> None:
     if config.source_type not in SUPPORTED_SOURCE_TYPES:
-        raise ConfigError("source_type must be 'bigquery'")
+        raise ConfigError("source_type must be 'bigquery' or 's3_parquet'")
     if config.materialization_strategy not in MATERIALIZATION_STRATEGIES:
         raise ConfigError("materialization_strategy must be 'full_refresh' or 'incremental'")
     if config.incremental_strategy not in INCREMENTAL_STRATEGIES:
         raise ConfigError("incremental_strategy must be 'delete+copy'")
-    if config.bigquery.export_strategy not in BIGQUERY_EXPORT_STRATEGIES:
-        raise ConfigError("bigquery_export_strategy must be 'extract' or 'select'")
-    if config.bigquery.export_strategy != "extract" and config.bigquery.skip_missing_tables:
-        raise ConfigError(
-            "bigquery_extract_skip_missing_tables is supported only with extract export strategy"
-        )
-    if config.bigquery.export_compression not in BIGQUERY_PARQUET_EXPORT_COMPRESSIONS:
-        raise ConfigError("bigquery_export_compression must be one of GZIP, NONE, SNAPPY, or ZSTD")
     if config.deployment.google_cloud_auth_method not in GOOGLE_CLOUD_AUTH_METHODS:
         raise ConfigError(
             "google_cloud_auth_method must be 'service_account_credentials_json' or "
             "'workload_identity_federation'"
         )
+    if config.columns:
+        names = [column.name for column in config.columns]
+        duplicate_names = sorted({name for name in names if names.count(name) > 1})
+        if duplicate_names:
+            raise ConfigError(
+                "columns contains duplicate column names: " + ", ".join(duplicate_names)
+            )
     if config.deployment.google_cloud_auth_method == "workload_identity_federation":
         missing_wif_fields = []
         if not config.deployment.google_cloud_workload_identity_federation_secret_fqdn:
@@ -366,6 +381,156 @@ def validate_config(config: IcebergSyncConfig) -> None:
         raise ConfigError("iceberg_sync_retry_backoff_multiplier must be at least 1.0")
     if config.retry.jitter_seconds < 0:
         raise ConfigError("iceberg_sync_retry_jitter_seconds must be non-negative")
+    if config.partition_by:
+        raise ConfigError("partition_by is not supported by iceberg_sync in the first scope")
+    if config.cluster_by:
+        raise ConfigError("cluster_by is not supported by iceberg_sync in the first scope")
+
+    if config.source_type == "bigquery":
+        _validate_bigquery_config(config)
+    elif config.source_type == "s3_parquet":
+        _validate_s3_parquet_config(config)
+
+
+def _parse_bigquery_config(bq_payload: dict[str, Any]) -> BigQueryConfig:
+    return BigQueryConfig(
+        export_strategy=_defaulted(bq_payload, "export_strategy", "extract"),
+        project_id=_required(bq_payload, "project_id", "bigquery.project_id"),
+        dataset_id=_required(bq_payload, "dataset_id", "bigquery.dataset_id"),
+        table_id=_required(bq_payload, "table_id", "bigquery.table_id"),
+        location=_required(bq_payload, "location", "bigquery.location"),
+        export_location=_required(bq_payload, "export_location", "bigquery.export_location"),
+        export_compression=str(_defaulted(bq_payload, "export_compression", "ZSTD")).upper(),
+        export_predicate_type=_defaulted(bq_payload, "export_predicate_type", "auto"),
+        full_refresh_predicates=tuple(bq_payload.get("full_refresh_predicates") or ()),
+        incremental_predicates=tuple(bq_payload.get("incremental_predicates") or ()),
+        staging_dataset_id=bq_payload.get("staging_dataset_id"),
+        staging_table_expiration_hours=int(bq_payload.get("staging_table_expiration_hours", 24)),
+        staging_table_reuse=_coerce_bool(bq_payload.get("staging_table_reuse"), True),
+        force_rebuild_staging_table=_coerce_bool(
+            bq_payload.get("force_rebuild_staging_table"),
+            False,
+        ),
+        skip_missing_tables=_coerce_bool_strict(
+            bq_payload.get("skip_missing_tables"),
+            False,
+            "bigquery_extract_skip_missing_tables",
+        ),
+        export_poll_interval_seconds=_float(
+            bq_payload.get("export_poll_interval_seconds", 30),
+            "bigquery_export_poll_interval_seconds",
+        ),
+        export_poll_timeout_seconds=_float(
+            bq_payload.get("export_poll_timeout_seconds", 3600),
+            "bigquery_export_poll_timeout_seconds",
+        ),
+    )
+
+
+def _parse_s3_parquet_config(s3_payload: dict[str, Any]) -> S3ParquetConfig:
+    full_refresh_paths = _normalize_path_list(
+        s3_payload.get("full_refresh_paths"),
+        "s3_parquet_full_refresh_paths",
+    )
+    incremental_paths = _normalize_path_list(
+        s3_payload.get("incremental_paths"),
+        "s3_parquet_incremental_paths",
+    )
+    return S3ParquetConfig(
+        location=_required(s3_payload, "location", "s3_parquet.location"),
+        file_pattern=_optional_string(s3_payload.get("file_pattern")),
+        full_refresh_paths=full_refresh_paths,
+        incremental_paths=incremental_paths,
+        skip_missing_location=_coerce_bool_strict(
+            s3_payload.get("skip_missing_location"),
+            False,
+            "s3_parquet_skip_missing_location",
+        ),
+        infer_schema_max_file_count=_int(
+            s3_payload.get("infer_schema_max_file_count", 16),
+            "s3_parquet_infer_schema_max_file_count",
+        ),
+    )
+
+
+def _parse_declared_columns(value: Any) -> tuple[DeclaredColumnConfig, ...]:
+    if value in (None, ""):
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ConfigError("columns must be a list of column objects")
+    if len(value) == 0:
+        raise ConfigError("columns must not be empty when set")
+    columns: list[DeclaredColumnConfig] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ConfigError(f"columns[{index}] must be an object")
+        name = item.get("name")
+        if name is None or str(name).strip() == "":
+            raise ConfigError(f"columns[{index}].name is required")
+        type_name = item.get("type")
+        if type_name is None or str(type_name).strip() == "":
+            raise ConfigError(f"columns[{index}].type is required")
+        alias_raw = item.get("alias")
+        if alias_raw is not None and str(alias_raw).strip() == "":
+            raise ConfigError(f"columns[{index}].alias must not be empty when set")
+        expression_raw = item.get("expression")
+        if expression_raw is not None and str(expression_raw).strip() == "":
+            raise ConfigError(f"columns[{index}].expression must not be empty when set")
+        columns.append(
+            DeclaredColumnConfig(
+                name=str(name),
+                type=str(type_name).strip(),
+                nullable=_coerce_bool_strict(
+                    item.get("nullable"),
+                    True,
+                    f"columns[{index}].nullable",
+                ),
+                alias=_optional_string(alias_raw),
+                expression=_optional_string(expression_raw),
+            )
+        )
+    return tuple(columns)
+
+
+def _normalize_path_list(value: Any, field_name: str) -> tuple[str, ...]:
+    if value in (None, ""):
+        return ("",)
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, (list, tuple)):
+        values = list(value)
+    else:
+        raise ConfigError(f"{field_name} must be a list of path suffixes")
+    if not values:
+        return ("",)
+    normalized: list[str] = []
+    for item in values:
+        if item is None:
+            raise ConfigError(f"{field_name} must not contain null values")
+        text = str(item).strip().strip("/")
+        normalized.append(text)
+    return tuple(normalized)
+
+
+def _validate_bigquery_config(config: IcebergSyncConfig) -> None:
+    if config.bigquery is None:
+        raise ConfigError("bigquery config is required when source_type='bigquery'")
+    if (
+        config.deployment.google_cloud_auth_method == "service_account_credentials_json"
+        and not config.deployment.google_cloud_service_account_secret_fqdn
+    ):
+        raise ConfigError(
+            "google_cloud_service_account_secret_fqdn is required for source_type='bigquery' "
+            "when google_cloud_auth_method='service_account_credentials_json'"
+        )
+    if config.bigquery.export_strategy not in BIGQUERY_EXPORT_STRATEGIES:
+        raise ConfigError("bigquery_export_strategy must be 'extract' or 'select'")
+    if config.bigquery.export_strategy != "extract" and config.bigquery.skip_missing_tables:
+        raise ConfigError(
+            "bigquery_extract_skip_missing_tables is supported only with extract export strategy"
+        )
+    if config.bigquery.export_compression not in BIGQUERY_PARQUET_EXPORT_COMPRESSIONS:
+        raise ConfigError("bigquery_export_compression must be one of GZIP, NONE, SNAPPY, or ZSTD")
     if config.bigquery.export_predicate_type not in PREDICATE_TYPES:
         raise ConfigError("bigquery_export_predicate_type is invalid")
     if config.bigquery.export_poll_interval_seconds <= 0:
@@ -377,10 +542,6 @@ def validate_config(config: IcebergSyncConfig) -> None:
             "bigquery_export_poll_interval_seconds must not exceed "
             "bigquery_export_poll_timeout_seconds"
         )
-    if config.partition_by:
-        raise ConfigError("partition_by is not supported by iceberg_sync in the first scope")
-    if config.cluster_by:
-        raise ConfigError("cluster_by is not supported by iceberg_sync in the first scope")
     if config.bigquery.export_strategy == "select" and not config.bigquery.staging_dataset_id:
         raise ConfigError("bigquery_staging_dataset_id is required for select export strategy")
     if config.bigquery.export_strategy == "select" and not config.model.sql.strip():
@@ -411,11 +572,49 @@ def validate_config(config: IcebergSyncConfig) -> None:
             "incremental BigQuery predicates and incremental_predicate must be both present "
             "or both absent"
         )
-    if not config.bigquery.export_location.startswith("@"):
-        raise ConfigError("bigquery_export_location must be a named Snowflake stage location")
-    if config.bigquery.export_location.startswith(("@~", "@%")):
+    _validate_named_stage_location(
+        config.bigquery.export_location,
+        "bigquery_export_location",
+    )
+
+
+def _validate_s3_parquet_config(config: IcebergSyncConfig) -> None:
+    if config.s3_parquet is None:
+        raise ConfigError("s3_parquet config is required when source_type='s3_parquet'")
+    if config.model.sql.strip():
+        raise ConfigError("model SQL is not supported with source_type='s3_parquet'")
+    if config.s3_parquet.infer_schema_max_file_count < 1:
+        raise ConfigError("s3_parquet_infer_schema_max_file_count must be at least 1")
+    if config.s3_parquet.file_pattern is not None and config.s3_parquet.file_pattern == "":
+        raise ConfigError("s3_parquet_file_pattern must not be empty when set")
+    for path in (*config.s3_parquet.full_refresh_paths, *config.s3_parquet.incremental_paths):
+        if path.startswith("@") or "://" in path:
+            raise ConfigError(
+                "s3_parquet path suffixes must be relative to s3_parquet_location, "
+                "not absolute stage or URI paths"
+            )
+    has_custom_incremental_paths = config.s3_parquet.incremental_paths != ("",)
+    has_incremental_snowflake_predicate = bool(config.incremental_predicate)
+    if has_custom_incremental_paths != has_incremental_snowflake_predicate:
         raise ConfigError(
-            "bigquery_export_location must be a named Snowflake stage, not a user or table stage"
+            "custom s3_parquet_incremental_paths (anything other than the default ['']) "
+            "and incremental_predicate must be set together; use the default paths without "
+            "incremental_predicate, or set both a custom path list and incremental_predicate"
+        )
+    _validate_named_stage_location(config.s3_parquet.location, "s3_parquet_location")
+    if not config.columns and not config.deployment.parquet_file_format:
+        raise ConfigError(
+            "deployment.parquet_file_format is required when source_type='s3_parquet' "
+            "and columns is not set"
+        )
+
+
+def _validate_named_stage_location(location: str, field_name: str) -> None:
+    if not location.startswith("@"):
+        raise ConfigError(f"{field_name} must be a named Snowflake stage location")
+    if location.startswith(("@~", "@%")):
+        raise ConfigError(
+            f"{field_name} must be a named Snowflake stage, not a user or table stage"
         )
 
 

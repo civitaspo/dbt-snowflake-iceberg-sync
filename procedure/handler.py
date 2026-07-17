@@ -14,6 +14,7 @@ from .errors import IcebergSyncError, SnowflakeExecutionError
 from .run_log import build_run_log_payload
 from .schema import (
     SnowflakeColumn,
+    map_declared_columns,
     validate_schema_compatibility,
     view_columns,
 )
@@ -82,15 +83,12 @@ class IcebergSyncRunner:
             )
             predicates = config.predicates_for_mode(effective_mode)
             source = self._source_adapter(config)
-            stage = self.snowflake.resolve_stage_location(
-                source.export_location(config),
-                run_id,
-            )
+            stage = self._resolve_stage_for_source(config, source, run_id)
             export_result = source.export(
                 config,
                 SourceExecutionContext(
                     effective_mode=effective_mode,
-                    destination_uri=stage.gcs_run_uri,
+                    destination_uri=stage.remote_run_uri,
                 ),
             )
             if export_result.skipped:
@@ -121,7 +119,7 @@ class IcebergSyncRunner:
                 if run_log_error is not None:
                     result["run_log_error"] = run_log_error
                 return result
-            desired_columns = source.map_schema(export_result)
+            desired_columns = self._resolve_columns(config, source, export_result)
 
             created_internal_table, altered_schema = self._create_or_validate_table(
                 config,
@@ -130,10 +128,15 @@ class IcebergSyncRunner:
             )
             cleanup["created_internal_table"] = created_internal_table
             cleanup["altered_internal_table_schema"] = altered_schema
+            load_locations = self._load_locations_for_export(
+                config,
+                stage.run_stage_location,
+                export_result,
+            )
             retry = self._load_with_retry(
                 config,
                 effective_mode,
-                stage.run_stage_location,
+                load_locations,
                 retry,
             )
             load_committed = True
@@ -207,8 +210,7 @@ class IcebergSyncRunner:
         destination_uri = str(payload.get("destination_uri") or "")
         if effective_mode not in {"full_refresh", "incremental"}:
             raise IcebergSyncError("effective_mode must be full_refresh or incremental")
-        if not destination_uri.startswith("gs://"):
-            raise IcebergSyncError("destination_uri must be a gs:// URI")
+        self._validate_destination_uri(config, destination_uri)
 
         source = self._source_adapter(config)
         state = source.start_export(
@@ -218,7 +220,7 @@ class IcebergSyncRunner:
                 destination_uri=destination_uri,
             ),
         )
-        return self._export_action_result(source, state)
+        return self._export_action_result(config, source, state)
 
     def poll_export(self, payload: dict[str, Any]) -> dict[str, Any]:
         config = parse_config(payload.get("config", {}))
@@ -227,10 +229,11 @@ class IcebergSyncRunner:
             raise IcebergSyncError("export_state must be an object")
         source = self._source_adapter(config)
         next_state = source.poll_export(config, state)
-        return self._export_action_result(source, next_state)
+        return self._export_action_result(config, source, next_state)
 
     def _export_action_result(
         self,
+        config: IcebergSyncConfig,
         source: SourceAdapter,
         state: dict[str, Any],
     ) -> dict[str, Any]:
@@ -261,24 +264,93 @@ class IcebergSyncRunner:
             job_references=state.get("job_references", []),
             staging_table_reference=state.get("staging_table_reference"),
         )
-        columns = source.map_schema(export_result)
+        columns = self._resolve_columns(config, source, export_result)
+        export_payload = {
+            "schema_fields": export_result.schema_fields,
+            "segments": export_result.segments,
+            "job_references": export_result.job_references,
+            "staging_table_reference": export_result.staging_table_reference,
+            "columns": [asdict(column) | {"ddl": column.ddl} for column in columns],
+            "view_columns": [asdict(column) for column in view_columns(columns)],
+        }
+        if state.get("load_locations") is not None:
+            export_payload["load_locations"] = state.get("load_locations")
         return {
             "status": "success",
-            "export_result": {
-                "schema_fields": export_result.schema_fields,
-                "segments": export_result.segments,
-                "job_references": export_result.job_references,
-                "staging_table_reference": export_result.staging_table_reference,
-                "columns": [asdict(column) | {"ddl": column.ddl} for column in columns],
-                "view_columns": [asdict(column) for column in view_columns(columns)],
-            },
+            "export_result": export_payload,
         }
+
+    def _resolve_columns(
+        self,
+        config: IcebergSyncConfig,
+        source: SourceAdapter,
+        export_result: SourceExportResult,
+    ) -> list[SnowflakeColumn]:
+        if config.columns:
+            return map_declared_columns([asdict(column) for column in config.columns])
+        return source.map_schema(export_result)
 
     def _source_adapter(self, config: IcebergSyncConfig) -> SourceAdapter:
         adapter = self.source_adapters.get(config.source_type)
         if adapter is not None:
             return adapter
         return create_source_adapter(config, session=self.session)
+
+    def _validate_destination_uri(self, config: IcebergSyncConfig, destination_uri: str) -> None:
+        if config.source_type == "s3_parquet":
+            if not any(
+                destination_uri.startswith(scheme) for scheme in ("s3://", "s3gov://", "s3china://")
+            ):
+                raise IcebergSyncError("destination_uri must be an s3:// URI")
+            return
+        if not destination_uri.startswith("gs://"):
+            raise IcebergSyncError("destination_uri must be a gs:// URI")
+
+    def _resolve_stage_for_source(
+        self,
+        config: IcebergSyncConfig,
+        source: SourceAdapter,
+        run_id: str,
+    ) -> Any:
+        if config.source_type == "s3_parquet":
+            return self.snowflake.resolve_stage_location(
+                source.export_location(config),
+                None,
+                allowed_schemes=("s3://", "s3gov://", "s3china://"),
+                field_name="s3_parquet_location",
+                cloud_label="S3",
+            )
+        return self.snowflake.resolve_stage_location(
+            source.export_location(config),
+            run_id,
+            allowed_schemes=("gcs://",),
+            field_name="bigquery_export_location",
+            cloud_label="GCS",
+        )
+
+    def _load_locations_for_export(
+        self,
+        config: IcebergSyncConfig,
+        default_stage_location: str,
+        export_result: SourceExportResult,
+    ) -> list[dict[str, Any]]:
+        if config.source_type == "s3_parquet":
+            from .sources.s3_parquet import load_locations_from_segments
+
+            locations = load_locations_from_segments(list(export_result.segments))
+            return locations or [
+                {
+                    "stage_location": default_stage_location,
+                    "force": True,
+                }
+            ]
+        return [
+            {
+                "stage_location": default_stage_location,
+                "pattern": None,
+                "force": False,
+            }
+        ]
 
     def _create_or_validate_table(
         self,
@@ -303,13 +375,13 @@ class IcebergSyncRunner:
         self,
         config: IcebergSyncConfig,
         effective_mode: str,
-        stage_run_location: str,
+        load_locations: list[dict[str, Any]],
         retry: dict[str, Any],
     ) -> dict[str, Any]:
         for attempt in range(1, config.retry.max_attempts + 1):
             retry["attempts"] = attempt
             try:
-                self._load_once(config, effective_mode, stage_run_location)
+                self._load_once(config, effective_mode, load_locations)
                 return retry
             except Exception as exc:
                 retryable = is_retryable_snowflake_error(exc)
@@ -340,7 +412,7 @@ class IcebergSyncRunner:
         self,
         config: IcebergSyncConfig,
         effective_mode: str,
-        stage_run_location: str,
+        load_locations: list[dict[str, Any]],
     ) -> None:
         transaction_started = False
         transaction_committed = False
@@ -349,7 +421,14 @@ class IcebergSyncRunner:
             transaction_started = True
             predicate = None if effective_mode == "full_refresh" else config.incremental_predicate
             self.snowflake.delete_from_iceberg(config.internal_relation, predicate)
-            self.snowflake.copy_into_iceberg(config.internal_relation, stage_run_location)
+            for location in load_locations:
+                self.snowflake.copy_into_iceberg(
+                    config.internal_relation,
+                    str(location["stage_location"]),
+                    pattern=location.get("pattern"),
+                    files=location.get("files"),
+                    force=bool(location.get("force")),
+                )
             self.snowflake.commit()
             transaction_committed = True
         except Exception as exc:

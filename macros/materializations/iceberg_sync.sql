@@ -32,11 +32,25 @@
       payload, effective_mode
     ) -%}
     {%- set run_id = dbt_snowflake_iceberg_sync.iceberg_sync_run_id(payload) -%}
-    {%- set stage = dbt_snowflake_iceberg_sync.iceberg_sync_resolve_stage_location(
-      payload['bigquery']['export_location'], run_id
-    ) -%}
+    {%- if payload['source_type'] == 's3_parquet' -%}
+      {%- set resolved = dbt_snowflake_iceberg_sync.iceberg_sync_resolve_s3_parquet_locations(
+        payload, effective_mode
+      ) -%}
+      {%- set destination_uri = resolved['destination_uri'] -%}
+      {%- set load_locations = resolved['locations'] -%}
+    {%- else -%}
+      {%- set stage = dbt_snowflake_iceberg_sync.iceberg_sync_resolve_stage_location(
+        payload['bigquery']['export_location'], run_id
+      ) -%}
+      {%- set destination_uri = stage['remote_run_uri'] -%}
+      {%- set load_locations = [{
+        'stage_location': stage['run_stage_location'],
+        'pattern': none,
+        'force': false
+      }] -%}
+    {%- endif -%}
     {%- set export_result = dbt_snowflake_iceberg_sync.iceberg_sync_wait_for_export(
-      payload, effective_mode, stage['gcs_run_uri']
+      payload, effective_mode, destination_uri
     ) -%}
     {%- set cleanup = {
       'created_internal_table': false,
@@ -59,6 +73,9 @@
       ) -%}
     {%- else -%}
       {%- set desired_columns = export_result['columns'] -%}
+      {%- if export_result.get('load_locations') -%}
+        {%- set load_locations = export_result['load_locations'] -%}
+      {%- endif -%}
 
       {%- call statement('iceberg_sync_create_internal_table', auto_begin=False) -%}
         {{ dbt_snowflake_iceberg_sync.iceberg_sync_create_iceberg_table_sql(
@@ -77,7 +94,7 @@
       {%- endif -%}
 
       {%- set load_result = dbt_snowflake_iceberg_sync.iceberg_sync_run_load(
-        payload, effective_mode, stage['run_stage_location']
+        payload, effective_mode, load_locations
       ) -%}
       {%- if load_result.get('status') != 'success' -%}
         {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(

@@ -42,6 +42,9 @@ def base_payload() -> dict[str, Any]:
                 "schema": "UTIL",
                 "identifier": "ICEBERG_SYNC_RUN_LOG",
             },
+            "google_cloud_service_account_secret_fqdn": (
+                "ANALYTICS.SECRETS.GOOGLE_CLOUD_SERVICE_ACCOUNT_JSON"
+            ),
             "google_cloud_service_account_secret_alias": (
                 "google_cloud_service_account_credentials_json"
             ),
@@ -97,6 +100,24 @@ def base_payload() -> dict[str, Any]:
 
 
 @pytest.fixture
+def s3_parquet_payload(base_payload) -> dict[str, Any]:
+    payload = copy.deepcopy(base_payload)
+    payload["source_type"] = "s3_parquet"
+    payload["model"]["sql"] = ""
+    payload["deployment"]["parquet_file_format"] = "ANALYTICS.UTIL.ICEBERG_SYNC_PARQUET_FILE_FORMAT"
+    payload.pop("bigquery", None)
+    payload["s3_parquet"] = {
+        "location": "@ANALYTICS.PUBLIC.S3_EXPORT_STAGE/orders",
+        "file_pattern": None,
+        "full_refresh_paths": [""],
+        "incremental_paths": [""],
+        "skip_missing_location": False,
+        "infer_schema_max_file_count": 16,
+    }
+    return payload
+
+
+@pytest.fixture
 def payload_factory(base_payload: dict[str, Any]):
     def factory(**updates: Any) -> dict[str, Any]:
         payload = copy.deepcopy(base_payload)
@@ -104,6 +125,23 @@ def payload_factory(base_payload: dict[str, Any]):
             target = payload
             parts = path.split("__")
             for part in parts[:-1]:
+                target = target[part]
+            target[parts[-1]] = value
+        return payload
+
+    return factory
+
+
+@pytest.fixture
+def s3_payload_factory(s3_parquet_payload: dict[str, Any]):
+    def factory(**updates: Any) -> dict[str, Any]:
+        payload = copy.deepcopy(s3_parquet_payload)
+        for path, value in updates.items():
+            target = payload
+            parts = path.split("__")
+            for part in parts[:-1]:
+                if part not in target or not isinstance(target[part], dict):
+                    target[part] = {}
                 target = target[part]
             target[parts[-1]] = value
         return payload

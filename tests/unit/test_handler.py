@@ -54,12 +54,23 @@ class FakeSnowflake:
             return self.target_view_exists_value
         return self.table_exists_value
 
-    def resolve_stage_location(self, export_location, run_id):
+    def resolve_stage_location(
+        self,
+        export_location,
+        run_id=None,
+        *,
+        allowed_schemes=None,
+        field_name=None,
+        cloud_label=None,
+    ):
         self.calls.append(("resolve_stage_location", export_location, run_id))
 
         class Stage:
             run_stage_location = '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/dbt/run'
-            gcs_run_uri = "gcs://bucket/dbt/run"
+            remote_run_uri = "gs://bucket/dbt/run"
+            stage_url = "gcs://bucket/dbt"
+            stage_fqn = '"ANALYTICS"."PUBLIC"."EXPORT_STAGE"'
+            stage_path = "dbt"
 
         return Stage()
 
@@ -86,8 +97,10 @@ class FakeSnowflake:
         if self.fail_delete:
             raise SnowflakeExecutionError("delete failed")
 
-    def copy_into_iceberg(self, relation, stage_run_location):
-        self.calls.append(("copy", stage_run_location))
+    def copy_into_iceberg(
+        self, relation, stage_run_location, *, pattern=None, files=None, force=False
+    ):
+        self.calls.append(("copy", stage_run_location, pattern, files, force))
         if self.copy_errors:
             raise self.copy_errors.pop(0)
         if self.fail_copy:
@@ -163,13 +176,53 @@ def test_handler_full_refresh_success(base_payload):
 
     assert result["status"] == "success"
     assert result["effective_mode"] == "full_refresh"
-    assert result["view_columns"] == [{"source_name": "OrderID", "alias": "order_id"}]
+    assert result["view_columns"] == [
+        {"source_name": "OrderID", "alias": "order_id", "expression": None}
+    ]
     assert ("delete", None) in snowflake.calls
     assert ("commit",) in snowflake.calls
     assert ("create_or_replace_view", "ORDERS", ["order_id"]) in snowflake.calls
     assert ("write_run_log", "success") in snowflake.calls
     assert result["retry"]["attempts"] == 1
     assert result["cleanup"]["created_internal_table"] is True
+
+
+def test_handler_declared_columns_override_source_schema(payload_factory):
+    payload = payload_factory(
+        columns=[
+            {
+                "name": "OrderID",
+                "type": "BIGINT",
+                "alias": "order_id",
+            },
+            {
+                "name": "AmountText",
+                "type": "VARCHAR",
+                "alias": "amount",
+                "expression": 'TRY_TO_NUMBER("AmountText")',
+            },
+        ]
+    )
+    snowflake = FakeSnowflake(table_exists=False, target_view_exists=False)
+    source = FakeSource()
+
+    result = IcebergSyncRunner(
+        object(),
+        snowflake_client=snowflake,
+        source_adapters={"bigquery": source},
+    ).run(payload)
+
+    assert result["status"] == "success"
+    assert ("map_schema", 1) not in source.calls
+    assert result["view_columns"] == [
+        {"source_name": "OrderID", "alias": "order_id", "expression": None},
+        {
+            "source_name": "AmountText",
+            "alias": "amount",
+            "expression": 'TRY_TO_NUMBER("AmountText")',
+        },
+    ]
+    assert ("create_or_replace_view", "ORDERS", ["order_id", "amount"]) in snowflake.calls
 
 
 def test_handler_incremental_uses_incremental_predicate(payload_factory):
@@ -223,7 +276,12 @@ def test_handler_existing_table_rejects_schema_change(base_payload):
         ).run(base_payload)
 
     assert ("write_run_log", "failure") in snowflake.calls
-    assert ("copy", '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/dbt/run') not in snowflake.calls
+    assert (
+        "copy",
+        '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/dbt/run',
+        None,
+        False,
+    ) not in snowflake.calls
 
 
 def test_handler_writes_failure_log_when_source_export_fails(base_payload):
@@ -344,9 +402,14 @@ def test_retryable_snowflake_internal_error_retries_and_succeeds(payload_factory
     assert snowflake.calls.count(("rollback",)) == 1
     assert snowflake.calls.count(("begin",)) == 2
     assert [call for call in source.calls if call[0] == "full_refresh"] == [
-        ("full_refresh", "gcs://bucket/dbt/run")
+        ("full_refresh", "gs://bucket/dbt/run")
     ]
-    assert snowflake.calls.count(("copy", '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/dbt/run')) == 2
+    assert (
+        snowflake.calls.count(
+            ("copy", '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/dbt/run', None, None, False)
+        )
+        == 2
+    )
 
 
 def test_retryable_snowflake_internal_error_messages_are_classified():

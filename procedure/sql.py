@@ -59,22 +59,73 @@ def delete_sql(relation: RelationConfig, predicate: str | None) -> str:
     return f"DELETE FROM {relation_sql(relation)}"
 
 
-def copy_into_sql(relation: RelationConfig, stage_run_location: str) -> str:
-    return f"""COPY INTO {relation_sql(relation)}
-FROM {stage_run_location.rstrip("/")}/
-FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)
-LOAD_MODE = ADD_FILES_COPY
-MATCH_BY_COLUMN_NAME = CASE_SENSITIVE
-PURGE = FALSE"""
+def copy_into_sql(
+    relation: RelationConfig,
+    stage_run_location: str,
+    *,
+    pattern: str | None = None,
+    files: list[str] | None = None,
+    force: bool = False,
+) -> str:
+    lines = [
+        f"COPY INTO {relation_sql(relation)}",
+        f"FROM {stage_run_location.rstrip('/')}/",
+        "FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)",
+        "LOAD_MODE = ADD_FILES_COPY",
+        "MATCH_BY_COLUMN_NAME = CASE_SENSITIVE",
+        "PURGE = FALSE",
+    ]
+    if files:
+        file_list = ", ".join(sql_string(name) for name in files)
+        lines.append(f"FILES = ({file_list})")
+    elif pattern:
+        lines.append(f"PATTERN = {sql_string(pattern)}")
+    if force:
+        lines.append("FORCE = TRUE")
+    return "\n".join(lines)
+
+
+def list_files_sql(stage_location: str) -> str:
+    return f"LIST {stage_location.rstrip('/')}"
+
+
+def infer_schema_sql(
+    *,
+    location: str,
+    file_format: str,
+    files: list[str] | None = None,
+    kind: str = "ICEBERG",
+) -> str:
+    # FILE_FORMAT must be a Snowflake object identifier (often a quoted FQN from
+    # deployment config), not a string literal.
+    parts = [
+        f"LOCATION => {sql_string(location)}",
+        f"FILE_FORMAT => {file_format}",
+        f"KIND => {sql_string(kind)}",
+    ]
+    if files:
+        file_list = ", ".join(sql_string(name) for name in files)
+        parts.append(f"FILES => ({file_list})")
+    joined = ",\n    ".join(parts)
+    return f"SELECT *\nFROM TABLE(\n  INFER_SCHEMA(\n    {joined}\n  )\n)\nORDER BY ORDER_ID"
+
+
+def create_parquet_file_format_sql(file_format_fqn: str) -> str:
+    return (
+        f"CREATE FILE FORMAT IF NOT EXISTS {file_format_fqn}\n"
+        "TYPE = PARQUET\n"
+        "USE_VECTORIZED_SCANNER = TRUE"
+    )
 
 
 def create_or_replace_view_sql(
     target: RelationConfig, internal: RelationConfig, columns: list[ViewColumn]
 ) -> str:
-    select_list = ",\n  ".join(
-        f"{quote_identifier(column.source_name)} AS {quote_view_alias(column.alias)}"
-        for column in columns
-    )
+    select_items: list[str] = []
+    for column in columns:
+        source_expr = column.expression or quote_identifier(column.source_name)
+        select_items.append(f"{source_expr} AS {quote_view_alias(column.alias)}")
+    select_list = ",\n  ".join(select_items)
     return f"""CREATE OR REPLACE VIEW {relation_sql(target)} AS
 SELECT
   {select_list}
