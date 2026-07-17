@@ -662,7 +662,7 @@ FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)
 LOAD_MODE = ADD_FILES_COPY
 MATCH_BY_COLUMN_NAME = CASE_SENSITIVE
 PURGE = FALSE
--- s3_parquet also sets FORCE = TRUE and may set PATTERN = '...'
+-- s3_parquet also sets FORCE = TRUE and may set FILES = (...)
 ```
 
 BigQuery exports use a per-run stage prefix. S3 Parquet loads read the

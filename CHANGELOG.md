@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.0 - 2026-07-17
+
 ### Added
 
 - New `source_type: s3_parquet` loads pre-existing Iceberg-compatible Parquet
@@ -15,6 +17,8 @@
   source type (BigQuery and S3 Parquet).
 - Installer creates a named Parquet file format
   (`vars.iceberg_sync.parquet_file_format`) used by S3 schema inference.
+- Opt-in S3 integration scenarios gated by
+  `DBT_SNOWFLAKE_ICEBERG_SYNC_S3_PARQUET_STAGE`.
 
 ### Fixed
 
@@ -27,8 +31,6 @@
   `service_account_credentials_json`, matching dbt compile-time checks.
 - Clarified the S3 incremental validation error when default
   `s3_parquet_incremental_paths=['']` is paired with `incremental_predicate`.
-- Opt-in S3 integration scenarios gated by
-  `DBT_SNOWFLAKE_ICEBERG_SYNC_S3_PARQUET_STAGE`.
 
 ### Changed
 
