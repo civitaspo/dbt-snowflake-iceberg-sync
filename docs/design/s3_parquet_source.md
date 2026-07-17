@@ -47,7 +47,7 @@ Model options under `meta.iceberg_sync`:
 | `s3_parquet_incremental_paths` | No | `['']` | Subpaths for incremental runs |
 | `s3_parquet_skip_missing_location` | No | `false` | Skip the run when no files match |
 | `s3_parquet_infer_schema_max_file_count` | No | `16` | Cap on files passed to `INFER_SCHEMA` |
-| `s3_parquet_columns` | No | infer | Declared Iceberg columns; skips `INFER_SCHEMA` when set |
+| `columns` | No | infer | Shared declared Iceberg columns; skips `INFER_SCHEMA` when set |
 
 Deployment var:
 
@@ -65,9 +65,11 @@ ordered by `ORDER_ID`. Column names stay case-sensitive for Iceberg DDL and
 `MATCH_BY_COLUMN_NAME = CASE_SENSITIVE`. View aliases continue to use
 lower_snake conversions.
 
-Alternatively, set `s3_parquet_columns` to declare the Iceberg table columns
-explicitly and skip `INFER_SCHEMA`. Each entry needs `name` (Parquet / Iceberg
-column name) and `type` (Snowflake DDL type). Optional fields:
+Alternatively, set shared `columns` under `meta.iceberg_sync` to declare the
+Iceberg table columns explicitly and skip `INFER_SCHEMA`. The same option
+overrides BigQuery schema mapping for `source_type: bigquery`. Each entry needs
+`name` (Parquet / Iceberg column name) and `type` (Snowflake DDL type). Optional
+fields:
 
 - `nullable` (default `true`)
 - `alias` (view alias; default `lower_snake(name)`)
@@ -77,7 +79,7 @@ column name) and `type` (Snowflake DDL type). Optional fields:
 transform values without changing the internal Iceberg table DDL. Example:
 
 ```yaml
-s3_parquet_columns:
+columns:
   - name: OrderID
     type: BIGINT
     nullable: false
@@ -88,9 +90,11 @@ s3_parquet_columns:
     expression: 'TRY_TO_NUMBER("AmountText")'
 ```
 
-When `s3_parquet_columns` is set, `vars.iceberg_sync.parquet_file_format` is not
-required for that model. When it is omitted, schema inference still requires the
-installer-managed Parquet file format.
+`columns` is read only from `meta.iceberg_sync` so it does not collide with dbt
+`config.columns` / schema.yml documentation. When `columns` is set for an S3
+model, `vars.iceberg_sync.parquet_file_format` is not required. When it is
+omitted, schema inference still requires the installer-managed Parquet file
+format.
 
 Limits:
 

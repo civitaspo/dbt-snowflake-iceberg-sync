@@ -6,7 +6,7 @@ from procedure.errors import SchemaError
 from procedure.schema import (
     SnowflakeColumn,
     map_bigquery_schema,
-    map_parquet_declared_schema,
+    map_declared_columns,
     validate_schema_compatibility,
     view_columns,
 )
@@ -130,17 +130,15 @@ def test_view_columns_honor_declared_alias_and_expression():
     assert view.expression == 'TRY_TO_NUMBER("AmountText")'
 
 
-def test_map_parquet_declared_schema():
-    columns = map_parquet_declared_schema(
+def test_map_declared_columns():
+    columns = map_declared_columns(
         [
             {
-                "schema_mode": "declared",
                 "name": "OrderID",
                 "type": "NUMBER(19,0)",
                 "nullable": False,
             },
             {
-                "schema_mode": "declared",
                 "name": "AmountText",
                 "type": "TEXT",
                 "alias": "amount",

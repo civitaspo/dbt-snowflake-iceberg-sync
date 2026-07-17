@@ -14,6 +14,7 @@ from .errors import IcebergSyncError, SnowflakeExecutionError
 from .run_log import build_run_log_payload
 from .schema import (
     SnowflakeColumn,
+    map_declared_columns,
     validate_schema_compatibility,
     view_columns,
 )
@@ -118,7 +119,7 @@ class IcebergSyncRunner:
                 if run_log_error is not None:
                     result["run_log_error"] = run_log_error
                 return result
-            desired_columns = source.map_schema(export_result)
+            desired_columns = self._resolve_columns(config, source, export_result)
 
             created_internal_table, altered_schema = self._create_or_validate_table(
                 config,
@@ -219,7 +220,7 @@ class IcebergSyncRunner:
                 destination_uri=destination_uri,
             ),
         )
-        return self._export_action_result(source, state)
+        return self._export_action_result(config, source, state)
 
     def poll_export(self, payload: dict[str, Any]) -> dict[str, Any]:
         config = parse_config(payload.get("config", {}))
@@ -228,10 +229,11 @@ class IcebergSyncRunner:
             raise IcebergSyncError("export_state must be an object")
         source = self._source_adapter(config)
         next_state = source.poll_export(config, state)
-        return self._export_action_result(source, next_state)
+        return self._export_action_result(config, source, next_state)
 
     def _export_action_result(
         self,
+        config: IcebergSyncConfig,
         source: SourceAdapter,
         state: dict[str, Any],
     ) -> dict[str, Any]:
@@ -262,7 +264,7 @@ class IcebergSyncRunner:
             job_references=state.get("job_references", []),
             staging_table_reference=state.get("staging_table_reference"),
         )
-        columns = source.map_schema(export_result)
+        columns = self._resolve_columns(config, source, export_result)
         export_payload = {
             "schema_fields": export_result.schema_fields,
             "segments": export_result.segments,
@@ -277,6 +279,16 @@ class IcebergSyncRunner:
             "status": "success",
             "export_result": export_payload,
         }
+
+    def _resolve_columns(
+        self,
+        config: IcebergSyncConfig,
+        source: SourceAdapter,
+        export_result: SourceExportResult,
+    ) -> list[SnowflakeColumn]:
+        if config.columns:
+            return map_declared_columns([asdict(column) for column in config.columns])
+        return source.map_schema(export_result)
 
     def _source_adapter(self, config: IcebergSyncConfig) -> SourceAdapter:
         adapter = self.source_adapters.get(config.source_type)

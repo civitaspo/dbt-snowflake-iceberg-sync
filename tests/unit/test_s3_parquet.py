@@ -216,9 +216,9 @@ def test_infer_schema_and_file_format_sql_renderers():
     )
 
 
-def test_parse_declared_s3_parquet_columns(s3_payload_factory):
+def test_parse_declared_columns(s3_payload_factory):
     payload = s3_payload_factory(
-        s3_parquet__columns=[
+        columns=[
             {
                 "name": "OrderID",
                 "type": "BIGINT",
@@ -238,13 +238,13 @@ def test_parse_declared_s3_parquet_columns(s3_payload_factory):
     config = parse_config(payload)
 
     assert config.s3_parquet is not None
-    assert len(config.s3_parquet.columns) == 2
-    assert config.s3_parquet.columns[1].expression == 'TRY_TO_NUMBER("AmountText")'
+    assert len(config.columns) == 2
+    assert config.columns[1].expression == 'TRY_TO_NUMBER("AmountText")'
     assert config.deployment.parquet_file_format is None
 
 
 def test_declared_columns_reject_empty_list(s3_payload_factory):
-    payload = s3_payload_factory(s3_parquet__columns=[])
+    payload = s3_payload_factory(columns=[])
 
     with pytest.raises(ConfigError, match="must not be empty"):
         parse_config(payload)
@@ -252,7 +252,7 @@ def test_declared_columns_reject_empty_list(s3_payload_factory):
 
 def test_s3_adapter_uses_declared_columns_without_infer(s3_payload_factory):
     payload = s3_payload_factory(
-        s3_parquet__columns=[
+        columns=[
             {
                 "name": "OrderID",
                 "type": "BIGINT",
@@ -286,16 +286,5 @@ def test_s3_adapter_uses_declared_columns_without_infer(s3_payload_factory):
     )
 
     assert state["status"] == "success"
+    assert state["schema_fields"] == []
     assert all(call[0] != "infer" for call in snowflake.calls)
-    columns = adapter.map_schema(
-        adapter.export(
-            config,
-            SourceExecutionContext(
-                effective_mode="full_refresh", destination_uri="s3://bucket/orders"
-            ),
-        )
-    )
-    assert [column.source_name for column in columns] == ["OrderID", "AmountText"]
-    assert columns[0].alias == "order_id"
-    assert columns[1].expression == 'TRY_TO_NUMBER("AmountText")'
-    assert columns[1].alias == "amount"

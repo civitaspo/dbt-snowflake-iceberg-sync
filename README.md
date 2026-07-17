@@ -310,7 +310,7 @@ as Parquet, and then loads those files into the Snowflake-managed Iceberg table.
 
 Use `source_type: s3_parquet` when Iceberg-compatible Parquet files already exist
 on an S3-backed Snowflake stage. The package lists matching files, resolves
-schema via `INFER_SCHEMA` or optional `s3_parquet_columns`, and loads with
+schema via `INFER_SCHEMA` or optional shared `columns`, and loads with
 `COPY INTO ... ADD_FILES_COPY`. S3 access comes from the stage Storage
 Integration; keep AWS credentials out of dbt model config.
 
@@ -349,7 +349,7 @@ Declare columns explicitly when you want stable DDL and view-side casts without
       'iceberg_sync': {
         'source_type': 's3_parquet',
         's3_parquet_location': '@ANALYTICS.PUBLIC.S3_PARQUET_STAGE/orders',
-        's3_parquet_columns': [
+        'columns': [
           {'name': 'OrderID', 'type': 'BIGINT', 'nullable': false, 'alias': 'order_id'},
           {
             'name': 'AmountText',
@@ -398,6 +398,7 @@ and quoted in internal table DDL and exposed view SQL.
 | `materialization_strategy` | No | `incremental` | `incremental` or `full_refresh`. `full_refresh` always reloads the target table. |
 | `incremental_strategy` | No | `delete+copy` | Incremental load strategy. Only `delete+copy` is supported. |
 | `incremental_predicate` | Conditional | None | Snowflake SQL predicate used to delete rows from the internal Iceberg table during incremental runs. For BigQuery, required when `bigquery_export_incremental_predicates` is non-empty. For S3 Parquet, required when `s3_parquet_incremental_paths` is customized away from the default `['']`. Must be absent when the matching source incremental list is empty/default. |
+| `columns` | No | None | Declared Iceberg column list under `meta.iceberg_sync` (not dbt `config.columns`). When set, overrides source schema inference for every source type. Each object needs `name` and `type`; optional `nullable`, `alias`, and view `expression` (for casts/transforms). |
 | `partition_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. Read from `meta.iceberg_sync` first, with legacy top-level config fallback. |
 | `cluster_by` | No | `[]` | Not supported yet. Any non-empty value fails validation. Read from `meta.iceberg_sync` first, with legacy top-level config fallback. |
 | `iceberg_sync_retry_max_attempts` | No | `3` | Compatibility retry setting for the legacy full-run procedure path. The dbt-side materialization issues Snowflake load statements directly and does not retry failed `COPY INTO` statements inside Snowflake Scripting. |
@@ -523,14 +524,13 @@ These options apply when `source_type='s3_parquet'`.
 | `s3_parquet_full_refresh_paths` | No | `['']` | Path suffixes under `s3_parquet_location` used for full refresh. `['']` means the location itself. |
 | `s3_parquet_incremental_paths` | No | `['']` | Path suffixes used for incremental runs. Custom values must be paired with `incremental_predicate`. |
 | `s3_parquet_skip_missing_location` | No | `false` | When `true`, a location with zero matching files skips the run instead of failing. |
-| `s3_parquet_infer_schema_max_file_count` | No | `16` | Maximum number of files passed to `INFER_SCHEMA` (newest by `last_modified` when capped). Ignored when `s3_parquet_columns` is set. |
-| `s3_parquet_columns` | No | None | Declared Iceberg column list. When set, skips `INFER_SCHEMA`. Each object needs `name` and `type`; optional `nullable`, `alias`, and view `expression` (for casts/transforms). |
+| `s3_parquet_infer_schema_max_file_count` | No | `16` | Maximum number of files passed to `INFER_SCHEMA` (newest by `last_modified` when capped). Ignored when shared `columns` is set. |
 
-S3 Parquet loads always use `FORCE = TRUE` and `PURGE = FALSE`. When
-`s3_parquet_columns` is omitted, schema is detected with
+S3 Parquet loads always use `FORCE = TRUE` and `PURGE = FALSE`. When shared
+`columns` is omitted, schema is detected with
 `INFER_SCHEMA(..., KIND => 'ICEBERG')` against the installer-managed Parquet
-file format (`vars.iceberg_sync.parquet_file_format`). Declared columns make that
-file format optional for the model.
+file format (`vars.iceberg_sync.parquet_file_format`). Declared `columns` make that
+file format optional for S3 models.
 
 ## Full Refresh Behavior
 

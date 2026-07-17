@@ -5,9 +5,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..config import S3_STAGE_SCHEMES, IcebergSyncConfig, S3ParquetColumnConfig
+from ..config import S3_STAGE_SCHEMES, IcebergSyncConfig
 from ..errors import ConfigError, SourceError
-from ..schema import SnowflakeColumn, map_parquet_declared_schema, map_parquet_infer_schema
+from ..schema import SnowflakeColumn, map_parquet_infer_schema
 from ..snowflake import SnowflakeClient, stage_relative_file_name
 from .base import SourceExecutionContext, SourceExportResult
 
@@ -48,10 +48,7 @@ class S3ParquetSourceAdapter:
         )
 
     def map_schema(self, export_result: SourceExportResult) -> list[SnowflakeColumn]:
-        fields = export_result.schema_fields
-        if fields and fields[0].get("schema_mode") == "declared":
-            return map_parquet_declared_schema(fields)
-        return map_parquet_infer_schema(fields)
+        return map_parquet_infer_schema(export_result.schema_fields)
 
     def start_export(
         self,
@@ -61,11 +58,11 @@ class S3ParquetSourceAdapter:
         if config.s3_parquet is None:
             raise ConfigError("s3_parquet config is required when source_type='s3_parquet'")
         s3 = config.s3_parquet
-        declared_columns = s3.columns
-        if not declared_columns and not config.deployment.parquet_file_format:
+        use_declared_columns = bool(config.columns)
+        if not use_declared_columns and not config.deployment.parquet_file_format:
             raise ConfigError(
                 "deployment.parquet_file_format is required when source_type='s3_parquet' "
-                "and s3_parquet_columns is not set"
+                "and columns is not set"
             )
 
         base_stage = self.snowflake.resolve_stage_location(
@@ -142,9 +139,8 @@ class S3ParquetSourceAdapter:
                 }
             raise SourceError("no Parquet files matched s3_parquet_location")
 
-        if declared_columns:
-            schema_fields = [_declared_column_field(column) for column in declared_columns]
-        else:
+        schema_fields: list[dict[str, Any]] = []
+        if not use_declared_columns:
             infer_files = _select_infer_schema_files(
                 matched_files,
                 max_file_count=s3.infer_schema_max_file_count,
@@ -187,20 +183,6 @@ class S3ParquetSourceAdapter:
         state: dict[str, Any],
     ) -> dict[str, Any]:
         return state
-
-
-def _declared_column_field(column: S3ParquetColumnConfig) -> dict[str, Any]:
-    field: dict[str, Any] = {
-        "schema_mode": "declared",
-        "name": column.name,
-        "type": column.type,
-        "nullable": column.nullable,
-    }
-    if column.alias is not None:
-        field["alias"] = column.alias
-    if column.expression is not None:
-        field["expression"] = column.expression
-    return field
 
 
 def _join_stage_location(base_location: str, path_suffix: str) -> str:

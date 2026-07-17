@@ -185,6 +185,44 @@ def test_handler_full_refresh_success(base_payload):
     assert result["cleanup"]["created_internal_table"] is True
 
 
+def test_handler_declared_columns_override_source_schema(payload_factory):
+    payload = payload_factory(
+        columns=[
+            {
+                "name": "OrderID",
+                "type": "BIGINT",
+                "alias": "order_id",
+            },
+            {
+                "name": "AmountText",
+                "type": "VARCHAR",
+                "alias": "amount",
+                "expression": 'TRY_TO_NUMBER("AmountText")',
+            },
+        ]
+    )
+    snowflake = FakeSnowflake(table_exists=False, target_view_exists=False)
+    source = FakeSource()
+
+    result = IcebergSyncRunner(
+        object(),
+        snowflake_client=snowflake,
+        source_adapters={"bigquery": source},
+    ).run(payload)
+
+    assert result["status"] == "success"
+    assert ("map_schema", 1) not in source.calls
+    assert result["view_columns"] == [
+        {"source_name": "OrderID", "alias": "order_id", "expression": None},
+        {
+            "source_name": "AmountText",
+            "alias": "amount",
+            "expression": 'TRY_TO_NUMBER("AmountText")',
+        },
+    ]
+    assert ("create_or_replace_view", "ORDERS", ["order_id", "amount"]) in snowflake.calls
+
+
 def test_handler_incremental_uses_incremental_predicate(payload_factory):
     payload = payload_factory(
         incremental_predicate="event_date >= '2026-01-01'",

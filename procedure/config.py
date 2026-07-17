@@ -94,7 +94,7 @@ class BigQueryConfig:
 
 
 @dataclass(frozen=True)
-class S3ParquetColumnConfig:
+class DeclaredColumnConfig:
     name: str
     type: str
     nullable: bool = True
@@ -110,7 +110,6 @@ class S3ParquetConfig:
     incremental_paths: tuple[str, ...] = field(default_factory=lambda: ("",))
     skip_missing_location: bool = False
     infer_schema_max_file_count: int = 16
-    columns: tuple[S3ParquetColumnConfig, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -161,6 +160,7 @@ class IcebergSyncConfig:
     iceberg_table: IcebergTableConfig
     bigquery: BigQueryConfig | None = None
     s3_parquet: S3ParquetConfig | None = None
+    columns: tuple[DeclaredColumnConfig, ...] = field(default_factory=tuple)
     retry: RetryPolicyConfig = field(default_factory=RetryPolicyConfig)
     cleanup: CleanupConfig = field(default_factory=CleanupConfig)
     run_log: RunLogConfig = field(default_factory=RunLogConfig)
@@ -314,6 +314,7 @@ def parse_config(payload: dict[str, Any]) -> IcebergSyncConfig:
         deployment=deployment,
         bigquery=bigquery,
         s3_parquet=s3_parquet,
+        columns=_parse_declared_columns(payload.get("columns")),
         iceberg_table=iceberg_table,
         retry=retry,
         cleanup=cleanup,
@@ -338,6 +339,13 @@ def validate_config(config: IcebergSyncConfig) -> None:
             "google_cloud_auth_method must be 'service_account_credentials_json' or "
             "'workload_identity_federation'"
         )
+    if config.columns:
+        names = [column.name for column in config.columns]
+        duplicate_names = sorted({name for name in names if names.count(name) > 1})
+        if duplicate_names:
+            raise ConfigError(
+                "columns contains duplicate column names: " + ", ".join(duplicate_names)
+            )
     if config.deployment.google_cloud_auth_method == "workload_identity_federation":
         missing_wif_fields = []
         if not config.deployment.google_cloud_workload_identity_federation_secret_fqdn:
@@ -438,43 +446,40 @@ def _parse_s3_parquet_config(s3_payload: dict[str, Any]) -> S3ParquetConfig:
             s3_payload.get("infer_schema_max_file_count", 16),
             "s3_parquet_infer_schema_max_file_count",
         ),
-        columns=_parse_s3_parquet_columns(s3_payload.get("columns")),
     )
 
 
-def _parse_s3_parquet_columns(value: Any) -> tuple[S3ParquetColumnConfig, ...]:
+def _parse_declared_columns(value: Any) -> tuple[DeclaredColumnConfig, ...]:
     if value in (None, ""):
         return ()
     if not isinstance(value, (list, tuple)):
-        raise ConfigError("s3_parquet_columns must be a list of column objects")
+        raise ConfigError("columns must be a list of column objects")
     if len(value) == 0:
-        raise ConfigError("s3_parquet_columns must not be empty when set")
-    columns: list[S3ParquetColumnConfig] = []
+        raise ConfigError("columns must not be empty when set")
+    columns: list[DeclaredColumnConfig] = []
     for index, item in enumerate(value):
         if not isinstance(item, dict):
-            raise ConfigError(f"s3_parquet_columns[{index}] must be an object")
+            raise ConfigError(f"columns[{index}] must be an object")
         name = item.get("name")
         if name is None or str(name).strip() == "":
-            raise ConfigError(f"s3_parquet_columns[{index}].name is required")
+            raise ConfigError(f"columns[{index}].name is required")
         type_name = item.get("type")
         if type_name is None or str(type_name).strip() == "":
-            raise ConfigError(f"s3_parquet_columns[{index}].type is required")
+            raise ConfigError(f"columns[{index}].type is required")
         alias_raw = item.get("alias")
         if alias_raw is not None and str(alias_raw).strip() == "":
-            raise ConfigError(f"s3_parquet_columns[{index}].alias must not be empty when set")
+            raise ConfigError(f"columns[{index}].alias must not be empty when set")
         expression_raw = item.get("expression")
         if expression_raw is not None and str(expression_raw).strip() == "":
-            raise ConfigError(
-                f"s3_parquet_columns[{index}].expression must not be empty when set"
-            )
+            raise ConfigError(f"columns[{index}].expression must not be empty when set")
         columns.append(
-            S3ParquetColumnConfig(
+            DeclaredColumnConfig(
                 name=str(name),
                 type=str(type_name).strip(),
                 nullable=_coerce_bool_strict(
                     item.get("nullable"),
                     True,
-                    f"s3_parquet_columns[{index}].nullable",
+                    f"columns[{index}].nullable",
                 ),
                 alias=_optional_string(alias_raw),
                 expression=_optional_string(expression_raw),
@@ -584,18 +589,10 @@ def _validate_s3_parquet_config(config: IcebergSyncConfig) -> None:
             "or both absent"
         )
     _validate_named_stage_location(config.s3_parquet.location, "s3_parquet_location")
-    if config.s3_parquet.columns:
-        names = [column.name for column in config.s3_parquet.columns]
-        duplicate_names = sorted({name for name in names if names.count(name) > 1})
-        if duplicate_names:
-            raise ConfigError(
-                "s3_parquet_columns contains duplicate column names: "
-                + ", ".join(duplicate_names)
-            )
-    elif not config.deployment.parquet_file_format:
+    if not config.columns and not config.deployment.parquet_file_format:
         raise ConfigError(
             "deployment.parquet_file_format is required when source_type='s3_parquet' "
-            "and s3_parquet_columns is not set"
+            "and columns is not set"
         )
 
 

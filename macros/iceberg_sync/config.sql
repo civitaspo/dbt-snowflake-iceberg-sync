@@ -360,6 +360,7 @@
     'materialization_strategy': materialization_strategy or 'incremental',
     'incremental_strategy': incremental_strategy or 'delete+copy',
     'incremental_predicate': incremental_predicate,
+    'columns': dbt_snowflake_iceberg_sync.iceberg_sync_collect_declared_columns(model_node),
     'dbt_full_refresh': dbt_full_refresh,
     'partition_by': partition_by,
     'cluster_by': cluster_by,
@@ -459,56 +460,57 @@
       dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 's3_parquet_incremental_paths', [''])
     ),
     'skip_missing_location': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 's3_parquet_skip_missing_location', false),
-    'infer_schema_max_file_count': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 's3_parquet_infer_schema_max_file_count', 16, true),
-    'columns': dbt_snowflake_iceberg_sync.iceberg_sync_collect_s3_parquet_columns(model_node)
+    'infer_schema_max_file_count': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 's3_parquet_infer_schema_max_file_count', 16, true)
   }) }}
 {%- endmacro %}
 
-{% macro iceberg_sync_collect_s3_parquet_columns(model_node) -%}
-  {%- set raw_columns = dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 's3_parquet_columns', none) -%}
+{% macro iceberg_sync_collect_declared_columns(model_node) -%}
+  {# Only read meta.iceberg_sync.columns — never fall back to dbt config.columns. #}
+  {%- set model_meta = dbt_snowflake_iceberg_sync.iceberg_sync_model_meta(model_node) -%}
+  {%- set raw_columns = model_meta.get('columns', none) -%}
   {%- if raw_columns is none -%}
     {{ return(none) }}
   {%- endif -%}
   {%- if raw_columns is string or raw_columns is mapping or raw_columns is not iterable -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      "s3_parquet_columns must be a list of column objects"
+      "columns must be a list of column objects"
     ) -%}
   {%- endif -%}
   {%- set values = dbt_snowflake_iceberg_sync.iceberg_sync_as_list(raw_columns) -%}
   {%- if values | length == 0 -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      "s3_parquet_columns must not be empty when set"
+      "columns must not be empty when set"
     ) -%}
   {%- endif -%}
   {%- set columns = [] -%}
   {%- for item in values -%}
     {%- if item is not mapping -%}
       {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        "s3_parquet_columns[" ~ loop.index0 ~ "] must be an object"
+        "columns[" ~ loop.index0 ~ "] must be an object"
       ) -%}
     {%- endif -%}
     {%- set name = item.get('name', none) -%}
     {%- set type_name = item.get('type', none) -%}
     {%- if name is none or (name | string | trim) == '' -%}
       {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        "s3_parquet_columns[" ~ loop.index0 ~ "].name is required"
+        "columns[" ~ loop.index0 ~ "].name is required"
       ) -%}
     {%- endif -%}
     {%- if type_name is none or (type_name | string | trim) == '' -%}
       {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        "s3_parquet_columns[" ~ loop.index0 ~ "].type is required"
+        "columns[" ~ loop.index0 ~ "].type is required"
       ) -%}
     {%- endif -%}
     {%- set alias = item.get('alias', none) -%}
     {%- if alias is not none and (alias | string | trim) == '' -%}
       {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        "s3_parquet_columns[" ~ loop.index0 ~ "].alias must not be empty when set"
+        "columns[" ~ loop.index0 ~ "].alias must not be empty when set"
       ) -%}
     {%- endif -%}
     {%- set expression = item.get('expression', none) -%}
     {%- if expression is not none and (expression | string | trim) == '' -%}
       {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        "s3_parquet_columns[" ~ loop.index0 ~ "].expression must not be empty when set"
+        "columns[" ~ loop.index0 ~ "].expression must not be empty when set"
       ) -%}
     {%- endif -%}
     {%- do columns.append({

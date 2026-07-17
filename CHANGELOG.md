@@ -7,10 +7,12 @@
 - New `source_type: s3_parquet` loads pre-existing Iceberg-compatible Parquet
   files from an S3-backed Snowflake stage into a Snowflake-managed Iceberg
   table. Schema comes from `INFER_SCHEMA(KIND => 'ICEBERG')` by default, or from
-  optional `s3_parquet_columns` declarations (with view `alias` /
-  `expression` support for casts). Access uses the user-managed Storage
-  Integration on the stage; the package does not handle AWS credentials. See
-  `docs/design/s3_parquet_source.md`.
+  optional shared `columns` declarations under `meta.iceberg_sync` (with view
+  `alias` / `expression` support for casts). Access uses the user-managed
+  Storage Integration on the stage; the package does not handle AWS credentials.
+  See `docs/design/s3_parquet_source.md`.
+- Shared `meta.iceberg_sync.columns` overrides source schema inference for every
+  source type (BigQuery and S3 Parquet).
 - Installer creates a named Parquet file format
   (`vars.iceberg_sync.parquet_file_format`) used by S3 schema inference.
 
