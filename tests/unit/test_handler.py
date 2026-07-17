@@ -174,7 +174,9 @@ def test_handler_full_refresh_success(base_payload):
 
     assert result["status"] == "success"
     assert result["effective_mode"] == "full_refresh"
-    assert result["view_columns"] == [{"source_name": "OrderID", "alias": "order_id"}]
+    assert result["view_columns"] == [
+        {"source_name": "OrderID", "alias": "order_id", "expression": None}
+    ]
     assert ("delete", None) in snowflake.calls
     assert ("commit",) in snowflake.calls
     assert ("create_or_replace_view", "ORDERS", ["order_id"]) in snowflake.calls

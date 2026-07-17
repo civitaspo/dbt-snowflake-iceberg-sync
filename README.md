@@ -309,10 +309,10 @@ as Parquet, and then loads those files into the Snowflake-managed Iceberg table.
 ## S3 Parquet Model
 
 Use `source_type: s3_parquet` when Iceberg-compatible Parquet files already exist
-on an S3-backed Snowflake stage. The package lists matching files, infers schema
-with Snowflake `INFER_SCHEMA`, and loads with `COPY INTO ... ADD_FILES_COPY`.
-S3 access comes from the stage Storage Integration; keep AWS credentials out of
-dbt model config.
+on an S3-backed Snowflake stage. The package lists matching files, resolves
+schema via `INFER_SCHEMA` or optional `s3_parquet_columns`, and loads with
+`COPY INTO ... ADD_FILES_COPY`. S3 access comes from the stage Storage
+Integration; keep AWS credentials out of dbt model config.
 
 ```sql
 {{
@@ -331,6 +331,33 @@ dbt model config.
         'incremental_strategy': 'delete+copy',
         'incremental_predicate': "\"order_date\" = '2026-05-30'",
 
+        'iceberg_table_external_volume': 'ICEBERG_EXTERNAL_VOLUME'
+      }
+    }
+  )
+}}
+```
+
+Declare columns explicitly when you want stable DDL and view-side casts without
+`INFER_SCHEMA`:
+
+```sql
+{{
+  config(
+    materialized='iceberg_sync',
+    meta={
+      'iceberg_sync': {
+        'source_type': 's3_parquet',
+        's3_parquet_location': '@ANALYTICS.PUBLIC.S3_PARQUET_STAGE/orders',
+        's3_parquet_columns': [
+          {'name': 'OrderID', 'type': 'BIGINT', 'nullable': false, 'alias': 'order_id'},
+          {
+            'name': 'AmountText',
+            'type': 'VARCHAR',
+            'alias': 'amount',
+            'expression': 'TRY_TO_NUMBER("AmountText")'
+          }
+        ],
         'iceberg_table_external_volume': 'ICEBERG_EXTERNAL_VOLUME'
       }
     }
@@ -496,11 +523,14 @@ These options apply when `source_type='s3_parquet'`.
 | `s3_parquet_full_refresh_paths` | No | `['']` | Path suffixes under `s3_parquet_location` used for full refresh. `['']` means the location itself. |
 | `s3_parquet_incremental_paths` | No | `['']` | Path suffixes used for incremental runs. Custom values must be paired with `incremental_predicate`. |
 | `s3_parquet_skip_missing_location` | No | `false` | When `true`, a location with zero matching files skips the run instead of failing. |
-| `s3_parquet_infer_schema_max_file_count` | No | `16` | Maximum number of files passed to `INFER_SCHEMA` (newest by `last_modified` when capped). |
+| `s3_parquet_infer_schema_max_file_count` | No | `16` | Maximum number of files passed to `INFER_SCHEMA` (newest by `last_modified` when capped). Ignored when `s3_parquet_columns` is set. |
+| `s3_parquet_columns` | No | None | Declared Iceberg column list. When set, skips `INFER_SCHEMA`. Each object needs `name` and `type`; optional `nullable`, `alias`, and view `expression` (for casts/transforms). |
 
-S3 Parquet loads always use `FORCE = TRUE` and `PURGE = FALSE`. Schema is
-detected with `INFER_SCHEMA(..., KIND => 'ICEBERG')` against the installer-managed
-Parquet file format (`vars.iceberg_sync.parquet_file_format`).
+S3 Parquet loads always use `FORCE = TRUE` and `PURGE = FALSE`. When
+`s3_parquet_columns` is omitted, schema is detected with
+`INFER_SCHEMA(..., KIND => 'ICEBERG')` against the installer-managed Parquet
+file format (`vars.iceberg_sync.parquet_file_format`). Declared columns make that
+file format optional for the model.
 
 ## Full Refresh Behavior
 
@@ -627,13 +657,16 @@ The Iceberg load uses:
 
 ```sql
 COPY INTO <iceberg_table>
-FROM @<named_stage>/<run_prefix>/
+FROM @<named_stage>/<load_prefix>/
 FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)
 LOAD_MODE = ADD_FILES_COPY
 MATCH_BY_COLUMN_NAME = CASE_SENSITIVE
 PURGE = FALSE
+-- s3_parquet also sets FORCE = TRUE and may set PATTERN = '...'
 ```
 
+BigQuery exports use a per-run stage prefix. S3 Parquet loads read the
+configured stage location (and optional path suffixes) directly.
 ## Local Tests
 
 Unit tests do not require Snowflake or BigQuery credentials:

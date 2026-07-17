@@ -359,9 +359,25 @@
       "s3_parquet_incremental_paths and incremental_predicate must be both present or both absent"
     ) -%}
   {%- endif -%}
-  {%- if not payload['deployment'].get('parquet_file_format') -%}
+  {%- if not (
+    s3['columns'] is defined
+    and s3['columns'] is not none
+    and (s3['columns'] | length) > 0
+  ) and not payload['deployment'].get('parquet_file_format') -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      "deployment.parquet_file_format is required when source_type='s3_parquet'"
+      "deployment.parquet_file_format is required when source_type='s3_parquet' and s3_parquet_columns is not set"
     ) -%}
+  {%- endif -%}
+  {%- if s3['columns'] is defined and s3['columns'] is not none and (s3['columns'] | length) > 0 -%}
+    {%- set seen_names = [] -%}
+    {%- for column in s3['columns'] -%}
+      {%- set column_name = column.get('name') | string -%}
+      {%- if column_name in seen_names -%}
+        {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+          "s3_parquet_columns contains duplicate column names: " ~ column_name
+        ) -%}
+      {%- endif -%}
+      {%- do seen_names.append(column_name) -%}
+    {%- endfor -%}
   {%- endif -%}
 {%- endmacro %}

@@ -6,6 +6,7 @@ from procedure.errors import SchemaError
 from procedure.schema import (
     SnowflakeColumn,
     map_bigquery_schema,
+    map_parquet_declared_schema,
     validate_schema_compatibility,
     view_columns,
 )
@@ -112,6 +113,47 @@ def test_view_columns_are_lower_snake():
     columns = [SnowflakeColumn("HTTPStatusCode", "BIGINT")]
 
     assert view_columns(columns)[0].alias == "http_status_code"
+
+
+def test_view_columns_honor_declared_alias_and_expression():
+    columns = [
+        SnowflakeColumn(
+            "AmountText",
+            "VARCHAR",
+            alias="amount",
+            expression='TRY_TO_NUMBER("AmountText")',
+        )
+    ]
+
+    view = view_columns(columns)[0]
+    assert view.alias == "amount"
+    assert view.expression == 'TRY_TO_NUMBER("AmountText")'
+
+
+def test_map_parquet_declared_schema():
+    columns = map_parquet_declared_schema(
+        [
+            {
+                "schema_mode": "declared",
+                "name": "OrderID",
+                "type": "NUMBER(19,0)",
+                "nullable": False,
+            },
+            {
+                "schema_mode": "declared",
+                "name": "AmountText",
+                "type": "TEXT",
+                "alias": "amount",
+                "expression": 'TRY_TO_NUMBER("AmountText")',
+            },
+        ]
+    )
+
+    assert columns[0].snowflake_type == "BIGINT"
+    assert columns[0].nullable is False
+    assert columns[1].snowflake_type == "VARCHAR"
+    assert columns[1].alias == "amount"
+    assert columns[1].expression == 'TRY_TO_NUMBER("AmountText")'
 
 
 def test_schema_compatibility_allows_additive_columns():

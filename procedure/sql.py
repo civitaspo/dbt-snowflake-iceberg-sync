@@ -92,9 +92,11 @@ def infer_schema_sql(
     files: list[str] | None = None,
     kind: str = "ICEBERG",
 ) -> str:
+    # FILE_FORMAT must be a Snowflake object identifier (often a quoted FQN from
+    # deployment config), not a string literal.
     parts = [
         f"LOCATION => {sql_string(location)}",
-        f"FILE_FORMAT => {sql_string(file_format)}",
+        f"FILE_FORMAT => {file_format}",
         f"KIND => {sql_string(kind)}",
     ]
     if files:
@@ -115,10 +117,11 @@ def create_parquet_file_format_sql(file_format_fqn: str) -> str:
 def create_or_replace_view_sql(
     target: RelationConfig, internal: RelationConfig, columns: list[ViewColumn]
 ) -> str:
-    select_list = ",\n  ".join(
-        f"{quote_identifier(column.source_name)} AS {quote_view_alias(column.alias)}"
-        for column in columns
-    )
+    select_items: list[str] = []
+    for column in columns:
+        source_expr = column.expression or quote_identifier(column.source_name)
+        select_items.append(f"{source_expr} AS {quote_view_alias(column.alias)}")
+    select_list = ",\n  ".join(select_items)
     return f"""CREATE OR REPLACE VIEW {relation_sql(target)} AS
 SELECT
   {select_list}

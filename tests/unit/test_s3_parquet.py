@@ -203,11 +203,99 @@ def test_copy_into_sql_emits_pattern_and_force(s3_parquet_payload):
 
 
 def test_infer_schema_and_file_format_sql_renderers():
-    assert "KIND => 'ICEBERG'" in infer_schema_sql(
+    sql = infer_schema_sql(
         location="@STAGE/path",
-        file_format="ANALYTICS.UTIL.FMT",
+        file_format='"ANALYTICS"."UTIL"."FMT"',
         files=["a.parquet"],
     )
+    assert "KIND => 'ICEBERG'" in sql
+    assert "FILE_FORMAT => \"ANALYTICS\".\"UTIL\".\"FMT\"" in sql
+    assert "FILE_FORMAT => '\"ANALYTICS\".\"UTIL\".\"FMT\"'" not in sql
     assert "USE_VECTORIZED_SCANNER = TRUE" in create_parquet_file_format_sql(
         '"ANALYTICS"."UTIL"."FMT"'
     )
+
+
+def test_parse_declared_s3_parquet_columns(s3_payload_factory):
+    payload = s3_payload_factory(
+        s3_parquet__columns=[
+            {
+                "name": "OrderID",
+                "type": "BIGINT",
+                "nullable": False,
+                "alias": "order_id",
+            },
+            {
+                "name": "AmountText",
+                "type": "VARCHAR",
+                "expression": 'TRY_TO_NUMBER("AmountText")',
+                "alias": "amount",
+            },
+        ],
+        deployment__parquet_file_format=None,
+    )
+
+    config = parse_config(payload)
+
+    assert config.s3_parquet is not None
+    assert len(config.s3_parquet.columns) == 2
+    assert config.s3_parquet.columns[1].expression == 'TRY_TO_NUMBER("AmountText")'
+    assert config.deployment.parquet_file_format is None
+
+
+def test_declared_columns_reject_empty_list(s3_payload_factory):
+    payload = s3_payload_factory(s3_parquet__columns=[])
+
+    with pytest.raises(ConfigError, match="must not be empty"):
+        parse_config(payload)
+
+
+def test_s3_adapter_uses_declared_columns_without_infer(s3_payload_factory):
+    payload = s3_payload_factory(
+        s3_parquet__columns=[
+            {
+                "name": "OrderID",
+                "type": "BIGINT",
+                "nullable": False,
+                "alias": "order_id",
+            },
+            {
+                "name": "AmountText",
+                "type": "VARCHAR",
+                "expression": 'TRY_TO_NUMBER("AmountText")',
+                "alias": "amount",
+            },
+        ],
+        deployment__parquet_file_format=None,
+    )
+    snowflake = FakeSnowflake(
+        listed_files=[
+            StageFile(
+                name="s3://bucket/orders/part-000.parquet",
+                size=10,
+                last_modified="2026-01-02",
+            ),
+        ]
+    )
+    adapter = S3ParquetSourceAdapter(snowflake)
+    config = parse_config(payload)
+
+    state = adapter.start_export(
+        config,
+        SourceExecutionContext(effective_mode="full_refresh", destination_uri="s3://bucket/orders"),
+    )
+
+    assert state["status"] == "success"
+    assert all(call[0] != "infer" for call in snowflake.calls)
+    columns = adapter.map_schema(
+        adapter.export(
+            config,
+            SourceExecutionContext(
+                effective_mode="full_refresh", destination_uri="s3://bucket/orders"
+            ),
+        )
+    )
+    assert [column.source_name for column in columns] == ["OrderID", "AmountText"]
+    assert columns[0].alias == "order_id"
+    assert columns[1].expression == 'TRY_TO_NUMBER("AmountText")'
+    assert columns[1].alias == "amount"

@@ -43,6 +43,31 @@ def test_create_view_macro_quotes_uppercase_aliases():
     assert '"OrderID" AS "SELECT"' in rendered
 
 
+def test_create_view_macro_uses_expression_when_present():
+    macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/relations.sql"
+    template = Environment(extensions=["jinja2.ext.do"]).from_string(
+        macro_path.read_text(encoding="utf-8")
+        + "\n{{ iceberg_sync_create_view_sql(target, internal, view_columns) }}"
+    )
+
+    rendered = template.render(
+        {
+            "target": '"DB"."SCHEMA"."VIEW"',
+            "internal": '"DB"."SCHEMA"."TABLE"',
+            "view_columns": [
+                {
+                    "source_name": "AmountText",
+                    "alias": "amount",
+                    "expression": 'TRY_TO_NUMBER("AmountText")',
+                }
+            ],
+            "adapter": _FakeAdapter(),
+        }
+    )
+
+    assert 'TRY_TO_NUMBER("AmountText") AS "AMOUNT"' in rendered
+
+
 def test_identifier_macros_normalize_snowflake_object_identifiers():
     macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/identifiers.sql"
     template = Environment(extensions=["jinja2.ext.do"]).from_string(

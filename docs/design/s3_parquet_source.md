@@ -47,6 +47,7 @@ Model options under `meta.iceberg_sync`:
 | `s3_parquet_incremental_paths` | No | `['']` | Subpaths for incremental runs |
 | `s3_parquet_skip_missing_location` | No | `false` | Skip the run when no files match |
 | `s3_parquet_infer_schema_max_file_count` | No | `16` | Cap on files passed to `INFER_SCHEMA` |
+| `s3_parquet_columns` | No | infer | Declared Iceberg columns; skips `INFER_SCHEMA` when set |
 
 Deployment var:
 
@@ -59,17 +60,46 @@ are not model-configurable.
 
 ## Schema detection
 
-Schema comes from Snowflake `INFER_SCHEMA` with `KIND => 'ICEBERG'`, ordered by
-`ORDER_ID`. Column names stay case-sensitive for Iceberg DDL and
+By default, schema comes from Snowflake `INFER_SCHEMA` with `KIND => 'ICEBERG'`,
+ordered by `ORDER_ID`. Column names stay case-sensitive for Iceberg DDL and
 `MATCH_BY_COLUMN_NAME = CASE_SENSITIVE`. View aliases continue to use
 lower_snake conversions.
+
+Alternatively, set `s3_parquet_columns` to declare the Iceberg table columns
+explicitly and skip `INFER_SCHEMA`. Each entry needs `name` (Parquet / Iceberg
+column name) and `type` (Snowflake DDL type). Optional fields:
+
+- `nullable` (default `true`)
+- `alias` (view alias; default `lower_snake(name)`)
+- `expression` (view SELECT expression; default quoted `name`)
+
+`expression` is applied only on the exposed target view, so authors can cast or
+transform values without changing the internal Iceberg table DDL. Example:
+
+```yaml
+s3_parquet_columns:
+  - name: OrderID
+    type: BIGINT
+    nullable: false
+    alias: order_id
+  - name: AmountText
+    type: VARCHAR
+    alias: amount
+    expression: 'TRY_TO_NUMBER("AmountText")'
+```
+
+When `s3_parquet_columns` is set, `vars.iceberg_sync.parquet_file_format` is not
+required for that model. When it is omitted, schema inference still requires the
+installer-managed Parquet file format.
 
 Limits:
 
 - Schema evolution remains additive-only (same conservative rule as BigQuery).
-- Files under a load must share a compatible Parquet schema.
+- Files under a load must share a compatible Parquet schema when relying on
+  `INFER_SCHEMA`.
 - Nested / structured type spellings depend on live `INFER_SCHEMA` output and
-  are normalized where needed.
+  are normalized where needed. Declared `type` values are passed through to
+  Iceberg DDL after light normalization.
 
 ## Load semantics and FORCE
 
@@ -89,11 +119,12 @@ BigQuery predicate pairing rule.
 
 ## Out of scope
 
-- User-declared column maps instead of `INFER_SCHEMA`
 - Non-Parquet formats
 - Event-driven / Snowpipe ingestion
 - Package-managed Storage Integration or IAM role creation
 - GCS-native Parquet source (`gcs_parquet`) — left for a later source type
+- Load-time row transforms inside `COPY INTO ... ADD_FILES_COPY` (use view
+  `expression` for casts instead)
 
 ## Compatibility notes
 

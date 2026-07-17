@@ -47,6 +47,8 @@ class SnowflakeColumn:
     snowflake_type: str
     nullable: bool = True
     fields: tuple[SnowflakeColumn, ...] = field(default_factory=tuple)
+    alias: str | None = None
+    expression: str | None = None
 
     @property
     def ddl(self) -> str:
@@ -58,6 +60,7 @@ class SnowflakeColumn:
 class ViewColumn:
     source_name: str
     alias: str
+    expression: str | None = None
 
 
 def map_bigquery_schema(fields: list[dict[str, Any]]) -> list[SnowflakeColumn]:
@@ -75,9 +78,29 @@ def map_parquet_infer_schema(fields: list[dict[str, Any]]) -> list[SnowflakeColu
     return columns
 
 
+def map_parquet_declared_schema(fields: list[dict[str, Any]]) -> list[SnowflakeColumn]:
+    """Map user-declared s3_parquet column definitions into Iceberg DDL columns."""
+
+    if not fields:
+        raise SchemaError("s3_parquet_columns must not be empty when set")
+    columns = [_map_declared_schema_field(field, index) for index, field in enumerate(fields)]
+    names = [column.source_name for column in columns]
+    duplicate_names = sorted({name for name in names if names.count(name) > 1})
+    if duplicate_names:
+        raise SchemaError(
+            "s3_parquet_columns contains duplicate column names: " + ", ".join(duplicate_names)
+        )
+    validate_view_aliases(columns)
+    return columns
+
+
 def view_columns(columns: list[SnowflakeColumn]) -> list[ViewColumn]:
     result = [
-        ViewColumn(source_name=column.source_name, alias=lower_snake(column.source_name))
+        ViewColumn(
+            source_name=column.source_name,
+            alias=column.alias or lower_snake(column.source_name),
+            expression=column.expression,
+        )
         for column in columns
     ]
     aliases = [column.alias for column in result]
@@ -244,6 +267,42 @@ def _map_infer_schema_field(field: dict[str, Any]) -> SnowflakeColumn:
         source_name=str(name),
         snowflake_type=snowflake_type,
         nullable=nullable,
+    )
+
+
+def _map_declared_schema_field(field: dict[str, Any], index: int) -> SnowflakeColumn:
+    if not isinstance(field, dict):
+        raise SchemaError(f"s3_parquet_columns[{index}] must be an object")
+    name = field.get("name") or field.get("NAME") or field.get("COLUMN_NAME")
+    if name is None or str(name).strip() == "":
+        raise SchemaError(f"s3_parquet_columns[{index}].name is required")
+    type_name = field.get("type") or field.get("TYPE")
+    if type_name is None or str(type_name).strip() == "":
+        raise SchemaError(f"s3_parquet_columns[{index}].type is required")
+    snowflake_type = _normalize_infer_schema_type(str(type_name).strip())
+    nullable_value = field.get("nullable")
+    if nullable_value is None:
+        nullable_value = field.get("NULLABLE")
+    if nullable_value is None:
+        nullable = True
+    elif isinstance(nullable_value, bool):
+        nullable = nullable_value
+    else:
+        nullable = str(nullable_value).strip().upper() in {"TRUE", "Y", "YES", "1"}
+    alias_value = field.get("alias")
+    if alias_value is not None and str(alias_value).strip() == "":
+        raise SchemaError(f"s3_parquet_columns[{index}].alias must not be empty when set")
+    alias = str(alias_value).strip() if alias_value is not None else None
+    expression_value = field.get("expression")
+    if expression_value is not None and str(expression_value).strip() == "":
+        raise SchemaError(f"s3_parquet_columns[{index}].expression must not be empty when set")
+    expression = str(expression_value).strip() if expression_value is not None else None
+    return SnowflakeColumn(
+        source_name=str(name),
+        snowflake_type=snowflake_type,
+        nullable=nullable,
+        alias=alias,
+        expression=expression,
     )
 
 
