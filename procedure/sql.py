@@ -164,7 +164,9 @@ def infer_schema_file_format_name(file_format: str) -> str:
         end = index
         while end < length and raw[end] != ".":
             end += 1
-        parts.append(raw[index:end].strip())
+        # Unquoted Snowflake identifiers fold to uppercase; string-name
+        # references in INFER_SCHEMA must match the stored object name.
+        parts.append(raw[index:end].strip().upper())
         index = end + 1 if end < length and raw[end] == "." else end
 
     return ".".join(part for part in parts if part != "")

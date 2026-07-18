@@ -255,7 +255,9 @@ def test_infer_schema_and_file_format_sql_renderers():
     [
         ('"ANALYTICS"."UTIL"."FMT"', "ANALYTICS.UTIL.FMT"),
         ("ANALYTICS.UTIL.FMT", "ANALYTICS.UTIL.FMT"),
+        ("analytics.util.fmt", "ANALYTICS.UTIL.FMT"),
         ("FMT", "FMT"),
+        ("fmt", "FMT"),
         ('"Weird.""Name"."FMT"', 'Weird."Name.FMT'),
         ('  "DB"."SCH"."FMT"  ', "DB.SCH.FMT"),
     ],
