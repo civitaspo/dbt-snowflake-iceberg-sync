@@ -65,7 +65,10 @@ are not model-configurable.
 By default, schema comes from Snowflake `INFER_SCHEMA` with `KIND => 'ICEBERG'`,
 ordered by `ORDER_ID`. Column names stay case-sensitive for Iceberg DDL and
 `MATCH_BY_COLUMN_NAME = CASE_SENSITIVE`. View aliases continue to use
-lower_snake conversions.
+lower_snake conversions. `CREATE FILE FORMAT` still uses the deployment quoted
+identifier FQN; `INFER_SCHEMA(..., FILE_FORMAT => ...)` must pass that same
+object as a string literal (for example `'DB.SCHEMA.FMT'`), not as a bare
+identifier.
 
 Alternatively, set shared `columns` under `meta.iceberg_sync` to declare the
 Iceberg table columns explicitly and skip `INFER_SCHEMA`. The same option

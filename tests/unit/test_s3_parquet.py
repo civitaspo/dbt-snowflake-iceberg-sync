@@ -238,11 +238,34 @@ def test_infer_schema_and_file_format_sql_renderers():
         files=["a.parquet"],
     )
     assert "KIND => 'ICEBERG'" in sql
-    assert "FILE_FORMAT => \"ANALYTICS\".\"UTIL\".\"FMT\"" in sql
+    assert "FILE_FORMAT => 'ANALYTICS.UTIL.FMT'" in sql
+    assert 'FILE_FORMAT => "ANALYTICS"."UTIL"."FMT"' not in sql
     assert "FILE_FORMAT => '\"ANALYTICS\".\"UTIL\".\"FMT\"'" not in sql
+    assert (
+        'CREATE FILE FORMAT IF NOT EXISTS "ANALYTICS"."UTIL"."FMT"'
+        in create_parquet_file_format_sql('"ANALYTICS"."UTIL"."FMT"')
+    )
     assert "USE_VECTORIZED_SCANNER = TRUE" in create_parquet_file_format_sql(
         '"ANALYTICS"."UTIL"."FMT"'
     )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ('"ANALYTICS"."UTIL"."FMT"', "ANALYTICS.UTIL.FMT"),
+        ("ANALYTICS.UTIL.FMT", "ANALYTICS.UTIL.FMT"),
+        ("analytics.util.fmt", "ANALYTICS.UTIL.FMT"),
+        ("FMT", "FMT"),
+        ("fmt", "FMT"),
+        ('"Weird.""Name"."FMT"', 'Weird."Name.FMT'),
+        ('  "DB"."SCH"."FMT"  ', "DB.SCH.FMT"),
+    ],
+)
+def test_infer_schema_file_format_name_normalizes_quoted_fqn(raw, expected):
+    from procedure.sql import infer_schema_file_format_name
+
+    assert infer_schema_file_format_name(raw) == expected
 
 
 def test_parse_declared_columns(s3_payload_factory):
