@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.3 - 2026-07-18
+
 ### Fixed
 
 - `INFER_SCHEMA` `FILE_FORMAT` is rendered as a string literal naming the format
