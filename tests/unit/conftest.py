@@ -113,6 +113,7 @@ def s3_parquet_payload(base_payload) -> dict[str, Any]:
         "incremental_paths": [""],
         "skip_missing_location": False,
         "infer_schema_max_file_count": 16,
+        "load_mode": "add_files_copy",
     }
     return payload
 

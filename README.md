@@ -365,6 +365,39 @@ Declare columns explicitly when you want stable DDL and view-side casts without
 }}
 ```
 
+For non-Iceberg-compatible Parquet (for example AWS CUR with
+`TIMESTAMP_MILLIS`), set `s3_parquet_load_mode: full_ingest`. Snowflake rewrites
+files into Iceberg-compatible Parquet. Optional `columns[].expression` values
+are applied during COPY (`$1:"ColName"`), not on the view:
+
+```sql
+{{
+  config(
+    materialized='iceberg_sync',
+    meta={
+      'iceberg_sync': {
+        'source_type': 's3_parquet',
+        's3_parquet_location': '@ANALYTICS.PUBLIC.CUR_STAGE/cur',
+        's3_parquet_load_mode': 'full_ingest',
+        'columns': [
+          {
+            'name': 'line_item_usage_start_date',
+            'type': 'TIMESTAMP_LTZ(6)',
+            'alias': 'line_item_usage_start_date'
+          },
+          {
+            'name': 'line_item_unblended_cost',
+            'type': 'DOUBLE',
+            'expression': 'TRY_TO_DOUBLE($1:"line_item_unblended_cost")'
+          }
+        ],
+        'iceberg_table_external_volume': 'ICEBERG_EXTERNAL_VOLUME'
+      }
+    }
+  )
+}}
+```
+
 The model body must be empty. See `docs/design/s3_parquet_source.md` for load
 semantics (`FORCE = TRUE`, `PURGE = FALSE`) and schema-evolution limits.
 
@@ -525,6 +558,7 @@ These options apply when `source_type='s3_parquet'`.
 | `s3_parquet_incremental_paths` | No | `['']` | Path suffixes used for incremental runs. Custom values must be paired with `incremental_predicate`. |
 | `s3_parquet_skip_missing_location` | No | `false` | When `true`, a location with zero matching files skips the run instead of failing. |
 | `s3_parquet_infer_schema_max_file_count` | No | `16` | Maximum number of files passed to `INFER_SCHEMA` (newest by `last_modified` when capped). Ignored when shared `columns` is set. |
+| `s3_parquet_load_mode` | No | `add_files_copy` | `add_files_copy` for Iceberg-compatible Parquet; `full_ingest` to scan/rewrite files (for example AWS CUR `TIMESTAMP_MILLIS`). With `full_ingest`, `columns[].expression` runs in the COPY `SELECT` (`$1:"Col"`) instead of only on the view. |
 
 S3 Parquet loads always use `FORCE = TRUE` and `PURGE = FALSE`. When shared
 `columns` is omitted, schema is detected with

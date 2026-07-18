@@ -183,6 +183,8 @@ class SnowflakeClient:
         pattern: str | None = None,
         files: list[str] | None = None,
         force: bool = False,
+        load_mode: str = "add_files_copy",
+        transform_columns: list[SnowflakeColumn] | None = None,
     ) -> None:
         self.execute(
             copy_into_sql(
@@ -191,6 +193,8 @@ class SnowflakeClient:
                 pattern=pattern,
                 files=files,
                 force=force,
+                load_mode=load_mode,
+                transform_columns=transform_columns,
             )
         )
 

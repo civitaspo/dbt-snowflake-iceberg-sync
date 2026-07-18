@@ -18,6 +18,7 @@ STORAGE_SERIALIZATION_POLICIES = {"COMPATIBLE", "OPTIMIZED"}
 GOOGLE_CLOUD_AUTH_METHODS = {"service_account_credentials_json", "workload_identity_federation"}
 S3_STAGE_SCHEMES = ("s3://", "s3gov://", "s3china://")
 GCS_STAGE_SCHEMES = ("gcs://",)
+S3_PARQUET_LOAD_MODES = frozenset({"add_files_copy", "full_ingest"})
 FORBIDDEN_MODEL_CONFIG_KEYS = {
     "credentials",
     "credential",
@@ -111,6 +112,7 @@ class S3ParquetConfig:
     incremental_paths: tuple[str, ...] = field(default_factory=lambda: ("",))
     skip_missing_location: bool = False
     infer_schema_max_file_count: int = 16
+    load_mode: str = "add_files_copy"
 
 
 @dataclass(frozen=True)
@@ -436,6 +438,11 @@ def _parse_s3_parquet_config(s3_payload: dict[str, Any]) -> S3ParquetConfig:
         s3_payload.get("incremental_paths"),
         "s3_parquet_incremental_paths",
     )
+    load_mode_raw = s3_payload.get("load_mode", "add_files_copy")
+    if load_mode_raw is None or str(load_mode_raw).strip() == "":
+        load_mode = "add_files_copy"
+    else:
+        load_mode = str(load_mode_raw).strip().lower()
     return S3ParquetConfig(
         location=_required(s3_payload, "location", "s3_parquet.location"),
         file_pattern=_optional_string(s3_payload.get("file_pattern")),
@@ -450,6 +457,7 @@ def _parse_s3_parquet_config(s3_payload: dict[str, Any]) -> S3ParquetConfig:
             s3_payload.get("infer_schema_max_file_count", 16),
             "s3_parquet_infer_schema_max_file_count",
         ),
+        load_mode=load_mode,
     )
 
 
@@ -583,6 +591,10 @@ def _validate_s3_parquet_config(config: IcebergSyncConfig) -> None:
         raise ConfigError("s3_parquet config is required when source_type='s3_parquet'")
     if config.model.sql.strip():
         raise ConfigError("model SQL is not supported with source_type='s3_parquet'")
+    if config.s3_parquet.load_mode not in S3_PARQUET_LOAD_MODES:
+        raise ConfigError(
+            "s3_parquet_load_mode must be one of: " + ", ".join(sorted(S3_PARQUET_LOAD_MODES))
+        )
     if config.s3_parquet.infer_schema_max_file_count < 1:
         raise ConfigError("s3_parquet_infer_schema_max_file_count must be at least 1")
     if config.s3_parquet.file_pattern is not None and config.s3_parquet.file_pattern == "":

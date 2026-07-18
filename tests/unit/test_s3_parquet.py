@@ -272,6 +272,18 @@ def test_parse_declared_columns(s3_payload_factory):
     assert config.deployment.parquet_file_format is None
 
 
+def test_parse_s3_parquet_full_ingest_load_mode(s3_payload_factory):
+    config = parse_config(s3_payload_factory(s3_parquet__load_mode="full_ingest"))
+
+    assert config.s3_parquet is not None
+    assert config.s3_parquet.load_mode == "full_ingest"
+
+
+def test_rejects_invalid_s3_parquet_load_mode(s3_payload_factory):
+    with pytest.raises(ConfigError, match="s3_parquet_load_mode must be one of"):
+        parse_config(s3_payload_factory(s3_parquet__load_mode="rewrite"))
+
+
 def test_declared_columns_reject_empty_list(s3_payload_factory):
     payload = s3_payload_factory(columns=[])
 

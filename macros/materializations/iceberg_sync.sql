@@ -94,7 +94,7 @@
       {%- endif -%}
 
       {%- set load_result = dbt_snowflake_iceberg_sync.iceberg_sync_run_load(
-        payload, effective_mode, load_locations
+        payload, effective_mode, load_locations, desired_columns
       ) -%}
       {%- if load_result.get('status') != 'success' -%}
         {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(

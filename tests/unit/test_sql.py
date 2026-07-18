@@ -23,6 +23,51 @@ def test_copy_into_uses_required_iceberg_options(base_payload):
     assert "PURGE = FALSE" in sql
 
 
+def test_copy_into_full_ingest_without_transforms(base_payload):
+    config = parse_config(base_payload)
+
+    sql = copy_into_sql(
+        config.internal_relation,
+        '@"ANALYTICS"."PUBLIC"."STAGE"/run',
+        load_mode="full_ingest",
+        force=True,
+    )
+
+    assert "LOAD_MODE = FULL_INGEST" in sql
+    assert "MATCH_BY_COLUMN_NAME = CASE_SENSITIVE" in sql
+    assert "FORCE = TRUE" in sql
+    assert "FROM (" not in sql
+
+
+def test_copy_into_full_ingest_applies_column_expressions(base_payload):
+    config = parse_config(base_payload)
+    columns = [
+        SnowflakeColumn("OrderID", "BIGINT", nullable=False),
+        SnowflakeColumn(
+            "UsageStart",
+            "TIMESTAMP_LTZ(6)",
+            expression='$1:"UsageStart"',
+        ),
+    ]
+
+    sql = copy_into_sql(
+        config.internal_relation,
+        '@"ANALYTICS"."PUBLIC"."STAGE"/cur',
+        files=["part.parquet"],
+        force=True,
+        load_mode="full_ingest",
+        transform_columns=columns,
+    )
+
+    assert 'COPY INTO "ANALYTICS"."PUBLIC"."__ORDERS" ("OrderID", "UsageStart")' in sql
+    assert "LOAD_MODE = FULL_INGEST" in sql
+    assert '$1:"OrderID"' in sql
+    assert '$1:"UsageStart"' in sql
+    assert "MATCH_BY_COLUMN_NAME" not in sql
+    assert "FILES = ('part.parquet')" in sql
+    assert "FORCE = TRUE" in sql
+
+
 def test_create_iceberg_table_renders_managed_iceberg_options(base_payload):
     config = parse_config(base_payload)
 
