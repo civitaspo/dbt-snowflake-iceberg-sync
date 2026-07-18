@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+
+- `INFER_SCHEMA` `FILE_FORMAT` is rendered as a string literal naming the format
+  object (for example `'DB.SCHEMA.FMT'`), matching Snowflake's parameter type.
+  Deployment still stores a quoted identifier FQN for `CREATE FILE FORMAT`.
+  The 0.5.1 change that embedded the bare quoted identifier caused
+  `invalid value ... for property 'FILE_FORMAT'` when `s3_parquet` inferred
+  schema without declared `columns`.
+
 ## 0.5.2 - 2026-07-18
 
 ### Added

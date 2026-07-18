@@ -126,6 +126,50 @@ def list_files_sql(stage_location: str) -> str:
     return f"LIST {stage_location.rstrip('/')}"
 
 
+def infer_schema_file_format_name(file_format: str) -> str:
+    """Convert a quoted identifier FQN to the string name INFER_SCHEMA expects.
+
+    Deployment stores a quoted identifier FQN for ``CREATE FILE FORMAT``, but
+    ``INFER_SCHEMA(..., FILE_FORMAT => ...)`` requires a string literal naming
+    the format object (for example ``'DB.SCHEMA.FMT'``).
+    """
+
+    raw = file_format.strip()
+    if not raw:
+        return raw
+
+    parts: list[str] = []
+    index = 0
+    length = len(raw)
+    while index < length:
+        if raw[index] == '"':
+            index += 1
+            buffer: list[str] = []
+            while index < length:
+                char = raw[index]
+                if char == '"':
+                    if index + 1 < length and raw[index + 1] == '"':
+                        buffer.append('"')
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                buffer.append(char)
+                index += 1
+            parts.append("".join(buffer))
+            if index < length and raw[index] == ".":
+                index += 1
+            continue
+
+        end = index
+        while end < length and raw[end] != ".":
+            end += 1
+        parts.append(raw[index:end].strip())
+        index = end + 1 if end < length and raw[end] == "." else end
+
+    return ".".join(part for part in parts if part != "")
+
+
 def infer_schema_sql(
     *,
     location: str,
@@ -133,11 +177,11 @@ def infer_schema_sql(
     files: list[str] | None = None,
     kind: str = "ICEBERG",
 ) -> str:
-    # FILE_FORMAT must be a Snowflake object identifier (often a quoted FQN from
-    # deployment config), not a string literal.
+    # CREATE FILE FORMAT uses a quoted identifier FQN; INFER_SCHEMA FILE_FORMAT
+    # must be a string literal naming that object (not a bare identifier).
     parts = [
         f"LOCATION => {sql_string(location)}",
-        f"FILE_FORMAT => {file_format}",
+        f"FILE_FORMAT => {sql_string(infer_schema_file_format_name(file_format))}",
         f"KIND => {sql_string(kind)}",
     ]
     if files:

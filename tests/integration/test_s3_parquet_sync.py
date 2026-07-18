@@ -39,6 +39,8 @@ class S3IntegrationContext:
 
 
 def test_s3_parquet_full_refresh_smoke(tmp_path: Path):
+    """Full refresh without declared columns (INFER_SCHEMA path)."""
+
     context = _s3_context(tmp_path, "s3_smoke")
     model_name = f"iceberg_sync_s3_smoke_{context.run_id}"
     location_prefix = f"iceberg_sync_s3/{context.run_id}/{model_name}"
