@@ -166,7 +166,7 @@ class BigQuerySourceAdapter:
             segment_uri = f"{destination_uri.rstrip('/')}/segment-{len(segments):05d}-*.parquet"
             try:
                 job = self.client.run_extract_job(
-                    bq.project_id,
+                    bq.job_project_id,
                     location=bq.location,
                     source_table={
                         "projectId": bq.project_id,
@@ -203,12 +203,12 @@ class BigQuerySourceAdapter:
         assert bq.staging_dataset_id is not None
         staging_table_id = staging_table_id_for(config, predicates)
         staging_ref = {
-            "projectId": bq.project_id,
+            "projectId": bq.job_project_id,
             "datasetId": bq.staging_dataset_id,
             "tableId": staging_table_id,
         }
         existing = _get_table_or_none(
-            self.client, bq.project_id, bq.staging_dataset_id, staging_table_id
+            self.client, bq.job_project_id, bq.staging_dataset_id, staging_table_id
         )
         expected_hash = staging_hash(config, predicates)
         reuse = (
@@ -222,7 +222,7 @@ class BigQuerySourceAdapter:
         if not reuse:
             query = select_sql_with_predicates(config.model.sql, predicate_type, predicates)
             job = self.client.run_query_job(
-                bq.project_id,
+                bq.job_project_id,
                 location=bq.location,
                 query=query,
                 destination_table=staging_ref,
@@ -230,7 +230,7 @@ class BigQuerySourceAdapter:
             job_refs.append(job.get("jobReference", job))
             expiration = datetime.now(tz=UTC) + timedelta(hours=bq.staging_table_expiration_hours)
             self.client.patch_table(
-                bq.project_id,
+                bq.job_project_id,
                 bq.staging_dataset_id,
                 staging_table_id,
                 {
@@ -239,11 +239,11 @@ class BigQuerySourceAdapter:
                 },
             )
 
-        table = self.client.get_table(bq.project_id, bq.staging_dataset_id, staging_table_id)
+        table = self.client.get_table(bq.job_project_id, bq.staging_dataset_id, staging_table_id)
         schema_fields = table.get("schema", {}).get("fields", [])
         segment_uri = f"{destination_uri.rstrip('/')}/segment-00000-*.parquet"
         extract_job = self.client.run_extract_job(
-            bq.project_id,
+            bq.job_project_id,
             location=bq.location,
             source_table=staging_ref,
             destination_uris=[segment_uri],
@@ -254,7 +254,9 @@ class BigQuerySourceAdapter:
             schema_fields=schema_fields,
             segments=[{"table_id": staging_table_id, "destination_uri": segment_uri}],
             job_references=job_refs,
-            staging_table_reference=(f"{bq.project_id}.{bq.staging_dataset_id}.{staging_table_id}"),
+            staging_table_reference=(
+                f"{bq.job_project_id}.{bq.staging_dataset_id}.{staging_table_id}"
+            ),
         )
 
     def _start_extract(
@@ -286,7 +288,7 @@ class BigQuerySourceAdapter:
             segment_uri = f"{destination_uri.rstrip('/')}/segment-{len(segments):05d}-*.parquet"
             try:
                 job = self.client.insert_extract_job(
-                    bq.project_id,
+                    bq.job_project_id,
                     location=bq.location,
                     source_table={
                         "projectId": bq.project_id,
@@ -330,12 +332,12 @@ class BigQuerySourceAdapter:
         assert bq.staging_dataset_id is not None
         staging_table_id = staging_table_id_for(config, predicates)
         staging_ref = {
-            "projectId": bq.project_id,
+            "projectId": bq.job_project_id,
             "datasetId": bq.staging_dataset_id,
             "tableId": staging_table_id,
         }
         existing = _get_table_or_none(
-            self.client, bq.project_id, bq.staging_dataset_id, staging_table_id
+            self.client, bq.job_project_id, bq.staging_dataset_id, staging_table_id
         )
         expected_hash = staging_hash(config, predicates)
         reuse = (
@@ -353,7 +355,7 @@ class BigQuerySourceAdapter:
             "destination_uri": destination_uri,
             "staging_ref": staging_ref,
             "staging_table_reference": (
-                f"{bq.project_id}.{bq.staging_dataset_id}.{staging_table_id}"
+                f"{bq.job_project_id}.{bq.staging_dataset_id}.{staging_table_id}"
             ),
             "expected_hash": expected_hash,
             "job_references": [],
@@ -364,7 +366,7 @@ class BigQuerySourceAdapter:
 
         query = select_sql_with_predicates(config.model.sql, predicate_type, predicates)
         job = self.client.insert_query_job(
-            bq.project_id,
+            bq.job_project_id,
             location=bq.location,
             query=query,
             destination_table=staging_ref,
@@ -391,7 +393,7 @@ class BigQuerySourceAdapter:
             expiration = datetime.now(tz=UTC) + timedelta(hours=bq.staging_table_expiration_hours)
             staging_ref = state["staging_ref"]
             self.client.patch_table(
-                bq.project_id,
+                staging_ref["projectId"],
                 staging_ref["datasetId"],
                 staging_ref["tableId"],
                 {
@@ -409,14 +411,14 @@ class BigQuerySourceAdapter:
         bq = config.bigquery
         staging_ref = state["staging_ref"]
         table = self.client.get_table(
-            bq.project_id,
+            staging_ref["projectId"],
             staging_ref["datasetId"],
             staging_ref["tableId"],
         )
         schema_fields = table.get("schema", {}).get("fields", [])
         segment_uri = f"{str(state['destination_uri']).rstrip('/')}/segment-00000-*.parquet"
         extract_job = self.client.insert_extract_job(
-            bq.project_id,
+            bq.job_project_id,
             location=bq.location,
             source_table=staging_ref,
             destination_uris=[segment_uri],
@@ -545,16 +547,20 @@ def select_sql_with_predicates(
 
 def staging_hash(config: IcebergSyncConfig, predicates: tuple[str, ...]) -> str:
     bq = config.bigquery
+    source = {
+        "project_id": bq.project_id,
+        "dataset_id": bq.dataset_id,
+        "table_id": bq.table_id,
+        "location": bq.location,
+    }
+    # Preserve hash compatibility when job project defaults to the source project.
+    if bq.job_project_id != bq.project_id:
+        source["job_project_id"] = bq.job_project_id
     return stable_hash(
         {
             "model_sql": config.model.sql,
             "predicates": list(predicates),
-            "source": {
-                "project_id": bq.project_id,
-                "dataset_id": bq.dataset_id,
-                "table_id": bq.table_id,
-                "location": bq.location,
-            },
+            "source": source,
             "target": {
                 "database": config.target_relation.database,
                 "schema": config.target_relation.schema,

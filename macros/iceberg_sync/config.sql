@@ -419,6 +419,7 @@
   {{ return({
     'export_strategy': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_export_strategy', none) or 'extract',
     'project_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'google_cloud_project_id'),
+    'job_project_id': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 'bigquery_job_project_id', none),
     'dataset_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_dataset_id'),
     'table_id': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_table_id'),
     'location': dbt_snowflake_iceberg_sync.iceberg_sync_required_model_config(model_node, 'bigquery_location'),

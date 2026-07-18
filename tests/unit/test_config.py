@@ -17,6 +17,8 @@ def test_parse_config_defaults(base_payload):
     )
     assert config.bigquery.export_strategy == "extract"
     assert config.bigquery.export_compression == "ZSTD"
+    assert config.bigquery.project_id == "project"
+    assert config.bigquery.job_project_id == "project"
     assert config.bigquery.skip_missing_tables is False
     assert config.bigquery.export_poll_interval_seconds == 30
     assert config.bigquery.export_poll_timeout_seconds == 3600
@@ -26,6 +28,33 @@ def test_parse_config_defaults(base_payload):
     assert config.retry.max_attempts == 3
     assert config.cleanup.created_table_on_failure is True
     assert config.run_log.fail_on_error is False
+
+
+def test_bigquery_job_project_id_defaults_to_project_id(base_payload):
+    config = parse_config(base_payload)
+
+    assert config.bigquery.job_project_id == config.bigquery.project_id == "project"
+
+
+def test_bigquery_job_project_id_can_differ_from_project_id(payload_factory):
+    config = parse_config(payload_factory(bigquery__job_project_id="ops-project"))
+
+    assert config.bigquery.project_id == "project"
+    assert config.bigquery.job_project_id == "ops-project"
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("", "must not be empty"),
+        (123, "must be a string"),
+        (True, "must be a string"),
+        (["ops-project"], "must be a string"),
+    ],
+)
+def test_rejects_invalid_bigquery_job_project_id(payload_factory, value, message):
+    with pytest.raises(ConfigError, match=message):
+        parse_config(payload_factory(bigquery__job_project_id=value))
 
 
 def test_bigquery_requires_service_account_secret_fqdn(payload_factory):

@@ -82,6 +82,7 @@ class BigQueryConfig:
     table_id: str
     location: str
     export_location: str
+    job_project_id: str
     export_compression: str = "ZSTD"
     export_predicate_type: str = "auto"
     full_refresh_predicates: tuple[str, ...] = field(default_factory=tuple)
@@ -395,13 +396,15 @@ def validate_config(config: IcebergSyncConfig) -> None:
 
 
 def _parse_bigquery_config(bq_payload: dict[str, Any]) -> BigQueryConfig:
+    project_id = _required(bq_payload, "project_id", "bigquery.project_id")
     return BigQueryConfig(
         export_strategy=_defaulted(bq_payload, "export_strategy", "extract"),
-        project_id=_required(bq_payload, "project_id", "bigquery.project_id"),
+        project_id=project_id,
         dataset_id=_required(bq_payload, "dataset_id", "bigquery.dataset_id"),
         table_id=_required(bq_payload, "table_id", "bigquery.table_id"),
         location=_required(bq_payload, "location", "bigquery.location"),
         export_location=_required(bq_payload, "export_location", "bigquery.export_location"),
+        job_project_id=_job_project_id(bq_payload.get("job_project_id"), project_id),
         export_compression=str(_defaulted(bq_payload, "export_compression", "ZSTD")).upper(),
         export_predicate_type=_defaulted(bq_payload, "export_predicate_type", "auto"),
         full_refresh_predicates=tuple(bq_payload.get("full_refresh_predicates") or ()),
@@ -674,6 +677,16 @@ def _optional_string(value: Any) -> str | None:
     if value in (None, ""):
         return None
     return str(value)
+
+
+def _job_project_id(value: Any, project_id: str) -> str:
+    if value is None:
+        return project_id
+    if not isinstance(value, str):
+        raise ConfigError("bigquery_job_project_id must be a string")
+    if value == "":
+        raise ConfigError("bigquery_job_project_id must not be empty when set")
+    return value
 
 
 def _required(value: dict[str, Any], key: str, field_name: str) -> str:

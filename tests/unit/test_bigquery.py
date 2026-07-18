@@ -71,6 +71,7 @@ class FakeBigQueryClient:
         self.pending_jobs = set()
         self.fail_extract = fail_extract
         self.fail_query = fail_query
+        self.submitted_job_projects = []
 
     def get_table(self, project_id, dataset_id, table_id):
         key = (project_id, dataset_id, table_id)
@@ -109,6 +110,7 @@ class FakeBigQueryClient:
     def insert_query_job(self, project_id, *, location, query, destination_table):
         if self.fail_query:
             raise SourceError("query failed")
+        self.submitted_job_projects.append(project_id)
         self.query_jobs.append((query, destination_table))
         table_id = destination_table["tableId"]
         self.tables[(project_id, destination_table["datasetId"], table_id)] = {
@@ -156,6 +158,7 @@ class FakeBigQueryClient:
     ):
         if self.fail_extract:
             raise SourceError("extract failed")
+        self.submitted_job_projects.append(project_id)
         self.extract_jobs.append((source_table, destination_uris, compression))
         job_id = f"extract-job-{len(self.extract_jobs)}"
         job = {
@@ -1020,6 +1023,84 @@ def test_rest_extract_job_sets_parquet_compression():
         "destinationFormat": "PARQUET",
         "compression": "ZSTD",
     }
+
+
+def test_extract_uses_separate_job_project_from_source_table(payload_factory):
+    client = FakeBigQueryClient()
+    config = parse_config(payload_factory(bigquery__job_project_id="ops-project"))
+
+    result = BigQuerySourceAdapter(client).export(
+        config,
+        context=SourceExecutionContext(
+            effective_mode="full_refresh",
+            destination_uri="gcs://bucket/prefix/run",
+        ),
+    )
+
+    assert client.submitted_job_projects == ["ops-project"]
+    assert client.extract_jobs == [
+        (
+            {"projectId": "project", "datasetId": "dataset", "tableId": "orders"},
+            ["gcs://bucket/prefix/run/segment-00000-*.parquet"],
+            "ZSTD",
+        )
+    ]
+    assert result.job_references[0]["projectId"] == "ops-project"
+
+
+def test_select_uses_job_project_for_query_staging_and_extract(payload_factory):
+    client = FakeBigQueryClient()
+    config = parse_config(
+        payload_factory(
+            bigquery__export_strategy="select",
+            bigquery__job_project_id="ops-project",
+            bigquery__staging_dataset_id="staging",
+            bigquery__staging_table_reuse=False,
+            model__sql="select * from `project.dataset.orders`",
+        )
+    )
+
+    result = BigQuerySourceAdapter(client).export(
+        config,
+        context=SourceExecutionContext(
+            effective_mode="full_refresh",
+            destination_uri="gcs://bucket/prefix/run",
+        ),
+    )
+
+    assert client.submitted_job_projects == ["ops-project", "ops-project"]
+    assert len(client.query_jobs) == 1
+    _, destination_table = client.query_jobs[0]
+    assert destination_table["projectId"] == "ops-project"
+    assert destination_table["datasetId"] == "staging"
+    assert client.extract_jobs[0][0] == destination_table
+    assert result.staging_table_reference.startswith("ops-project.staging.")
+    assert all(ref["projectId"] == "ops-project" for ref in result.job_references)
+
+
+def test_start_extract_poll_uses_job_project(payload_factory):
+    client = FakeBigQueryClient()
+    config = parse_config(payload_factory(bigquery__job_project_id="ops-project"))
+    client.pending_jobs.add("extract-job-1")
+
+    running = BigQuerySourceAdapter(client).start_export(
+        config,
+        context=SourceExecutionContext(
+            effective_mode="full_refresh",
+            destination_uri="gcs://bucket/prefix/run",
+        ),
+    )
+
+    assert running["status"] == "running"
+    assert running["pending_jobs"][0]["projectId"] == "ops-project"
+    assert client.submitted_job_projects == ["ops-project"]
+    assert client.extract_jobs[0][0]["projectId"] == "project"
+
+    client.pending_jobs.clear()
+    result = BigQuerySourceAdapter(client).poll_export(config, running)
+
+    assert result["status"] == "success"
+    assert result["job_references"][0]["projectId"] == "ops-project"
 
 
 def test_rest_client_accepts_injected_google_credentials():
