@@ -122,7 +122,7 @@ def load_uses_column_expressions(
 
     if source_type != "s3_parquet":
         return False
-    if (load_mode or "add_files_copy") != "full_ingest":
+    if (load_mode or "add_files_copy").strip().lower() != "full_ingest":
         return False
     return any(column.expression for column in columns)
 
