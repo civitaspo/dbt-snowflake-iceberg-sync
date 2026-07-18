@@ -102,6 +102,61 @@ def test_s3_parquet_rejects_aws_credentials_in_model_config(s3_payload_factory):
         parse_config(payload)
 
 
+def test_s3_adapter_skips_sibling_hive_partitions_from_prefix_list(s3_payload_factory):
+    """LIST year=/month=1 without a trailing slash also returns month=10/11/12.
+
+    Those siblings must not become FILES under stage .../month=1/ (which would
+    resolve to .../month=1/year=.../month=12/...).
+    """
+
+    payload = s3_payload_factory(
+        s3_parquet__incremental_paths=["year=2025/month=1"],
+        s3_parquet__full_refresh_paths=["year=2025/month=1"],
+        incremental_predicate='"bill_month" = \'2025-01-01\'',
+        columns=[
+            {"name": "OrderID", "type": "BIGINT", "nullable": False},
+        ],
+        deployment__parquet_file_format=None,
+    )
+    snowflake = FakeSnowflake(
+        listed_files=[
+            StageFile(
+                name=(
+                    "s3://bucket/orders/year=2025/month=1/"
+                    "report-00001.snappy.parquet"
+                ),
+                size=10,
+            ),
+            StageFile(
+                name=(
+                    "s3://bucket/orders/year=2025/month=12/"
+                    "report-00001.snappy.parquet"
+                ),
+                size=20,
+            ),
+        ]
+    )
+    adapter = S3ParquetSourceAdapter(snowflake)
+
+    state = adapter.start_export(
+        parse_config(payload),
+        SourceExecutionContext(effective_mode="incremental", destination_uri="s3://bucket/orders"),
+    )
+
+    list_calls = [call for call in snowflake.calls if call[0] == "list"]
+    assert list_calls[0][1].endswith("/year=2025/month=1/")
+    assert state["segments"][0]["files"] == ["report-00001.snappy.parquet"]
+    assert state["load_locations"] == [
+        {
+            "stage_location": (
+                '@"ANALYTICS"."PUBLIC"."S3_EXPORT_STAGE"/orders/year=2025/month=1'
+            ),
+            "files": ["report-00001.snappy.parquet"],
+            "force": True,
+        }
+    ]
+
+
 def test_s3_adapter_lists_infers_and_returns_schema(s3_parquet_payload):
     snowflake = FakeSnowflake(
         listed_files=[

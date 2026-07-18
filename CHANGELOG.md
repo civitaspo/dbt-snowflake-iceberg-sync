@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.5.4 - 2026-07-19
+
+### Fixed
+
+- S3 Parquet `LIST` under hive-style `incremental_paths` now uses a trailing
+  slash and skips files outside the requested path suffix. Listing
+  `year=YYYY/month=1` without a slash previously also returned `month=10/11/12`,
+  and those siblings were incorrectly joined onto the month=1 stage location
+  (for example `.../month=1/year=YYYY/month=12/...`).
+
 ## 0.5.3 - 2026-07-18
 
 ### Fixed

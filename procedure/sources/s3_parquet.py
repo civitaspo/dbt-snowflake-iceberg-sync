@@ -82,13 +82,17 @@ class S3ParquetSourceAdapter:
 
         for path_suffix in paths:
             stage_location = _join_stage_location(base_stage.run_stage_location, path_suffix)
-            listed = self.snowflake.list_stage_files(stage_location)
+            # Trailing slash makes Snowflake LIST treat the suffix as a directory
+            # prefix. Without it, hive paths like year=YYYY/month=1 also match
+            # month=10/11/12 (string prefix collision).
+            list_location = f"{stage_location.rstrip('/')}/"
+            listed = self.snowflake.list_stage_files(list_location)
             query_ids = list(self.snowflake.query_ids)
             if query_ids:
                 job_references.append(
                     {
                         "operation": "list",
-                        "stage_location": stage_location,
+                        "stage_location": list_location,
                         "query_id": query_ids[-1],
                     }
                 )
@@ -107,7 +111,10 @@ class S3ParquetSourceAdapter:
                     elif relative_name == path_suffix.strip("/"):
                         candidate = ""
                     else:
-                        candidate = relative_name
+                        # Outside this path_suffix (e.g. month=12 when listing
+                        # month=1 without a trailing slash). Never join sibling
+                        # hive partitions onto stage_location.
+                        continue
                 else:
                     candidate = relative_name
                 if not candidate or candidate.endswith("/"):
