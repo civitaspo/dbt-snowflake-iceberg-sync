@@ -92,12 +92,16 @@ def map_declared_columns(fields: list[dict[str, Any]]) -> list[SnowflakeColumn]:
     return columns
 
 
-def view_columns(columns: list[SnowflakeColumn]) -> list[ViewColumn]:
+def view_columns(
+    columns: list[SnowflakeColumn],
+    *,
+    expressions_applied_at_load: bool = False,
+) -> list[ViewColumn]:
     result = [
         ViewColumn(
             source_name=column.source_name,
             alias=column.alias or lower_snake(column.source_name),
-            expression=column.expression,
+            expression=None if expressions_applied_at_load else column.expression,
         )
         for column in columns
     ]
@@ -106,6 +110,21 @@ def view_columns(columns: list[SnowflakeColumn]) -> list[ViewColumn]:
     if duplicates:
         raise SchemaError("view alias collisions detected: " + ", ".join(duplicates))
     return result
+
+
+def load_uses_column_expressions(
+    *,
+    source_type: str,
+    load_mode: str | None,
+    columns: list[SnowflakeColumn] | tuple[SnowflakeColumn, ...],
+) -> bool:
+    """Return True when FULL_INGEST should apply columns.expression in COPY SELECT."""
+
+    if source_type != "s3_parquet":
+        return False
+    if (load_mode or "add_files_copy") != "full_ingest":
+        return False
+    return any(column.expression for column in columns)
 
 
 def validate_view_aliases(columns: list[SnowflakeColumn]) -> None:

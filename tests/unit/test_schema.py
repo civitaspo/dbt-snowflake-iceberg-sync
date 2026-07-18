@@ -130,6 +130,21 @@ def test_view_columns_honor_declared_alias_and_expression():
     assert view.expression == 'TRY_TO_NUMBER("AmountText")'
 
 
+def test_view_columns_skip_expression_when_applied_at_load():
+    columns = [
+        SnowflakeColumn(
+            "AmountText",
+            "VARCHAR",
+            alias="amount",
+            expression='$1:"AmountText"::NUMBER',
+        )
+    ]
+
+    view = view_columns(columns, expressions_applied_at_load=True)[0]
+    assert view.alias == "amount"
+    assert view.expression is None
+
+
 def test_map_declared_columns():
     columns = map_declared_columns(
         [

@@ -47,6 +47,7 @@ Model options under `meta.iceberg_sync`:
 | `s3_parquet_incremental_paths` | No | `['']` | Subpaths for incremental runs |
 | `s3_parquet_skip_missing_location` | No | `false` | Skip the run when no files match |
 | `s3_parquet_infer_schema_max_file_count` | No | `16` | Cap on files passed to `INFER_SCHEMA` |
+| `s3_parquet_load_mode` | No | `add_files_copy` | `add_files_copy` binary-copies Iceberg-compatible Parquet; `full_ingest` scans and rewrites files (needed for non-Iceberg Parquet such as AWS CUR `TIMESTAMP_MILLIS`) |
 | `columns` | No | infer | Shared declared Iceberg columns; skips `INFER_SCHEMA` when set |
 
 Deployment var:
@@ -75,20 +76,35 @@ fields:
 - `alias` (view alias; default `lower_snake(name)`)
 - `expression` (view SELECT expression; default quoted `name`)
 
-`expression` is applied only on the exposed target view, so authors can cast or
-transform values without changing the internal Iceberg table DDL. Example:
+`expression` is applied only on the exposed target view when
+`s3_parquet_load_mode='add_files_copy'` (the default), so authors can cast or
+transform values without changing the internal Iceberg table DDL.
+
+With `s3_parquet_load_mode='full_ingest'`, any non-empty `expression` is instead
+applied in the COPY `SELECT` list so Snowflake can rewrite Parquet into
+Iceberg-compatible files (for example AWS CUR timestamps). Expressions should
+reference staged Parquet fields as `$1:"ColumnName"`. Columns without an
+expression default to `$1:"ColumnName"`. The target view then exposes the loaded
+Iceberg columns without re-applying those expressions.
+
+Example for non-Iceberg Parquet (FULL_INGEST):
 
 ```yaml
+source_type: s3_parquet
+s3_parquet_location: '@ANALYTICS.PUBLIC.CUR_STAGE/cur'
+s3_parquet_load_mode: full_ingest
 columns:
-  - name: OrderID
-    type: BIGINT
-    nullable: false
-    alias: order_id
-  - name: AmountText
-    type: VARCHAR
-    alias: amount
-    expression: 'TRY_TO_NUMBER("AmountText")'
+  - name: line_item_usage_start_date
+    type: TIMESTAMP_LTZ(6)
+    alias: line_item_usage_start_date
+  - name: line_item_unblended_cost
+    type: DOUBLE
+    expression: 'TRY_TO_DOUBLE($1:"line_item_unblended_cost")'
 ```
+
+When `full_ingest` is set and no column has `expression`, COPY still uses
+`MATCH_BY_COLUMN_NAME = CASE_SENSITIVE` and lets Snowflake convert compatible
+physical/logical types during rewrite.
 
 `columns` is read only from `meta.iceberg_sync` so it does not collide with dbt
 `config.columns` / schema.yml documentation. When `columns` is set for an S3
@@ -127,8 +143,9 @@ BigQuery predicate pairing rule.
 - Event-driven / Snowpipe ingestion
 - Package-managed Storage Integration or IAM role creation
 - GCS-native Parquet source (`gcs_parquet`) — left for a later source type
-- Load-time row transforms inside `COPY INTO ... ADD_FILES_COPY` (use view
-  `expression` for casts instead)
+- Load-time row transforms with `LOAD_MODE = ADD_FILES_COPY` (use
+  `s3_parquet_load_mode='full_ingest'` plus `columns[].expression`, or view
+  `expression` for post-load casts)
 
 ## Compatibility notes
 

@@ -98,9 +98,29 @@ class FakeSnowflake:
             raise SnowflakeExecutionError("delete failed")
 
     def copy_into_iceberg(
-        self, relation, stage_run_location, *, pattern=None, files=None, force=False
+        self,
+        relation,
+        stage_run_location,
+        *,
+        pattern=None,
+        files=None,
+        force=False,
+        load_mode="add_files_copy",
+        transform_columns=None,
     ):
-        self.calls.append(("copy", stage_run_location, pattern, files, force))
+        self.calls.append(
+            (
+                "copy",
+                stage_run_location,
+                pattern,
+                files,
+                force,
+                load_mode,
+                None
+                if transform_columns is None
+                else [column.source_name for column in transform_columns],
+            )
+        )
         if self.copy_errors:
             raise self.copy_errors.pop(0)
         if self.fail_copy:
@@ -276,12 +296,7 @@ def test_handler_existing_table_rejects_schema_change(base_payload):
         ).run(base_payload)
 
     assert ("write_run_log", "failure") in snowflake.calls
-    assert (
-        "copy",
-        '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/dbt/run',
-        None,
-        False,
-    ) not in snowflake.calls
+    assert not any(call[0] == "copy" for call in snowflake.calls)
 
 
 def test_handler_writes_failure_log_when_source_export_fails(base_payload):
@@ -406,7 +421,15 @@ def test_retryable_snowflake_internal_error_retries_and_succeeds(payload_factory
     ]
     assert (
         snowflake.calls.count(
-            ("copy", '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/dbt/run', None, None, False)
+            (
+                "copy",
+                '@"ANALYTICS"."PUBLIC"."EXPORT_STAGE"/dbt/run',
+                None,
+                None,
+                False,
+                "add_files_copy",
+                None,
+            )
         )
         == 2
     )

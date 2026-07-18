@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- `s3_parquet_load_mode` (`add_files_copy` default, or `full_ingest`) so
+  non-Iceberg-compatible Parquet (for example AWS CUR `TIMESTAMP_MILLIS`) can be
+  rewritten into Iceberg-compatible files during COPY. With `full_ingest`,
+  optional `columns[].expression` values are applied in the COPY `SELECT` list
+  (Parquet fields via `$1:"ColName"`) instead of only on the target view.
+
 ## 0.5.1 - 2026-07-17
 
 ### Added

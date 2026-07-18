@@ -14,6 +14,7 @@ from .errors import IcebergSyncError, SnowflakeExecutionError
 from .run_log import build_run_log_payload
 from .schema import (
     SnowflakeColumn,
+    load_uses_column_expressions,
     map_declared_columns,
     validate_schema_compatibility,
     view_columns,
@@ -137,10 +138,20 @@ class IcebergSyncRunner:
                 config,
                 effective_mode,
                 load_locations,
+                desired_columns,
                 retry,
             )
             load_committed = True
-            view_column_payload = view_columns(desired_columns)
+            view_column_payload = view_columns(
+                desired_columns,
+                expressions_applied_at_load=load_uses_column_expressions(
+                    source_type=config.source_type,
+                    load_mode=(
+                        None if config.s3_parquet is None else config.s3_parquet.load_mode
+                    ),
+                    columns=desired_columns,
+                ),
+            )
             self.snowflake.create_or_replace_view(
                 config.target_relation,
                 config.internal_relation,
@@ -265,13 +276,24 @@ class IcebergSyncRunner:
             staging_table_reference=state.get("staging_table_reference"),
         )
         columns = self._resolve_columns(config, source, export_result)
+        expressions_at_load = load_uses_column_expressions(
+            source_type=config.source_type,
+            load_mode=None if config.s3_parquet is None else config.s3_parquet.load_mode,
+            columns=columns,
+        )
         export_payload = {
             "schema_fields": export_result.schema_fields,
             "segments": export_result.segments,
             "job_references": export_result.job_references,
             "staging_table_reference": export_result.staging_table_reference,
             "columns": [asdict(column) | {"ddl": column.ddl} for column in columns],
-            "view_columns": [asdict(column) for column in view_columns(columns)],
+            "view_columns": [
+                asdict(column)
+                for column in view_columns(
+                    columns,
+                    expressions_applied_at_load=expressions_at_load,
+                )
+            ],
         }
         if state.get("load_locations") is not None:
             export_payload["load_locations"] = state.get("load_locations")
@@ -376,12 +398,13 @@ class IcebergSyncRunner:
         config: IcebergSyncConfig,
         effective_mode: str,
         load_locations: list[dict[str, Any]],
+        desired_columns: list[SnowflakeColumn],
         retry: dict[str, Any],
     ) -> dict[str, Any]:
         for attempt in range(1, config.retry.max_attempts + 1):
             retry["attempts"] = attempt
             try:
-                self._load_once(config, effective_mode, load_locations)
+                self._load_once(config, effective_mode, load_locations, desired_columns)
                 return retry
             except Exception as exc:
                 retryable = is_retryable_snowflake_error(exc)
@@ -413,9 +436,20 @@ class IcebergSyncRunner:
         config: IcebergSyncConfig,
         effective_mode: str,
         load_locations: list[dict[str, Any]],
+        desired_columns: list[SnowflakeColumn],
     ) -> None:
         transaction_started = False
         transaction_committed = False
+        load_mode = "add_files_copy"
+        transform_columns: list[SnowflakeColumn] | None = None
+        if config.source_type == "s3_parquet" and config.s3_parquet is not None:
+            load_mode = config.s3_parquet.load_mode
+            if load_uses_column_expressions(
+                source_type=config.source_type,
+                load_mode=load_mode,
+                columns=desired_columns,
+            ):
+                transform_columns = desired_columns
         try:
             self.snowflake.begin()
             transaction_started = True
@@ -428,6 +462,8 @@ class IcebergSyncRunner:
                     pattern=location.get("pattern"),
                     files=location.get("files"),
                     force=bool(location.get("force")),
+                    load_mode=load_mode,
+                    transform_columns=transform_columns,
                 )
             self.snowflake.commit()
             transaction_committed = True
@@ -636,7 +672,19 @@ def _result_payload(
         "effective_mode": effective_mode,
         "target_relation": asdict(config.target_relation),
         "internal_relation": asdict(config.internal_relation),
-        "view_columns": [asdict(column) for column in view_columns(columns)],
+        "view_columns": [
+            asdict(column)
+            for column in view_columns(
+                columns,
+                expressions_applied_at_load=load_uses_column_expressions(
+                    source_type=config.source_type,
+                    load_mode=(
+                        None if config.s3_parquet is None else config.s3_parquet.load_mode
+                    ),
+                    columns=columns,
+                ),
+            )
+        ],
         "export_segments": export_result.segments,
         "source_job_references": export_result.job_references,
         "staging_table_reference": export_result.staging_table_reference,

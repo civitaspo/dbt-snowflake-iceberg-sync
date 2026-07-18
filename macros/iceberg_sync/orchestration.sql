@@ -356,18 +356,58 @@ COPY GRANTS
   {{ return('DELETE FROM ' ~ internal_relation ~ ' WHERE ' ~ payload['incremental_predicate']) }}
 {%- endmacro %}
 
-{% macro iceberg_sync_copy_sql(payload, stage_run_location, pattern=none, files=none, force=false) -%}
+{% macro iceberg_sync_copy_sql(payload, stage_run_location, pattern=none, files=none, force=false, columns=none) -%}
   {%- set internal_relation = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_payload(
     payload['internal_relation']
   ) -%}
-  {%- set parts = [
-    'COPY INTO ' ~ internal_relation,
-    'FROM ' ~ stage_run_location.rstrip('/') ~ '/',
-    'FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)',
-    'LOAD_MODE = ADD_FILES_COPY',
-    'MATCH_BY_COLUMN_NAME = CASE_SENSITIVE',
-    'PURGE = FALSE'
-  ] -%}
+  {%- set load_mode = 'add_files_copy' -%}
+  {%- if payload['source_type'] == 's3_parquet' and payload.get('s3_parquet') -%}
+    {%- set load_mode = payload['s3_parquet'].get('load_mode', 'add_files_copy') | string | lower | trim -%}
+  {%- endif -%}
+  {%- set sql_load_mode = 'FULL_INGEST' if load_mode == 'full_ingest' else 'ADD_FILES_COPY' -%}
+  {%- set stage_location = stage_run_location.rstrip('/') ~ '/' -%}
+  {%- set expressed_columns = [] -%}
+  {%- if sql_load_mode == 'FULL_INGEST' and columns is not none and (columns | length) > 0 -%}
+    {%- for column in columns -%}
+      {%- if column.get('expression') -%}
+        {%- do expressed_columns.append(column) -%}
+      {%- endif -%}
+    {%- endfor -%}
+  {%- endif -%}
+  {%- set use_transforms = (expressed_columns | length) > 0 -%}
+  {%- if use_transforms -%}
+    {%- set target_columns = [] -%}
+    {%- set select_items = [] -%}
+    {%- for column in columns -%}
+      {%- set source_name = column.get('source_name') or column.get('name') -%}
+      {%- do target_columns.append(adapter.quote(source_name)) -%}
+      {%- if column.get('expression') -%}
+        {%- do select_items.append(column['expression']) -%}
+      {%- else -%}
+        {%- do select_items.append('$1:' ~ adapter.quote(source_name)) -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- set parts = [
+      'COPY INTO ' ~ internal_relation ~ ' (' ~ (target_columns | join(', ')) ~ ')',
+      'FROM (',
+      '  SELECT',
+      '    ' ~ (select_items | join(',\n    ')),
+      '  FROM ' ~ stage_location,
+      ')',
+      'FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)',
+      'LOAD_MODE = ' ~ sql_load_mode,
+      'PURGE = FALSE'
+    ] -%}
+  {%- else -%}
+    {%- set parts = [
+      'COPY INTO ' ~ internal_relation,
+      'FROM ' ~ stage_location,
+      'FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)',
+      'LOAD_MODE = ' ~ sql_load_mode,
+      'MATCH_BY_COLUMN_NAME = CASE_SENSITIVE',
+      'PURGE = FALSE'
+    ] -%}
+  {%- endif -%}
   {%- if files is not none and (files | length) > 0 -%}
     {%- set file_literals = [] -%}
     {%- for file_name in files -%}
@@ -387,7 +427,7 @@ COPY GRANTS
   {{ return(parts | join('\n')) }}
 {%- endmacro %}
 
-{% macro iceberg_sync_run_load(payload, effective_mode, load_locations) -%}
+{% macro iceberg_sync_run_load(payload, effective_mode, load_locations, columns=none) -%}
   {%- call statement('main', auto_begin=False) -%}
     BEGIN;
     {{ dbt_snowflake_iceberg_sync.iceberg_sync_delete_sql(payload, effective_mode) }};
@@ -397,7 +437,8 @@ COPY GRANTS
       location['stage_location'],
       location.get('pattern'),
       location.get('files'),
-      location.get('force', false)
+      location.get('force', false),
+      columns
     ) }};
     {%- endfor %}
     COMMIT;

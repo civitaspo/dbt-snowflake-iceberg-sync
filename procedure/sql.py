@@ -59,6 +59,12 @@ def delete_sql(relation: RelationConfig, predicate: str | None) -> str:
     return f"DELETE FROM {relation_sql(relation)}"
 
 
+def parquet_stage_field_expression(column_name: str) -> str:
+    """Default SELECT expression for a Parquet field during FULL_INGEST transforms."""
+
+    return f"$1:{quote_identifier(column_name)}"
+
+
 def copy_into_sql(
     relation: RelationConfig,
     stage_run_location: str,
@@ -66,15 +72,46 @@ def copy_into_sql(
     pattern: str | None = None,
     files: list[str] | None = None,
     force: bool = False,
+    load_mode: str = "add_files_copy",
+    transform_columns: list[SnowflakeColumn] | None = None,
 ) -> str:
-    lines = [
-        f"COPY INTO {relation_sql(relation)}",
-        f"FROM {stage_run_location.rstrip('/')}/",
-        "FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)",
-        "LOAD_MODE = ADD_FILES_COPY",
-        "MATCH_BY_COLUMN_NAME = CASE_SENSITIVE",
-        "PURGE = FALSE",
-    ]
+    normalized_mode = (load_mode or "add_files_copy").strip().lower()
+    sql_load_mode = "FULL_INGEST" if normalized_mode == "full_ingest" else "ADD_FILES_COPY"
+    stage_location = f"{stage_run_location.rstrip('/')}/"
+    use_transforms = bool(transform_columns) and sql_load_mode == "FULL_INGEST"
+
+    if use_transforms:
+        assert transform_columns is not None
+        target_columns = ", ".join(
+            quote_identifier(column.source_name) for column in transform_columns
+        )
+        select_items = [
+            column.expression
+            if column.expression
+            else parquet_stage_field_expression(column.source_name)
+            for column in transform_columns
+        ]
+        select_list = ",\n    ".join(select_items)
+        lines = [
+            f"COPY INTO {relation_sql(relation)} ({target_columns})",
+            "FROM (",
+            "  SELECT",
+            f"    {select_list}",
+            f"  FROM {stage_location}",
+            ")",
+            "FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)",
+            f"LOAD_MODE = {sql_load_mode}",
+            "PURGE = FALSE",
+        ]
+    else:
+        lines = [
+            f"COPY INTO {relation_sql(relation)}",
+            f"FROM {stage_location}",
+            "FILE_FORMAT = (TYPE = PARQUET USE_VECTORIZED_SCANNER = TRUE)",
+            f"LOAD_MODE = {sql_load_mode}",
+            "MATCH_BY_COLUMN_NAME = CASE_SENSITIVE",
+            "PURGE = FALSE",
+        ]
     if files:
         file_list = ", ".join(sql_string(name) for name in files)
         lines.append(f"FILES = ({file_list})")

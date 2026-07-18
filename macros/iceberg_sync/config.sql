@@ -460,7 +460,8 @@
       dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 's3_parquet_incremental_paths', [''])
     ),
     'skip_missing_location': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 's3_parquet_skip_missing_location', false),
-    'infer_schema_max_file_count': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 's3_parquet_infer_schema_max_file_count', 16, true)
+    'infer_schema_max_file_count': dbt_snowflake_iceberg_sync.iceberg_sync_number_model_config(model_node, 's3_parquet_infer_schema_max_file_count', 16, true),
+    'load_mode': dbt_snowflake_iceberg_sync.iceberg_sync_model_config(model_node, 's3_parquet_load_mode', 'add_files_copy')
   }) }}
 {%- endmacro %}
 

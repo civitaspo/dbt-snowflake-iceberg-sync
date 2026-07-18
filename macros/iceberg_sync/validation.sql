@@ -356,6 +356,12 @@
       "s3_parquet_file_pattern must not be empty when set"
     ) -%}
   {%- endif -%}
+  {%- set load_mode = (s3.get('load_mode', 'add_files_copy') | string | lower | trim) -%}
+  {%- if load_mode not in ['add_files_copy', 'full_ingest'] -%}
+    {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+      "s3_parquet_load_mode must be one of: add_files_copy, full_ingest"
+    ) -%}
+  {%- endif -%}
   {%- for path in s3['full_refresh_paths'] + s3['incremental_paths'] -%}
     {%- if path.startswith('@') or '://' in path -%}
       {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
