@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.2 - 2026-07-18
+
 ### Added
 
 - `s3_parquet_load_mode` (`add_files_copy` default, or `full_ingest`) so

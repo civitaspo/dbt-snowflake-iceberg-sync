@@ -24,7 +24,8 @@ dbt model (source_type='s3_parquet')
   -> CREATE ICEBERG TABLE IF NOT EXISTS / additive ALTER
   -> BEGIN
        DELETE (full refresh or incremental_predicate)
-       COPY INTO ... LOAD_MODE=ADD_FILES_COPY FORCE=TRUE [FILES=...]
+       COPY INTO ... LOAD_MODE=ADD_FILES_COPY|FULL_INGEST FORCE=TRUE [FILES=...]
+         (FULL_INGEST may use SELECT transforms from columns.expression)
      COMMIT
   -> CREATE OR REPLACE VIEW
   -> INSERT run log
