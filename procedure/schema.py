@@ -20,7 +20,10 @@ SCALAR_TYPE_MAP = {
     "BOOLEAN": "BOOLEAN",
     "DATE": "DATE",
     "DATETIME": "TIMESTAMP_NTZ(6)",
-    "TIMESTAMP": "TIMESTAMP_LTZ(6)",
+    # BigQuery EXTRACT to Parquet writes TIMESTAMP with isAdjustedToUTC=false.
+    # Snowflake's vectorized Parquet scanner / Iceberg ADD_FILES_COPY requires
+    # TIMESTAMP_NTZ for that metadata (TIMESTAMP_LTZ expects isAdjustedToUTC=true).
+    "TIMESTAMP": "TIMESTAMP_NTZ(6)",
     "NUMERIC": "NUMBER(38,9)",
     "DECIMAL": "NUMBER(38,9)",
     "BYTES": "BINARY",

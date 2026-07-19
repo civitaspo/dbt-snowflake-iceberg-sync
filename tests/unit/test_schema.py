@@ -27,10 +27,28 @@ def test_maps_supported_bigquery_scalars():
         "BIGINT",
         "VARCHAR",
         "TIMESTAMP_NTZ(6)",
-        "TIMESTAMP_LTZ(6)",
+        "TIMESTAMP_NTZ(6)",
         "NUMBER(38,9)",
     ]
     assert columns[0].nullable is False
+
+
+def test_maps_bigquery_timestamp_to_timestamp_ntz():
+    """BQ extract Parquet uses isAdjustedToUTC=false; map to NTZ for ADD_FILES_COPY."""
+    columns = map_bigquery_schema(
+        [
+            {"name": "usage_start_time", "type": "TIMESTAMP"},
+            {"name": "usage_end_time", "type": "TIMESTAMP"},
+            {"name": "export_time", "type": "TIMESTAMP"},
+        ]
+    )
+
+    assert [column.snowflake_type for column in columns] == [
+        "TIMESTAMP_NTZ(6)",
+        "TIMESTAMP_NTZ(6)",
+        "TIMESTAMP_NTZ(6)",
+    ]
+    assert columns[0].ddl == '"usage_start_time" TIMESTAMP_NTZ(6)'
 
 
 def test_maps_required_bigquery_datetime_to_not_null_ddl():
@@ -240,6 +258,16 @@ def test_schema_compatibility_rejects_change_to_datetime_mapping():
     existing = [SnowflakeColumn("OccurredDateTime", "TIMESTAMP_LTZ(6)")]
     desired = map_bigquery_schema([{"name": "OccurredDateTime", "type": "DATETIME"}])
 
+    with pytest.raises(SchemaError, match="incompatible type change"):
+        validate_schema_compatibility(existing, desired)
+
+
+def test_schema_compatibility_rejects_legacy_timestamp_ltz_mapping():
+    """Callers who previously loaded TIMESTAMP as LTZ must recreate the table."""
+    existing = [SnowflakeColumn("usage_start_time", "TIMESTAMP_LTZ(6)")]
+    desired = map_bigquery_schema([{"name": "usage_start_time", "type": "TIMESTAMP"}])
+
+    assert desired[0].snowflake_type == "TIMESTAMP_NTZ(6)"
     with pytest.raises(SchemaError, match="incompatible type change"):
         validate_schema_compatibility(existing, desired)
 

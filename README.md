@@ -675,11 +675,26 @@ fail before loading.
 | `BOOL`, `BOOLEAN` | `BOOLEAN` |
 | `DATE` | `DATE` |
 | `DATETIME` | `TIMESTAMP_NTZ(6)` |
-| `TIMESTAMP` | `TIMESTAMP_LTZ(6)` |
+| `TIMESTAMP` | `TIMESTAMP_NTZ(6)` |
 | `NUMERIC`, `DECIMAL` | `NUMBER(38,9)` |
 | `BYTES` | `BINARY` |
 | `RECORD`, `STRUCT` | structured `OBJECT(...)` |
 | repeated compatible fields | structured `ARRAY(...)` |
+
+BigQuery `TIMESTAMP` and `DATETIME` both map to Snowflake `TIMESTAMP_NTZ(6)`.
+BigQuery EXTRACT to Parquet writes these fields with `isAdjustedToUTC = false`.
+Snowflake's vectorized Parquet scanner used by Iceberg
+`COPY INTO ... LOAD_MODE = ADD_FILES_COPY` accepts that metadata only for
+`TIMESTAMP_NTZ` (not `TIMESTAMP_LTZ`). Values are stored as UTC wall-clock
+timestamps without a session time zone; treat them as UTC or use
+`CONVERT_TIMEZONE` in downstream models.
+
+This mapping is a breaking change from earlier package versions that mapped
+`TIMESTAMP` to `TIMESTAMP_LTZ(6)`. Existing Iceberg tables created with the old
+mapping will fail additive schema-evolution checks and need a full refresh /
+recreate. The `select` strategy with `DATETIME(column)` casts remains valid but
+is no longer required to avoid UTC-adjustment COPY failures on TIMESTAMP-only
+sources.
 
 Unsupported in the first scope:
 
@@ -780,6 +795,11 @@ DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TABLE_EXPECTED_ROWS
 DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATETIME_TABLE_ID
 DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATETIME_EXPECTED_ROWS
 DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_DATETIME_EXPECTED_VALUES
+# Optional TIMESTAMP extract fixture (test skips when TABLE_ID is unset):
+DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIMESTAMP_TABLE_ID
+DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIMESTAMP_EXPECTED_ROWS
+DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIMESTAMP_EXPECTED_VALUES
+DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIMESTAMP_COLUMN
 
 DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_NON_PARTITIONED_TABLE_ID
 DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_NON_PARTITIONED_EXPECTED_ROWS

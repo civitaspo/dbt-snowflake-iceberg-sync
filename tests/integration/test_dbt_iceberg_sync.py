@@ -262,6 +262,69 @@ def test_dbt_extract_datetime(tmp_path: Path):
         _cleanup(context, [model_name])
 
 
+def test_dbt_extract_timestamp(tmp_path: Path):
+    """Optional: BQ TIMESTAMP extract must load as TIMESTAMP_NTZ (UTC adj false)."""
+    table_id = os.environ.get("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIMESTAMP_TABLE_ID")
+    if not table_id:
+        pytest.skip(
+            "optional TIMESTAMP fixture unset "
+            "(DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIMESTAMP_TABLE_ID)"
+        )
+
+    context = _integration_context(tmp_path, "timestamp")
+    model_name = f"iceberg_sync_timestamp_{context.run_id}"
+    export_prefix = _export_prefix(context, model_name)
+    column_name = (
+        os.environ.get("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIMESTAMP_COLUMN")
+        or "usage_start_time"
+    )
+    models = {
+        model_name: _extract_model_sql(
+            context,
+            model_name=model_name,
+            table_id=table_id,
+            export_predicate_type="none",
+            base_location=export_prefix,
+            export_prefix=export_prefix,
+        )
+    }
+
+    _write_project(context, models)
+    try:
+        _run_dbt(context, "deps")
+        _run_dbt(context, "run", "--select", model_name)
+        assertion_kwargs: dict[str, Any] = {
+            "expected_rows": _optional_int_env(
+                "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIMESTAMP_EXPECTED_ROWS"
+            ),
+            "expected_modes": ["full_refresh"],
+            "expected_source_job_reference_counts": [1],
+            "expected_column_types": [
+                {
+                    "name": column_name,
+                    "type": "TIMESTAMP_NTZ(6)",
+                }
+            ],
+        }
+        if os.environ.get(
+            "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIMESTAMP_EXPECTED_VALUES"
+        ):
+            assertion_kwargs["expected_view_values"] = {
+                "column": column_name,
+                "values": sorted(
+                    _required_env_list(
+                        "DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_TIMESTAMP_EXPECTED_VALUES"
+                    )
+                ),
+            }
+        _assert_models(
+            context,
+            [_assertion(context, model_name, **assertion_kwargs)],
+        )
+    finally:
+        _cleanup(context, [model_name])
+
+
 def test_dbt_extract_modes(tmp_path: Path):
     context = _integration_context(tmp_path, "extract_modes")
     cases = [
