@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-## 0.6.0 - 2026-07-19
+## 0.5.6 - 2026-07-19
 
-### Breaking
+### Fixed
 
 - BigQuery `TIMESTAMP` now maps to Snowflake `TIMESTAMP_NTZ(6)` instead of
   `TIMESTAMP_LTZ(6)`. BigQuery EXTRACT to Parquet writes `TIMESTAMP` fields with
@@ -14,9 +14,9 @@
   (for example GCP Cloud Billing `usage_start_time` / `usage_end_time` /
   `export_time`).
 
-  **Migration:** Recreate or full-refresh Iceberg tables that previously loaded
-  BigQuery `TIMESTAMP` as `TIMESTAMP_LTZ(6)`. Additive schema evolution rejects
-  the LTZ→NTZ type change. Downstream models that assumed session-TZ
+  **Migration note:** Recreate or full-refresh Iceberg tables that previously
+  loaded BigQuery `TIMESTAMP` as `TIMESTAMP_LTZ(6)`. Additive schema evolution
+  rejects the LTZ→NTZ type change. Downstream models that assumed session-TZ
   `TIMESTAMP_LTZ` semantics should treat values as UTC wall-clock or use
   `CONVERT_TIMEZONE`. The `select` + `DATETIME()` workaround remains valid but
   is no longer required for TIMESTAMP-only UTC-adjustment failures.
