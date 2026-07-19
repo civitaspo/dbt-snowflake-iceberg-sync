@@ -132,6 +132,24 @@ The Google Cloud service account stored in the Snowflake secret needs permission
 Exact IAM bindings depend on your project layout. Keep the permissions scoped to
 the datasets and bucket prefixes used by the package.
 
+When `bigquery_job_project_id` differs from `google_cloud_project_id`, split
+permissions across projects:
+
+| Project / resource | Typical roles |
+| --- | --- |
+| Source project (`google_cloud_project_id`) | `roles/bigquery.dataViewer` on source datasets |
+| Job project (`bigquery_job_project_id`) | `roles/bigquery.jobUser` (includes `bigquery.jobs.create`) |
+| Staging dataset in the job project (`bigquery_staging_dataset_id`, `select` only) | `roles/bigquery.dataEditor` on the staging dataset (create destination tables; patch labels / expiration) |
+| GCS export bucket | object create/write for extract destinations |
+
+`roles/bigquery.dataViewer` alone on the source project is not enough if jobs are
+submitted to that same project. Use a separate job project when the Snowflake
+service account should stay read-only on source datasets.
+
+`bigquery_job_project_id` is the BigQuery Jobs API project
+(`jobs.insert` / `jobs.get`). It is not the same as a Google auth
+`quota_project_id` / `x-goog-user-project` header.
+
 ## Workload Identity Federation
 
 To use Snowflake outbound workload identity federation instead of a static
@@ -480,7 +498,8 @@ These options apply when `source_type='bigquery'`.
 
 | Option | Required | Default | Description |
 | --- | --- | --- | --- |
-| `google_cloud_project_id` | Yes | None | BigQuery project for metadata, query, and extract jobs. |
+| `google_cloud_project_id` | Yes | None | BigQuery project that contains the source table/dataset (`project.dataset.table`). Used for metadata reads, extract `sourceTable`, and wildcard/shard discovery. |
+| `bigquery_job_project_id` | No | `google_cloud_project_id` | Project where BigQuery jobs are created and polled (`jobs.insert` / `jobs.get`). For `select`, staging tables are created in this project and `bigquery_staging_dataset_id` is interpreted there. Not a Google auth quota project. |
 | `bigquery_dataset_id` | Yes | None | BigQuery dataset containing the source table or wildcard shard set. |
 | `bigquery_table_id` | Yes | None | BigQuery source table id. For `extract`, this is the table to export and may end with `_*` for sharded tables. For `select`, this still identifies the source for deterministic staging-table hashing even though the model SQL is the exported query. |
 | `bigquery_location` | Yes | None | BigQuery job location, for example `US` or a regional location. |
@@ -531,7 +550,7 @@ model body is required and must be BigQuery SQL. `select` allows only `auto`,
 
 | Option | Required | Default | Description |
 | --- | --- | --- | --- |
-| `bigquery_staging_dataset_id` | Yes for `select` | None | BigQuery dataset where deterministic staging tables are created. |
+| `bigquery_staging_dataset_id` | Yes for `select` | None | BigQuery dataset where deterministic staging tables are created. When `bigquery_job_project_id` is set, this dataset is resolved in the job project. |
 | `bigquery_staging_table_expiration_hours` | No | `24` | Expiration applied to generated staging tables. |
 | `bigquery_staging_table_reuse` | No | `true` | Reuse an existing non-expired staging table when its stored hash matches the model SQL, predicates, source identity, and target relation. The final Parquet extract still runs with the current `bigquery_export_compression`. |
 | `force_rebuild_staging_table` | No | `false` | Rebuild the staging table even if a reusable table exists. This option is currently unprefixed in dbt model config. |

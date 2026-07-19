@@ -266,6 +266,17 @@
   {%- endif -%}
 
   {%- set bq = payload['bigquery'] -%}
+  {%- if bq.get('job_project_id', none) is not none -%}
+    {%- if bq['job_project_id'] is not string -%}
+      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+        "bigquery_job_project_id must be a string"
+      ) -%}
+    {%- elif bq['job_project_id'] == "" -%}
+      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
+        "bigquery_job_project_id must not be empty when set"
+      ) -%}
+    {%- endif -%}
+  {%- endif -%}
   {%- if bq['export_strategy'] not in ['extract', 'select'] -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
       "bigquery_export_strategy must be 'extract' or 'select'"

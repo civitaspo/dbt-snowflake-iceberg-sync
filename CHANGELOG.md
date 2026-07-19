@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.5.5 - 2026-07-18
+
+### Added
+
+- Optional `bigquery_job_project_id` so BigQuery jobs can run in a different
+  project from `google_cloud_project_id`. Source table identity stays on the
+  source project; jobs and `select` staging tables use the job project
+  (defaulting to the source project when omitted).
+
 ## 0.5.4 - 2026-07-19
 
 ### Fixed
