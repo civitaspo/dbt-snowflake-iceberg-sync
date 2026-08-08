@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Fixed
+
+- Nested `OBJECT` / `ARRAY(OBJECT)` schema growth no longer fails as an
+  incompatible type change. Additive nested keys, nested reorders, and Iceberg
+  type widening are applied with
+  `ALTER ICEBERG TABLE ... ALTER COLUMN ... SET DATA TYPE` before
+  `ADD_FILES_COPY` (for example GCP Billing `consumption_model` gaining
+  `applied_subscription_instance_id`). Nested keys missing from the current
+  source schema are kept with a warning rather than dropped.
+
+### Added
+
+- Procedure action `evolve_schema` plans and applies top-level `ADD COLUMN` and
+  nested structured-type evolution for the dbt materialization path.
+
 ## 0.5.6 - 2026-07-19
 
 ### Fixed

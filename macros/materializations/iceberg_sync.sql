@@ -56,7 +56,8 @@
       'created_internal_table': false,
       'altered_internal_table_schema': false,
       'dropped_created_internal_table': false,
-      'cleanup_error_message': none
+      'cleanup_error_message': none,
+      'schema_evolution_warnings': []
     } -%}
     {%- if export_result.get('skipped') -%}
       {%- call statement('main', auto_begin=False) -%}
@@ -83,14 +84,16 @@
         ) }}
       {%- endcall -%}
 
-      {%- set before_add_columns = dbt_snowflake_iceberg_sync.iceberg_sync_describe_table_columns(
-        internal_relation
-      ) -%}
-      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_validate_or_add_columns(
-        internal_relation, desired_columns
-      ) -%}
-      {%- if desired_columns | length > before_add_columns | length -%}
-        {%- do cleanup.update({'altered_internal_table_schema': true}) -%}
+      {%- if internal_table_exists -%}
+        {%- set evolve_result = dbt_snowflake_iceberg_sync.iceberg_sync_validate_or_add_columns(
+          internal_relation, desired_columns
+        ) -%}
+        {%- do cleanup.update({
+          'altered_internal_table_schema': evolve_result.get('altered_schema', false),
+          'schema_evolution_warnings': evolve_result.get('warnings', [])
+        }) -%}
+      {%- else -%}
+        {%- do cleanup.update({'created_internal_table': true}) -%}
       {%- endif -%}
 
       {%- set load_result = dbt_snowflake_iceberg_sync.iceberg_sync_run_load(

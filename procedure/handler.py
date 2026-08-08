@@ -9,20 +9,21 @@ from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
 
-from .config import IcebergSyncConfig, RetryPolicyConfig, parse_config
-from .errors import IcebergSyncError, SnowflakeExecutionError
+from .config import IcebergSyncConfig, RelationConfig, RetryPolicyConfig, parse_config
+from .errors import ConfigError, IcebergSyncError, SnowflakeExecutionError
 from .run_log import build_run_log_payload
 from .schema import (
     SnowflakeColumn,
+    columns_from_payload,
     load_uses_column_expressions,
     map_declared_columns,
-    validate_schema_compatibility,
+    plan_schema_evolution,
     view_columns,
 )
 from .snowflake import SnowflakeClient
 from .sources import create_source_adapter
 from .sources.base import SourceAdapter, SourceExecutionContext, SourceExportResult
-from .utils import new_run_id, parse_json_maybe, utcnow
+from .utils import new_run_id, normalize_snowflake_object_identifier, parse_json_maybe, utcnow
 
 
 def main(session: Any, config: Any) -> dict[str, Any]:
@@ -35,6 +36,8 @@ def main(session: Any, config: Any) -> dict[str, Any]:
         return runner.start_export(payload)
     if action == "poll_export":
         return runner.poll_export(payload)
+    if action == "evolve_schema":
+        return runner.evolve_schema(payload)
     if action != "run":
         raise IcebergSyncError(f"unknown procedure action: {action}")
     return runner.run(payload)
@@ -122,13 +125,16 @@ class IcebergSyncRunner:
                 return result
             desired_columns = self._resolve_columns(config, source, export_result)
 
-            created_internal_table, altered_schema = self._create_or_validate_table(
-                config,
-                internal_table_existed_before,
-                desired_columns,
+            created_internal_table, altered_schema, schema_warnings = (
+                self._create_or_validate_table(
+                    config,
+                    internal_table_existed_before,
+                    desired_columns,
+                )
             )
             cleanup["created_internal_table"] = created_internal_table
             cleanup["altered_internal_table_schema"] = altered_schema
+            cleanup["schema_evolution_warnings"] = list(schema_warnings)
             load_locations = self._load_locations_for_export(
                 config,
                 stage.run_stage_location,
@@ -374,24 +380,48 @@ class IcebergSyncRunner:
             }
         ]
 
+    def evolve_schema(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Describe, plan, and apply additive/nested schema evolution."""
+
+        if not isinstance(payload, dict):
+            raise ConfigError("evolve_schema payload must be an object")
+        relation = _relation_from_payload(payload.get("internal_relation"), "internal_relation")
+        raw_columns = payload.get("columns")
+        if not isinstance(raw_columns, list) or not raw_columns:
+            raise ConfigError("evolve_schema columns must be a non-empty list")
+        desired_columns = columns_from_payload(raw_columns)
+        existing_columns = self.snowflake.describe_table(relation)
+        plan = plan_schema_evolution(existing_columns, desired_columns)
+        if plan.alter_columns:
+            self.snowflake.set_column_data_types(relation, list(plan.alter_columns))
+        if plan.add_columns:
+            self.snowflake.add_columns(relation, list(plan.add_columns))
+        return {
+            "status": "success",
+            "altered_schema": plan.altered,
+            "added_column_count": len(plan.add_columns),
+            "altered_column_count": len(plan.alter_columns),
+            "warnings": list(plan.warnings),
+        }
+
     def _create_or_validate_table(
         self,
         config: IcebergSyncConfig,
         table_exists: bool,
         desired_columns: list[SnowflakeColumn],
-    ) -> tuple[bool, bool]:
+    ) -> tuple[bool, bool, tuple[str, ...]]:
         self.snowflake.create_iceberg_table(config, desired_columns)
         if not table_exists:
-            return True, False
+            return True, False, ()
         existing_columns = self.snowflake.describe_table(config.internal_relation)
-        validate_schema_compatibility(existing_columns, desired_columns)
-        if len(desired_columns) > len(existing_columns):
-            self.snowflake.add_columns(
-                config.internal_relation,
-                desired_columns[len(existing_columns) :],
+        plan = plan_schema_evolution(existing_columns, desired_columns)
+        if plan.alter_columns:
+            self.snowflake.set_column_data_types(
+                config.internal_relation, list(plan.alter_columns)
             )
-            return False, True
-        return False, False
+        if plan.add_columns:
+            self.snowflake.add_columns(config.internal_relation, list(plan.add_columns))
+        return False, plan.altered, plan.warnings
 
     def _load_with_retry(
         self,
@@ -629,7 +659,25 @@ def _initial_cleanup_payload() -> dict[str, Any]:
         "altered_internal_table_schema": False,
         "dropped_created_internal_table": False,
         "cleanup_error_message": None,
+        "schema_evolution_warnings": [],
     }
+
+
+def _relation_from_payload(value: Any, field_name: str) -> RelationConfig:
+    if not isinstance(value, dict):
+        raise ConfigError(f"{field_name} must be an object")
+    database = value.get("database")
+    schema = value.get("schema")
+    identifier = value.get("identifier")
+    if database in (None, "") or schema in (None, "") or identifier in (None, ""):
+        raise ConfigError(
+            f"{field_name} requires database, schema, and identifier"
+        )
+    return RelationConfig(
+        database=normalize_snowflake_object_identifier(str(database)),
+        schema=normalize_snowflake_object_identifier(str(schema)),
+        identifier=normalize_snowflake_object_identifier(str(identifier)),
+    )
 
 
 def _sanitize_error_message(exc: Exception) -> str:

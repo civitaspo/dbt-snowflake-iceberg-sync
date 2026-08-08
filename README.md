@@ -704,8 +704,25 @@ Unsupported in the first scope:
 - `TIME`
 - unsupported nested or repeated combinations
 
-Schema evolution is conservative. Existing column order, names, and mapped types
-must remain compatible. Safe additive columns may be added.
+Schema evolution runs before `ADD_FILES_COPY` and is conservative at the
+top level: existing column order, names, and mapped types must remain
+compatible, and new top-level columns may be appended.
+
+For structured `OBJECT(...)` / `ARRAY(OBJECT(...))` columns, the package also
+supports nested evolution via
+`ALTER ICEBERG TABLE ... ALTER COLUMN ... SET DATA TYPE`:
+
+- append nested keys
+- reorder nested keys to match the source schema (metadata-only; historical
+  values stay bound to field IDs / names)
+- widen nested field types that Iceberg allows (`int`→`long`, `float`→`double`,
+  `decimal(p,s)`→`decimal(p',s)` with larger precision)
+
+Nested keys present on the Iceberg table but missing from the current source
+schema are kept (never dropped) and reported as warnings. Completely different
+nested names are treated as keep-old + add-new, not as renames. Case-only name
+differences are the same field; emitted DDL uses the source spelling.
+Structured `MAP(...)` is not supported yet.
 
 ## Unsupported First-Scope Features
 

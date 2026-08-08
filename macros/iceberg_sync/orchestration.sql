@@ -315,35 +315,26 @@ COPY GRANTS
 {%- endmacro %}
 
 {% macro iceberg_sync_validate_or_add_columns(internal_relation, desired_columns) -%}
-  {%- set existing_columns = dbt_snowflake_iceberg_sync.iceberg_sync_describe_table_columns(
-    internal_relation
-  ) -%}
-  {%- if existing_columns | length > desired_columns | length -%}
+  {#- Nested OBJECT evolution and top-level ADD COLUMN are planned in Python. -#}
+  {%- set relation_payload = {
+    'database': internal_relation.database,
+    'schema': internal_relation.schema,
+    'identifier': internal_relation.identifier
+  } -%}
+  {%- set evolve_result = dbt_snowflake_iceberg_sync.iceberg_sync_call_export_action({
+    'action': 'evolve_schema',
+    'internal_relation': relation_payload,
+    'columns': desired_columns
+  }, 'iceberg_sync_evolve_schema') -%}
+  {%- if evolve_result.get('status') != 'success' -%}
     {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-      'source schema removed one or more existing columns'
+      evolve_result.get('error_message', 'schema evolution failed')
     ) -%}
   {%- endif -%}
-  {%- for existing in existing_columns -%}
-    {%- set desired = desired_columns[loop.index0] -%}
-    {%- if existing['source_name'] != desired['source_name'] -%}
-      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        "source schema reordered or renamed columns; expected '" ~ existing['source_name'] ~
-        "', found '" ~ desired['source_name'] ~ "'"
-      ) -%}
-    {%- endif -%}
-    {%- if dbt_snowflake_iceberg_sync.iceberg_sync_normalized_snowflake_type(existing['snowflake_type']) !=
-      dbt_snowflake_iceberg_sync.iceberg_sync_normalized_snowflake_type(desired['snowflake_type']) -%}
-      {%- do dbt_snowflake_iceberg_sync.iceberg_sync_raise(
-        'incompatible type change for ' ~ existing['source_name'] ~ ': ' ~
-        existing['snowflake_type'] ~ ' -> ' ~ desired['snowflake_type']
-      ) -%}
-    {%- endif -%}
+  {%- for warning in evolve_result.get('warnings', []) -%}
+    {%- do exceptions.warn('iceberg_sync: ' ~ warning) -%}
   {%- endfor -%}
-  {%- for column in desired_columns[existing_columns | length:] -%}
-    {%- call statement('iceberg_sync_add_column_' ~ loop.index, auto_begin=False) -%}
-      ALTER ICEBERG TABLE {{ internal_relation }} ADD COLUMN {{ column['ddl'] }}
-    {%- endcall -%}
-  {%- endfor -%}
+  {{ return(evolve_result) }}
 {%- endmacro %}
 
 {% macro iceberg_sync_delete_sql(payload, effective_mode) -%}

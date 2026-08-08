@@ -76,6 +76,9 @@ The integration suite should cover more than a happy path. Keep coverage for:
 - S3 Parquet incremental `delete+copy` with a repeated run (`FORCE = TRUE`)
 - S3 Parquet empty-location skip vs fail behavior
 - S3 Parquet additive schema evolution
+- nested `OBJECT` / `ARRAY(OBJECT)` schema evolution matrix (add, reorder,
+  widen, keep-missing+warn, deep nest, incompatible type fail, combined)
+- BigQuery nested `STRUCT` / `RECORD` field add (select export)
 - S3 Parquet invalid incremental path/predicate combinations
 
 Run the opt-in suite with:

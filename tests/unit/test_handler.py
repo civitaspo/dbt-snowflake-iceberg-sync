@@ -89,6 +89,11 @@ class FakeSnowflake:
     def add_columns(self, relation, columns):
         self.calls.append(("add_columns", [column.source_name for column in columns]))
 
+    def set_column_data_types(self, relation, columns):
+        self.calls.append(
+            ("set_column_data_types", [column.source_name for column in columns])
+        )
+
     def begin(self):
         self.calls.append(("begin",))
 
@@ -279,6 +284,80 @@ def test_handler_existing_table_allows_additive_columns(base_payload):
     assert ("describe_table", "__ORDERS") in snowflake.calls
     assert ("add_columns", ["CustomerName"]) in snowflake.calls
     assert ("commit",) in snowflake.calls
+
+
+def test_handler_existing_table_allows_nested_object_field_add(base_payload):
+    snowflake = FakeSnowflake(
+        table_exists=True,
+        target_view_exists=True,
+        existing_columns=[
+            SnowflakeColumn(
+                "consumption_model",
+                "OBJECT(ID VARCHAR(134217728), DESCRIPTION VARCHAR(134217728))",
+            )
+        ],
+    )
+    source = FakeSource(
+        columns=[
+            SnowflakeColumn(
+                "consumption_model",
+                'OBJECT("id" VARCHAR, "description" VARCHAR, '
+                '"applied_subscription_instance_id" VARCHAR)',
+                fields=(
+                    SnowflakeColumn("id", "VARCHAR"),
+                    SnowflakeColumn("description", "VARCHAR"),
+                    SnowflakeColumn("applied_subscription_instance_id", "VARCHAR"),
+                ),
+            )
+        ]
+    )
+
+    result = IcebergSyncRunner(
+        object(),
+        snowflake_client=snowflake,
+        source_adapters={"bigquery": source},
+    ).run(base_payload)
+
+    assert ("set_column_data_types", ["consumption_model"]) in snowflake.calls
+    assert result["status"] == "success"
+
+
+def test_handler_evolve_schema_action_returns_warnings(base_payload):
+    snowflake = FakeSnowflake(
+        table_exists=True,
+        existing_columns=[
+            SnowflakeColumn(
+                "payload",
+                'OBJECT("a" VARCHAR, "b" VARCHAR)',
+            )
+        ],
+    )
+    runner = IcebergSyncRunner(object(), snowflake_client=snowflake)
+    result = runner.evolve_schema(
+        {
+            "action": "evolve_schema",
+            "internal_relation": base_payload["internal_relation"],
+            "columns": [
+                {
+                    "source_name": "payload",
+                    "snowflake_type": 'OBJECT("a" VARCHAR)',
+                    "nullable": True,
+                    "fields": [
+                        {
+                            "source_name": "a",
+                            "snowflake_type": "VARCHAR",
+                            "nullable": True,
+                            "fields": [],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert result["status"] == "success"
+    assert result["altered_schema"] is False
+    assert any("payload.b" in warning for warning in result["warnings"])
 
 
 def test_handler_existing_table_rejects_schema_change(base_payload):

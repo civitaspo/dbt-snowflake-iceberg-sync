@@ -53,6 +53,16 @@ def alter_table_add_columns_sql(
     ]
 
 
+def alter_table_set_column_data_type_sql(
+    relation: RelationConfig, column: SnowflakeColumn
+) -> str:
+    return (
+        f"ALTER ICEBERG TABLE {relation_sql(relation)} "
+        f"ALTER COLUMN {quote_identifier(column.source_name)} "
+        f"SET DATA TYPE {column.snowflake_type}"
+    )
+
+
 def delete_sql(relation: RelationConfig, predicate: str | None) -> str:
     if predicate:
         return f"DELETE FROM {relation_sql(relation)} WHERE {predicate}"
