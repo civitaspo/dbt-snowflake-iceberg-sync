@@ -1753,15 +1753,27 @@ def _dbt_executable() -> str:
 
 def _profile_yaml(*, database: str, schema: str) -> str:
     optional_lines = []
-    for env_name, profile_name in (
-        ("SNOWFLAKE_ROLE", "role"),
-        ("SNOWFLAKE_WAREHOUSE", "warehouse"),
-        ("SNOWFLAKE_PASSWORD", "password"),
-        ("SNOWFLAKE_PRIVATE_KEY_PATH", "private_key_path"),
+    password = os.environ.get("SNOWFLAKE_PASSWORD") or None
+    private_key_path = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH") or None
+    authenticator = os.environ.get("SNOWFLAKE_AUTHENTICATOR") or None
+    if authenticator is None and not password and not private_key_path:
+        authenticator = "externalbrowser"
+
+    for profile_name, value in (
+        ("role", os.environ.get("SNOWFLAKE_ROLE") or None),
+        ("warehouse", os.environ.get("SNOWFLAKE_WAREHOUSE") or None),
+        ("authenticator", authenticator),
     ):
-        value = os.environ.get(env_name)
         if value:
             optional_lines.append(f"      {profile_name}: {value}")
+    if password:
+        optional_lines.append(
+            "      password: \"{{ env_var('SNOWFLAKE_PASSWORD') }}\""
+        )
+    if private_key_path:
+        optional_lines.append(
+            "      private_key_path: \"{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}\""
+        )
 
     return (
         textwrap.dedent(
@@ -1773,7 +1785,6 @@ def _profile_yaml(*, database: str, schema: str) -> str:
               type: snowflake
               account: {_required_env("SNOWFLAKE_ACCOUNT")}
               user: {_required_env("SNOWFLAKE_USER")}
-              authenticator: {os.environ.get("SNOWFLAKE_AUTHENTICATOR", "externalbrowser")}
               database: {database}
               schema: {schema}
               threads: 1

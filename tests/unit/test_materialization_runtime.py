@@ -147,7 +147,7 @@ def test_iceberg_sync_dbt_run_evolves_schema_via_procedure_action(
     assert evolve_calls
     assert "CustomerName" in evolve_calls[0]
     assert not any(
-        _normalize_sql(call["sql"]).startswith("alter table ") for call in executed_sql
+        _normalize_sql(call["sql"]).startswith("alter ") for call in executed_sql
     )
 
 

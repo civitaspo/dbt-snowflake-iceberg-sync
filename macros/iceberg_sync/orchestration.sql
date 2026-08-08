@@ -286,24 +286,6 @@ COPY GRANTS
 {%- endif %}
 {%- endmacro %}
 
-{% macro iceberg_sync_describe_table_columns(relation) -%}
-  {%- set describe_table = run_query('DESCRIBE TABLE ' ~ relation) -%}
-  {%- set columns = [] -%}
-  {%- for row in describe_table.rows -%}
-    {%- set name = row['name'] or row['NAME'] or row[0] -%}
-    {%- set type_name = row['type'] or row['TYPE'] or row[1] -%}
-    {%- set null_value = row['null?'] or row['NULL?'] or row[3] -%}
-    {%- if name and type_name -%}
-      {%- do columns.append({
-        'source_name': name | string,
-        'snowflake_type': (type_name | string | upper),
-        'nullable': (null_value | string | upper) != 'N'
-      }) -%}
-    {%- endif -%}
-  {%- endfor -%}
-  {{ return(columns) }}
-{%- endmacro %}
-
 {% macro iceberg_sync_normalized_snowflake_type(value) -%}
   {%- set result = value | string | upper | replace('"', '') -%}
   {%- set result = modules.re.sub('\\b(VARCHAR|TEXT|STRING)\\(\\d+\\)', 'VARCHAR', result) -%}

@@ -267,6 +267,7 @@ def _plan_top_level_column(
                 desired,
                 snowflake_type=snowflake_type,
                 fields=merged,
+                nullable=existing.nullable,
             ),
             warnings,
         )
@@ -359,32 +360,29 @@ def _merge_nested_column(
             kind=existing_kind or desired_kind or "object",
         )
         snowflake_type = _render_structured_type(existing_kind or "object", merged_fields)
+        merged_column = replace(
+            desired,
+            snowflake_type=snowflake_type,
+            fields=merged_fields,
+            nullable=existing.nullable,
+        )
         if not changed and _normalized_type(existing.snowflake_type) == _normalized_type(
             snowflake_type
         ):
-            return (
-                replace(desired, snowflake_type=snowflake_type, fields=merged_fields),
-                warnings,
-                False,
-            )
-        return (
-            replace(desired, snowflake_type=snowflake_type, fields=merged_fields),
-            warnings,
-            True,
-        )
+            return merged_column, warnings, False
+        return merged_column, warnings, True
 
     if _types_compatible(existing.snowflake_type, desired.snowflake_type):
         type_changed = _normalized_type(existing.snowflake_type) != _normalized_type(
             desired.snowflake_type
         )
-        if type_changed:
-            return replace(desired), [], True
         # Prefer desired spelling in the in-memory merge result, but skip DDL
         # when only identifier case/quoting differs from DESCRIBE output.
-        return replace(desired), [], False
+        # Preserve existing nested nullability across re-renders.
+        return replace(desired, nullable=existing.nullable), [], type_changed
 
     if _can_widen_type(existing.snowflake_type, desired.snowflake_type):
-        return replace(desired), [], True
+        return replace(desired, nullable=existing.nullable), [], True
 
     raise SchemaError(
         f"incompatible type change for {path}: "
@@ -439,7 +437,11 @@ def _structured_kind(snowflake_type: str) -> str | None:
 
 def _render_structured_type(kind: str, fields: tuple[SnowflakeColumn, ...]) -> str:
     inner = ", ".join(
-        f"{quote_identifier(child.source_name)} {child.snowflake_type}" for child in fields
+        (
+            f"{quote_identifier(child.source_name)} {child.snowflake_type}"
+            f"{'' if child.nullable else ' NOT NULL'}"
+        )
+        for child in fields
     )
     if kind == "array_object":
         return f"ARRAY(OBJECT({inner}))"
@@ -454,12 +456,13 @@ def _parse_object_fields(object_type: str) -> tuple[SnowflakeColumn, ...]:
     fields: list[SnowflakeColumn] = []
     for name, type_str in _split_object_field_defs(inner):
         cleaned_type = _strip_null_constraint(type_str)
+        nullable = not bool(re.search(r"(?i)\bNOT\s+NULL\b", type_str))
         nested_fields = parse_structured_fields(cleaned_type)
         fields.append(
             SnowflakeColumn(
                 source_name=name,
                 snowflake_type=cleaned_type,
-                nullable=True,
+                nullable=nullable,
                 fields=nested_fields,
             )
         )
@@ -477,13 +480,17 @@ def _split_object_field_defs(inner: str) -> list[tuple[str, str]]:
             break
         if inner[index] == '"':
             index += 1
-            start = index
-            while index < length and inner[index] != '"':
-                if inner[index] == '"' and index + 1 < length and inner[index + 1] == '"':
-                    index += 2
-                    continue
+            parts: list[str] = []
+            while index < length:
+                if inner[index] == '"':
+                    if index + 1 < length and inner[index + 1] == '"':
+                        parts.append('"')
+                        index += 2
+                        continue
+                    break
+                parts.append(inner[index])
                 index += 1
-            name = inner[start:index].replace('""', '"')
+            name = "".join(parts)
             if index >= length or inner[index] != '"':
                 raise SchemaError(f"malformed structured type field name in {inner!r}")
             index += 1

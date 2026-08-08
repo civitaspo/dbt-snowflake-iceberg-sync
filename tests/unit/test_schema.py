@@ -505,3 +505,39 @@ def test_map_parquet_infer_schema_rejects_unsupported_types():
         map_parquet_infer_schema(
             [{"COLUMN_NAME": "geo", "TYPE": "GEOGRAPHY", "NULLABLE": True, "ORDER_ID": 1}]
         )
+
+
+def test_parse_structured_fields_preserves_nested_not_null():
+    fields = parse_structured_fields('OBJECT("id" VARCHAR NOT NULL, "name" VARCHAR)')
+    assert fields[0].nullable is False
+    assert fields[1].nullable is True
+
+
+def test_schema_evolution_preserves_nested_not_null_when_adding_field():
+    existing = [
+        enrich_column_fields(
+            SnowflakeColumn("payload", 'OBJECT("id" VARCHAR NOT NULL)')
+        )
+    ]
+    desired = [
+        SnowflakeColumn(
+            "payload",
+            'OBJECT("id" VARCHAR, "label" VARCHAR)',
+            fields=(
+                SnowflakeColumn("id", "VARCHAR"),
+                SnowflakeColumn("label", "VARCHAR"),
+            ),
+        )
+    ]
+
+    plan = plan_schema_evolution(existing, desired)
+    assert len(plan.alter_columns) == 1
+    assert plan.alter_columns[0].fields[0].nullable is False
+    assert "NOT NULL" in plan.alter_columns[0].snowflake_type
+
+
+def test_parse_structured_fields_supports_escaped_quotes_in_field_names():
+    fields = parse_structured_fields('OBJECT("a""b" VARCHAR)')
+    assert len(fields) == 1
+    assert fields[0].source_name == 'a"b'
+    assert fields[0].snowflake_type == "VARCHAR"

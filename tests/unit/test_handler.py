@@ -360,6 +360,44 @@ def test_handler_evolve_schema_action_returns_warnings(base_payload):
     assert any("payload.b" in warning for warning in result["warnings"])
 
 
+def test_handler_evolve_schema_action_returns_error_status_for_incompatible_type(
+    base_payload,
+):
+    snowflake = FakeSnowflake(
+        table_exists=True,
+        existing_columns=[
+            SnowflakeColumn("payload", 'OBJECT("a" VARCHAR)'),
+        ],
+    )
+    runner = IcebergSyncRunner(object(), snowflake_client=snowflake)
+    result = runner.evolve_schema(
+        {
+            "action": "evolve_schema",
+            "internal_relation": base_payload["internal_relation"],
+            "columns": [
+                {
+                    "source_name": "payload",
+                    "snowflake_type": 'OBJECT("a" BOOLEAN)',
+                    "nullable": True,
+                    "fields": [
+                        {
+                            "source_name": "a",
+                            "snowflake_type": "BOOLEAN",
+                            "nullable": True,
+                            "fields": [],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert result["status"] == "error"
+    assert "incompatible type change" in result["error_message"]
+    assert result["altered_schema"] is False
+    assert not any(call[0] == "set_column_data_types" for call in snowflake.calls)
+
+
 def test_handler_existing_table_rejects_schema_change(base_payload):
     snowflake = FakeSnowflake(
         table_exists=True,

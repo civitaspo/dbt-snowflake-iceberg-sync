@@ -383,26 +383,38 @@ class IcebergSyncRunner:
     def evolve_schema(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Describe, plan, and apply additive/nested schema evolution."""
 
-        if not isinstance(payload, dict):
-            raise ConfigError("evolve_schema payload must be an object")
-        relation = _relation_from_payload(payload.get("internal_relation"), "internal_relation")
-        raw_columns = payload.get("columns")
-        if not isinstance(raw_columns, list) or not raw_columns:
-            raise ConfigError("evolve_schema columns must be a non-empty list")
-        desired_columns = columns_from_payload(raw_columns)
-        existing_columns = self.snowflake.describe_table(relation)
-        plan = plan_schema_evolution(existing_columns, desired_columns)
-        if plan.alter_columns:
-            self.snowflake.set_column_data_types(relation, list(plan.alter_columns))
-        if plan.add_columns:
-            self.snowflake.add_columns(relation, list(plan.add_columns))
-        return {
-            "status": "success",
-            "altered_schema": plan.altered,
-            "added_column_count": len(plan.add_columns),
-            "altered_column_count": len(plan.alter_columns),
-            "warnings": list(plan.warnings),
-        }
+        try:
+            if not isinstance(payload, dict):
+                raise ConfigError("evolve_schema payload must be an object")
+            relation = _relation_from_payload(
+                payload.get("internal_relation"), "internal_relation"
+            )
+            raw_columns = payload.get("columns")
+            if not isinstance(raw_columns, list) or not raw_columns:
+                raise ConfigError("evolve_schema columns must be a non-empty list")
+            desired_columns = columns_from_payload(raw_columns)
+            existing_columns = self.snowflake.describe_table(relation)
+            plan = plan_schema_evolution(existing_columns, desired_columns)
+            if plan.alter_columns:
+                self.snowflake.set_column_data_types(relation, list(plan.alter_columns))
+            if plan.add_columns:
+                self.snowflake.add_columns(relation, list(plan.add_columns))
+            return {
+                "status": "success",
+                "altered_schema": plan.altered,
+                "added_column_count": len(plan.add_columns),
+                "altered_column_count": len(plan.alter_columns),
+                "warnings": list(plan.warnings),
+            }
+        except IcebergSyncError as exc:
+            return {
+                "status": "error",
+                "error_message": _sanitize_error_message(exc),
+                "altered_schema": False,
+                "added_column_count": 0,
+                "altered_column_count": 0,
+                "warnings": [],
+            }
 
     def _create_or_validate_table(
         self,

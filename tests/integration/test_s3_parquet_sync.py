@@ -270,103 +270,91 @@ def test_s3_nested_object_schema_evolution_matrix(tmp_path: Path):
     cases = [
         {
             "name": "nested_add",
-            "initial_ddl": '"payload" OBJECT("a" VARCHAR, "b" BIGINT)',
+            "initial_ddl": (
+                '"payload" OBJECT("alpha" VARCHAR, "beta" BIGINT)'
+            ),
             "desired_columns": [
                 {
                     "source_name": "payload",
-                    "snowflake_type": 'OBJECT("a" VARCHAR, "b" BIGINT, "c" VARCHAR)',
+                    "snowflake_type": (
+                        'OBJECT("alpha" VARCHAR, "beta" BIGINT, "gamma" VARCHAR)'
+                    ),
                     "nullable": True,
                     "fields": [
-                        {
-                            "source_name": "a",
-                            "snowflake_type": "VARCHAR",
-                            "nullable": True,
-                            "fields": [],
-                        },
-                        {
-                            "source_name": "b",
-                            "snowflake_type": "BIGINT",
-                            "nullable": True,
-                            "fields": [],
-                        },
-                        {
-                            "source_name": "c",
-                            "snowflake_type": "VARCHAR",
-                            "nullable": True,
-                            "fields": [],
-                        },
+                        _nested_field("alpha", "VARCHAR"),
+                        _nested_field("beta", "BIGINT"),
+                        _nested_field("gamma", "VARCHAR"),
                     ],
                 }
             ],
             "expect_success": True,
-            "expect_type_fragment": "C",
+            "expect_type_fragment": "GAMMA",
             "expect_warning_substring": None,
             "expect_altered": True,
         },
         {
             "name": "nested_reorder",
-            "initial_ddl": '"payload" OBJECT("a" VARCHAR, "b" BIGINT)',
+            "initial_ddl": (
+                '"payload" OBJECT("alpha" VARCHAR, "beta" BIGINT)'
+            ),
             "desired_columns": [
                 {
                     "source_name": "payload",
-                    "snowflake_type": 'OBJECT("b" BIGINT, "a" VARCHAR)',
+                    "snowflake_type": (
+                        'OBJECT("beta" BIGINT, "alpha" VARCHAR)'
+                    ),
                     "nullable": True,
                     "fields": [
-                        {
-                            "source_name": "b",
-                            "snowflake_type": "BIGINT",
-                            "nullable": True,
-                            "fields": [],
-                        },
-                        {
-                            "source_name": "a",
-                            "snowflake_type": "VARCHAR",
-                            "nullable": True,
-                            "fields": [],
-                        },
+                        _nested_field("beta", "BIGINT"),
+                        _nested_field("alpha", "VARCHAR"),
                     ],
                 }
             ],
             "expect_success": True,
-            "expect_type_fragment": "B",
+            # DESCRIBE spells BIGINT as NUMBER(19,0); order proves reorder ran.
+            "expect_type_fragment": "BETA NUMBER(19,0), ALPHA VARCHAR",
             "expect_warning_substring": None,
             "expect_altered": True,
         },
         {
             "name": "nested_widen",
-            "initial_ddl": '"payload" OBJECT("count" INTEGER)',
+            "initial_ddl": '"payload" OBJECT("item_count" INTEGER)',
             "desired_columns": [
                 {
                     "source_name": "payload",
-                    "snowflake_type": 'OBJECT("count" BIGINT)',
+                    "snowflake_type": 'OBJECT("item_count" BIGINT)',
                     "nullable": True,
                     "fields": [
-                        _nested_field("count", "BIGINT"),
+                        _nested_field("item_count", "BIGINT"),
                     ],
                 }
             ],
             "expect_success": True,
-            "expect_type_fragment": "COUNT",
+            "expect_type_fragment": "ITEM_COUNT NUMBER(19,0)",
             "expect_warning_substring": None,
             "expect_altered": True,
         },
         {
             "name": "keep_missing_warn",
-            "initial_ddl": '"payload" OBJECT("a" VARCHAR, "b" VARCHAR)',
+            "initial_ddl": (
+                '"payload" OBJECT("alpha" VARCHAR, "legacy_note" VARCHAR)'
+            ),
             "desired_columns": [
                 {
                     "source_name": "payload",
-                    "snowflake_type": 'OBJECT("a" VARCHAR)',
+                    "snowflake_type": 'OBJECT("alpha" VARCHAR)',
                     "nullable": True,
                     "fields": [
-                        _nested_field("a", "VARCHAR"),
+                        _nested_field("alpha", "VARCHAR"),
                     ],
                 }
             ],
             "expect_success": True,
-            "expect_type_fragment": "B",
-            # DESCRIBE keeps unquoted nested identifiers uppercase (payload.B).
-            "expect_warning_substring": "keeping nested field payload.B",
+            "expect_type_fragment": "LEGACY_NOTE",
+            # DESCRIBE keeps unquoted nested identifiers uppercase.
+            "expect_warning_substring": (
+                "keeping nested field payload.LEGACY_NOTE"
+            ),
             "expect_altered": False,
         },
         {
@@ -389,18 +377,8 @@ def test_s3_nested_object_schema_evolution_matrix(tmp_path: Path):
                             ),
                             "nullable": True,
                             "fields": [
-                                {
-                                    "source_name": "inner_a",
-                                    "snowflake_type": "VARCHAR",
-                                    "nullable": True,
-                                    "fields": [],
-                                },
-                                {
-                                    "source_name": "inner_b",
-                                    "snowflake_type": "VARCHAR",
-                                    "nullable": True,
-                                    "fields": [],
-                                },
+                                _nested_field("inner_a", "VARCHAR"),
+                                _nested_field("inner_b", "VARCHAR"),
                             ],
                         }
                     ],
@@ -432,14 +410,14 @@ def test_s3_nested_object_schema_evolution_matrix(tmp_path: Path):
         },
         {
             "name": "incompatible_type",
-            "initial_ddl": '"payload" OBJECT("a" VARCHAR)',
+            "initial_ddl": '"payload" OBJECT("alpha" VARCHAR)',
             "desired_columns": [
                 {
                     "source_name": "payload",
-                    "snowflake_type": 'OBJECT("a" BOOLEAN)',
+                    "snowflake_type": 'OBJECT("alpha" BOOLEAN)',
                     "nullable": True,
                     "fields": [
-                        _nested_field("a", "BOOLEAN"),
+                        _nested_field("alpha", "BOOLEAN"),
                     ],
                 }
             ],
@@ -450,23 +428,25 @@ def test_s3_nested_object_schema_evolution_matrix(tmp_path: Path):
         },
         {
             "name": "combined_add_reorder_widen",
-            "initial_ddl": '"payload" OBJECT("a" INTEGER, "b" VARCHAR)',
+            "initial_ddl": (
+                '"payload" OBJECT("alpha" INTEGER, "beta" VARCHAR)'
+            ),
             "desired_columns": [
                 {
                     "source_name": "payload",
                     "snowflake_type": (
-                        'OBJECT("b" VARCHAR, "a" BIGINT, "c" VARCHAR)'
+                        'OBJECT("beta" VARCHAR, "alpha" BIGINT, "gamma" VARCHAR)'
                     ),
                     "nullable": True,
                     "fields": [
-                        _nested_field("b", "VARCHAR"),
-                        _nested_field("a", "BIGINT"),
-                        _nested_field("c", "VARCHAR"),
+                        _nested_field("beta", "VARCHAR"),
+                        _nested_field("alpha", "BIGINT"),
+                        _nested_field("gamma", "VARCHAR"),
                     ],
                 }
             ],
             "expect_success": True,
-            "expect_type_fragment": "C",
+            "expect_type_fragment": "GAMMA",
             "expect_warning_substring": None,
             "expect_altered": True,
         },
@@ -505,14 +485,9 @@ def test_s3_nested_object_schema_evolution_matrix(tmp_path: Path):
                 ),
                 check=False,
             )
-            if case["expect_success"] and result.returncode != 0:
+            if result.returncode != 0:
                 raise AssertionError(
                     f"nested evolution case {case['name']} failed:\n"
-                    f"{result.stdout}\n{result.stderr}"
-                )
-            if not case["expect_success"] and result.returncode == 0:
-                raise AssertionError(
-                    f"nested evolution case {case['name']} unexpectedly succeeded:\n"
                     f"{result.stdout}\n{result.stderr}"
                 )
     finally:
@@ -986,13 +961,22 @@ def _helper_macros() -> str:
             CALL {{ procedure_relation }}(PARSE_JSON({{ payload_literal }}))
           {% endset %}
           {% set result_table = run_query(call_sql) %}
-          {% if not expect_success %}
-            {{ exceptions.raise_compiler_error(
-              'expected evolve_schema to fail for incompatible nested type change'
-            ) }}
-          {% endif %}
           {% set raw = result_table.columns[0].values()[0] %}
           {% set evolve_result = fromjson(raw) if raw is string else raw %}
+          {% if not expect_success %}
+            {% set error_message = evolve_result.get('error_message', '') | string %}
+            {% if evolve_result.get('status') == 'success' %}
+              {{ exceptions.raise_compiler_error(
+                'expected evolve_schema to reject incompatible nested type change'
+              ) }}
+            {% endif %}
+            {% if 'incompatible type change' not in error_message %}
+              {{ exceptions.raise_compiler_error(
+                'expected incompatible type change error, found ' ~ evolve_result
+              ) }}
+            {% endif %}
+            {{ return('') }}
+          {% endif %}
           {% if evolve_result.get('status') != 'success' %}
             {{ exceptions.raise_compiler_error(
               'evolve_schema failed: ' ~ evolve_result
@@ -1095,21 +1079,27 @@ def _helper_macros() -> str:
 
 def _profile_yaml(*, database: str, schema: str) -> str:
     optional_lines = []
-    password = os.environ.get("SNOWFLAKE_PASSWORD")
-    private_key_path = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH")
-    authenticator = os.environ.get("SNOWFLAKE_AUTHENTICATOR")
+    password = os.environ.get("SNOWFLAKE_PASSWORD") or None
+    private_key_path = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH") or None
+    authenticator = os.environ.get("SNOWFLAKE_AUTHENTICATOR") or None
     if authenticator is None and not password and not private_key_path:
         authenticator = "externalbrowser"
 
     for profile_name, value in (
-        ("role", os.environ.get("SNOWFLAKE_ROLE")),
-        ("warehouse", os.environ.get("SNOWFLAKE_WAREHOUSE")),
+        ("role", os.environ.get("SNOWFLAKE_ROLE") or None),
+        ("warehouse", os.environ.get("SNOWFLAKE_WAREHOUSE") or None),
         ("authenticator", authenticator),
-        ("password", password),
-        ("private_key_path", private_key_path),
     ):
         if value:
             optional_lines.append(f"      {profile_name}: {value}")
+    if password:
+        optional_lines.append(
+            "      password: \"{{ env_var('SNOWFLAKE_PASSWORD') }}\""
+        )
+    if private_key_path:
+        optional_lines.append(
+            "      private_key_path: \"{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}\""
+        )
 
     return (
         textwrap.dedent(
