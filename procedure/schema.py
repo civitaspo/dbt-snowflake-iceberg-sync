@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .errors import SchemaError
@@ -43,6 +43,11 @@ UNSUPPORTED_PARQUET_TYPE_MARKERS = {
     "VECTOR",
 }
 
+_DECIMAL_TYPE_PATTERN = re.compile(
+    r"^NUMBER\((\d+),\s*(\d+)\)$",
+    re.IGNORECASE,
+)
+
 
 @dataclass(frozen=True)
 class SnowflakeColumn:
@@ -64,6 +69,17 @@ class ViewColumn:
     source_name: str
     alias: str
     expression: str | None = None
+
+
+@dataclass(frozen=True)
+class SchemaEvolutionPlan:
+    add_columns: tuple[SnowflakeColumn, ...] = ()
+    alter_columns: tuple[SnowflakeColumn, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    @property
+    def altered(self) -> bool:
+        return bool(self.add_columns or self.alter_columns)
 
 
 def map_bigquery_schema(fields: list[dict[str, Any]]) -> list[SnowflakeColumn]:
@@ -137,37 +153,403 @@ def validate_view_aliases(columns: list[SnowflakeColumn]) -> None:
 def validate_schema_compatibility(
     existing_columns: list[SnowflakeColumn], desired_columns: list[SnowflakeColumn]
 ) -> None:
-    """Allow only safe additive schema evolution.
+    """Validate schema evolution without applying DDL."""
 
-    The first scope is intentionally conservative: existing columns must keep
-    order, names, and exact mapped types. New columns may be appended.
+    plan_schema_evolution(existing_columns, desired_columns)
+
+
+def plan_schema_evolution(
+    existing_columns: list[SnowflakeColumn], desired_columns: list[SnowflakeColumn]
+) -> SchemaEvolutionPlan:
+    """Plan top-level additive columns and nested structured-type evolution.
+
+    Top-level policy remains conservative: order/names must match and types must
+    stay equivalent after normalization (no top-level widen/remove/reorder).
+
+    Nested OBJECT / ARRAY(OBJECT) fields support add, reorder, and Iceberg type
+    widening. Existing nested fields missing from the desired schema are kept
+    (never dropped) and reported as warnings. Nested rename is not inferred.
     """
 
     if len(existing_columns) > len(desired_columns):
         raise SchemaError("source schema removed one or more existing columns")
+
+    alter_columns: list[SnowflakeColumn] = []
+    warnings: list[str] = []
     for index, existing in enumerate(existing_columns):
         desired = desired_columns[index]
-        if existing.source_name != desired.source_name:
+        if _field_key(existing.source_name) != _field_key(desired.source_name):
             raise SchemaError(
                 "source schema reordered or renamed columns; expected "
                 f"{existing.source_name!r}, found {desired.source_name!r}"
             )
-        _assert_same_column(existing, desired)
+        altered, column_warnings = _plan_top_level_column(existing, desired)
+        warnings.extend(column_warnings)
+        if altered is not None:
+            alter_columns.append(altered)
+
+    add_columns = tuple(desired_columns[len(existing_columns) :])
+    return SchemaEvolutionPlan(
+        add_columns=add_columns,
+        alter_columns=tuple(alter_columns),
+        warnings=tuple(warnings),
+    )
 
 
-def _assert_same_column(existing: SnowflakeColumn, desired: SnowflakeColumn) -> None:
+def columns_from_payload(
+    columns: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> list[SnowflakeColumn]:
+    """Rebuild SnowflakeColumn objects from procedure/materialization payloads."""
+
+    result: list[SnowflakeColumn] = []
+    for index, raw in enumerate(columns):
+        if not isinstance(raw, dict):
+            raise SchemaError(f"columns[{index}] must be an object")
+        result.append(_column_from_payload(raw, index))
+    return result
+
+
+def enrich_column_fields(column: SnowflakeColumn) -> SnowflakeColumn:
+    """Populate nested fields by parsing structured Snowflake type strings."""
+
+    if column.fields:
+        enriched_children = tuple(enrich_column_fields(child) for child in column.fields)
+        if enriched_children != column.fields:
+            return replace(column, fields=enriched_children)
+        return column
+    parsed_fields = parse_structured_fields(column.snowflake_type)
+    if not parsed_fields:
+        return column
+    return replace(column, fields=parsed_fields)
+
+
+def parse_structured_fields(snowflake_type: str) -> tuple[SnowflakeColumn, ...]:
+    """Parse OBJECT(...) / ARRAY(OBJECT(...)) nested fields from a type string."""
+
+    text = snowflake_type.strip()
+    # TODO: Support structured MAP(...) storage and evolution when a source needs it.
+    if _normalized_type(text).startswith("MAP("):
+        return ()
+    kind = _structured_kind(text)
+    if kind == "array_object":
+        inner = _paren_content(text, prefix="ARRAY")
+        return _parse_object_fields(inner)
+    if kind == "object":
+        return _parse_object_fields(text)
+    return ()
+
+
+def _plan_top_level_column(
+    existing: SnowflakeColumn, desired: SnowflakeColumn
+) -> tuple[SnowflakeColumn | None, list[str]]:
+    existing = enrich_column_fields(existing)
+    desired = enrich_column_fields(desired)
+    existing_kind = _structured_kind(existing.snowflake_type)
+    desired_kind = _structured_kind(desired.snowflake_type)
+
+    if existing_kind in {"object", "array_object"} or desired_kind in {"object", "array_object"}:
+        if existing_kind != desired_kind:
+            raise SchemaError(
+                f"incompatible type change for {existing.source_name}: "
+                f"{existing.snowflake_type} -> {desired.snowflake_type}"
+            )
+        merged, warnings, changed = _merge_structured_fields(
+            existing.fields,
+            desired.fields,
+            path=existing.source_name,
+            kind=existing_kind or desired_kind or "object",
+        )
+        if not changed:
+            return None, warnings
+        snowflake_type = _render_structured_type(existing_kind or "object", merged)
+        return (
+            replace(
+                desired,
+                snowflake_type=snowflake_type,
+                fields=merged,
+                nullable=existing.nullable,
+            ),
+            warnings,
+        )
+
     if _normalized_type(existing.snowflake_type) != _normalized_type(desired.snowflake_type):
         raise SchemaError(
             f"incompatible type change for {existing.source_name}: "
             f"{existing.snowflake_type} -> {desired.snowflake_type}"
         )
-    if len(existing.fields) > len(desired.fields):
-        raise SchemaError(f"nested fields were removed from {existing.source_name}")
-    for index, existing_nested in enumerate(existing.fields):
-        desired_nested = desired.fields[index]
-        if existing_nested.source_name != desired_nested.source_name:
-            raise SchemaError(f"nested field order changed under {existing.source_name}")
-        _assert_same_column(existing_nested, desired_nested)
+    return None, []
+
+
+def _merge_structured_fields(
+    existing_fields: tuple[SnowflakeColumn, ...],
+    desired_fields: tuple[SnowflakeColumn, ...],
+    *,
+    path: str,
+    kind: str,
+) -> tuple[tuple[SnowflakeColumn, ...], list[str], bool]:
+    existing_fields = tuple(enrich_column_fields(field) for field in existing_fields)
+    desired_fields = tuple(enrich_column_fields(field) for field in desired_fields)
+    existing_by_key = {_field_key(field.source_name): field for field in existing_fields}
+    desired_by_key = {_field_key(field.source_name): field for field in desired_fields}
+    if len(existing_by_key) != len(existing_fields):
+        raise SchemaError(f"duplicate nested field names under {path}")
+    if len(desired_by_key) != len(desired_fields):
+        raise SchemaError(f"duplicate nested field names under {path}")
+
+    merged: list[SnowflakeColumn] = []
+    warnings: list[str] = []
+    changed = False
+
+    for desired in desired_fields:
+        key = _field_key(desired.source_name)
+        existing = existing_by_key.get(key)
+        if existing is None:
+            merged.append(desired)
+            changed = True
+            continue
+        child, child_warnings, child_changed = _merge_nested_column(
+            existing, desired, path=f"{path}.{desired.source_name}"
+        )
+        warnings.extend(child_warnings)
+        merged.append(child)
+        # Case-only identifier spelling differences are the same field; do not
+        # force SET DATA TYPE solely to rewrite quotes/case from DESCRIBE.
+        if child_changed:
+            changed = True
+
+    for existing in existing_fields:
+        key = _field_key(existing.source_name)
+        if key in desired_by_key:
+            continue
+        warnings.append(
+            f"keeping nested field {path}.{existing.source_name} absent from source schema"
+        )
+        merged.append(existing)
+
+    matched_existing_order = [
+        _field_key(field.source_name)
+        for field in existing_fields
+        if _field_key(field.source_name) in desired_by_key
+    ]
+    matched_desired_order = [_field_key(field.source_name) for field in desired_fields]
+    if matched_existing_order != matched_desired_order:
+        changed = True
+
+    _ = kind  # kind is selected by the caller when rendering the merged type.
+    return tuple(merged), warnings, changed
+
+
+def _merge_nested_column(
+    existing: SnowflakeColumn, desired: SnowflakeColumn, *, path: str
+) -> tuple[SnowflakeColumn, list[str], bool]:
+    existing = enrich_column_fields(existing)
+    desired = enrich_column_fields(desired)
+    existing_kind = _structured_kind(existing.snowflake_type)
+    desired_kind = _structured_kind(desired.snowflake_type)
+
+    if existing_kind in {"object", "array_object"} or desired_kind in {"object", "array_object"}:
+        if existing_kind != desired_kind:
+            raise SchemaError(
+                f"incompatible type change for {path}: "
+                f"{existing.snowflake_type} -> {desired.snowflake_type}"
+            )
+        merged_fields, warnings, changed = _merge_structured_fields(
+            existing.fields,
+            desired.fields,
+            path=path,
+            kind=existing_kind or desired_kind or "object",
+        )
+        snowflake_type = _render_structured_type(existing_kind or "object", merged_fields)
+        merged_column = replace(
+            desired,
+            snowflake_type=snowflake_type,
+            fields=merged_fields,
+            nullable=existing.nullable,
+        )
+        if not changed and _normalized_type(existing.snowflake_type) == _normalized_type(
+            snowflake_type
+        ):
+            return merged_column, warnings, False
+        return merged_column, warnings, True
+
+    if _types_compatible(existing.snowflake_type, desired.snowflake_type):
+        type_changed = _normalized_type(existing.snowflake_type) != _normalized_type(
+            desired.snowflake_type
+        )
+        # Prefer desired spelling in the in-memory merge result, but skip DDL
+        # when only identifier case/quoting differs from DESCRIBE output.
+        # Preserve existing nested nullability across re-renders.
+        return replace(desired, nullable=existing.nullable), [], type_changed
+
+    if _can_widen_type(existing.snowflake_type, desired.snowflake_type):
+        return replace(desired, nullable=existing.nullable), [], True
+
+    raise SchemaError(
+        f"incompatible type change for {path}: "
+        f"{existing.snowflake_type} -> {desired.snowflake_type}"
+    )
+
+
+def _types_compatible(existing: str, desired: str) -> bool:
+    return _normalized_type(existing) == _normalized_type(desired)
+
+
+def _can_widen_type(existing: str, desired: str) -> bool:
+    """Return True when desired is an Iceberg-compatible widening of existing."""
+
+    existing_norm = _normalized_type(existing)
+    desired_norm = _normalized_type(desired)
+    if existing_norm == desired_norm:
+        return True
+
+    # Iceberg int -> long. FLOAT is normalized to DOUBLE already.
+    if _is_iceberg_int_type(existing_norm) and desired_norm in {"BIGINT", "LONG"}:
+        return True
+
+    existing_decimal = _DECIMAL_TYPE_PATTERN.fullmatch(existing_norm)
+    desired_decimal = _DECIMAL_TYPE_PATTERN.fullmatch(desired_norm)
+    if existing_decimal and desired_decimal:
+        existing_precision = int(existing_decimal.group(1))
+        existing_scale = int(existing_decimal.group(2))
+        desired_precision = int(desired_decimal.group(1))
+        desired_scale = int(desired_decimal.group(2))
+        return existing_scale == desired_scale and desired_precision >= existing_precision
+    return False
+
+
+def _is_iceberg_int_type(normalized_type: str) -> bool:
+    if normalized_type in {"INTEGER", "INT"}:
+        return True
+    match = _DECIMAL_TYPE_PATTERN.fullmatch(normalized_type)
+    return bool(match and int(match.group(2)) == 0 and int(match.group(1)) <= 10)
+
+
+def _structured_kind(snowflake_type: str) -> str | None:
+    normalized = _normalized_type(snowflake_type)
+    if normalized.startswith("ARRAY(OBJECT("):
+        return "array_object"
+    if normalized.startswith("OBJECT("):
+        return "object"
+    if normalized.startswith("MAP("):
+        return "map"
+    return None
+
+
+def _render_structured_type(kind: str, fields: tuple[SnowflakeColumn, ...]) -> str:
+    inner = ", ".join(
+        (
+            f"{quote_identifier(child.source_name)} {child.snowflake_type}"
+            f"{'' if child.nullable else ' NOT NULL'}"
+        )
+        for child in fields
+    )
+    if kind == "array_object":
+        return f"ARRAY(OBJECT({inner}))"
+    return f"OBJECT({inner})"
+
+
+def _parse_object_fields(object_type: str) -> tuple[SnowflakeColumn, ...]:
+    text = object_type.strip()
+    if not _normalized_type(text).startswith("OBJECT("):
+        raise SchemaError(f"expected OBJECT(...) type, found {object_type!r}")
+    inner = _paren_content(text, prefix="OBJECT")
+    fields: list[SnowflakeColumn] = []
+    for name, type_str in _split_object_field_defs(inner):
+        cleaned_type = _strip_null_constraint(type_str)
+        nullable = not bool(re.search(r"(?i)\bNOT\s+NULL\b", type_str))
+        nested_fields = parse_structured_fields(cleaned_type)
+        fields.append(
+            SnowflakeColumn(
+                source_name=name,
+                snowflake_type=cleaned_type,
+                nullable=nullable,
+                fields=nested_fields,
+            )
+        )
+    return tuple(fields)
+
+
+def _split_object_field_defs(inner: str) -> list[tuple[str, str]]:
+    results: list[tuple[str, str]] = []
+    index = 0
+    length = len(inner)
+    while index < length:
+        while index < length and inner[index].isspace():
+            index += 1
+        if index >= length:
+            break
+        if inner[index] == '"':
+            index += 1
+            parts: list[str] = []
+            while index < length:
+                if inner[index] == '"':
+                    if index + 1 < length and inner[index + 1] == '"':
+                        parts.append('"')
+                        index += 2
+                        continue
+                    break
+                parts.append(inner[index])
+                index += 1
+            name = "".join(parts)
+            if index >= length or inner[index] != '"':
+                raise SchemaError(f"malformed structured type field name in {inner!r}")
+            index += 1
+        else:
+            start = index
+            while index < length and (inner[index].isalnum() or inner[index] == "_"):
+                index += 1
+            name = inner[start:index]
+            if not name:
+                raise SchemaError(f"malformed structured type field list in {inner!r}")
+        while index < length and inner[index].isspace():
+            index += 1
+        type_start = index
+        depth = 0
+        while index < length:
+            char = inner[index]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            elif char == "," and depth == 0:
+                break
+            index += 1
+        type_str = inner[type_start:index].strip()
+        if not type_str:
+            raise SchemaError(f"malformed structured type field type in {inner!r}")
+        results.append((name, type_str))
+        if index < length and inner[index] == ",":
+            index += 1
+    return results
+
+
+def _paren_content(type_text: str, *, prefix: str) -> str:
+    text = type_text.strip()
+    if not text.upper().startswith(prefix.upper() + "("):
+        raise SchemaError(f"expected {prefix}(...) type, found {type_text!r}")
+    start = len(prefix)
+    while start < len(text) and text[start].isspace():
+        start += 1
+    if start >= len(text) or text[start] != "(":
+        raise SchemaError(f"expected {prefix}(...) type, found {type_text!r}")
+    depth = 0
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start + 1 : index]
+    raise SchemaError(f"unbalanced parentheses in type {type_text!r}")
+
+
+def _strip_null_constraint(type_str: str) -> str:
+    return re.sub(r"\s+NOT\s+NULL\s*$", "", type_str.strip(), flags=re.IGNORECASE)
+
+
+def _field_key(name: str) -> str:
+    return name.upper()
 
 
 def _normalized_type(snowflake_type: str) -> str:
@@ -178,6 +560,7 @@ def _normalized_type(snowflake_type: str) -> str:
     result = re.sub(r"\bTEXT\b", "VARCHAR", result)
     result = re.sub(r"\bSTRING\b", "VARCHAR", result)
     result = result.replace('"', "")
+    result = re.sub(r"\s+", " ", result).strip()
     return result
 
 
@@ -239,13 +622,12 @@ def columns_from_snowflake_describe(rows: list[Any]) -> list[SnowflakeColumn]:
         null_value = data.get("null?") or data.get("NULL?")
         if not name or not type_name:
             continue
-        columns.append(
-            SnowflakeColumn(
-                source_name=str(name),
-                snowflake_type=str(type_name).upper(),
-                nullable=str(null_value).upper() != "N",
-            )
+        column = SnowflakeColumn(
+            source_name=str(name),
+            snowflake_type=str(type_name).upper(),
+            nullable=str(null_value).upper() != "N",
         )
+        columns.append(enrich_column_fields(column))
     return columns
 
 
@@ -273,6 +655,7 @@ def _map_infer_schema_field(field: dict[str, Any]) -> SnowflakeColumn:
     )
     if not type_name:
         raise SchemaError(f"INFER_SCHEMA field {name!r} is missing TYPE")
+    # TODO: Support structured MAP(...) when INFER_SCHEMA returns MAP types.
     snowflake_type = _normalize_infer_schema_type(str(type_name))
     nullable_value = field.get("NULLABLE")
     if nullable_value is None:
@@ -283,11 +666,12 @@ def _map_infer_schema_field(field: dict[str, Any]) -> SnowflakeColumn:
         nullable = nullable_value
     else:
         nullable = str(nullable_value).strip().upper() in {"TRUE", "Y", "YES", "1"}
-    return SnowflakeColumn(
+    column = SnowflakeColumn(
         source_name=str(name),
         snowflake_type=snowflake_type,
         nullable=nullable,
     )
+    return enrich_column_fields(column)
 
 
 def _map_declared_schema_field(field: dict[str, Any], index: int) -> SnowflakeColumn:
@@ -299,6 +683,7 @@ def _map_declared_schema_field(field: dict[str, Any], index: int) -> SnowflakeCo
     type_name = field.get("type") or field.get("TYPE")
     if type_name is None or str(type_name).strip() == "":
         raise SchemaError(f"columns[{index}].type is required")
+    # TODO: Support declared MAP(...) column types when callers need them.
     snowflake_type = _normalize_infer_schema_type(str(type_name).strip())
     nullable_value = field.get("nullable")
     if nullable_value is None:
@@ -317,13 +702,49 @@ def _map_declared_schema_field(field: dict[str, Any], index: int) -> SnowflakeCo
     if expression_value is not None and str(expression_value).strip() == "":
         raise SchemaError(f"columns[{index}].expression must not be empty when set")
     expression = str(expression_value).strip() if expression_value is not None else None
-    return SnowflakeColumn(
+    column = SnowflakeColumn(
         source_name=str(name),
         snowflake_type=snowflake_type,
         nullable=nullable,
         alias=alias,
         expression=expression,
     )
+    return enrich_column_fields(column)
+
+
+def _column_from_payload(raw: dict[str, Any], index: int) -> SnowflakeColumn:
+    name = raw.get("source_name") or raw.get("name") or raw.get("NAME")
+    if name is None or str(name).strip() == "":
+        raise SchemaError(f"columns[{index}].source_name is required")
+    type_name = raw.get("snowflake_type") or raw.get("type") or raw.get("TYPE")
+    if type_name is None or str(type_name).strip() == "":
+        raise SchemaError(f"columns[{index}].snowflake_type is required")
+    nullable_value = raw.get("nullable")
+    if nullable_value is None:
+        nullable = True
+    elif isinstance(nullable_value, bool):
+        nullable = nullable_value
+    else:
+        nullable = str(nullable_value).strip().upper() in {"TRUE", "Y", "YES", "1"}
+    nested_raw = raw.get("fields") or ()
+    nested_fields = tuple(
+        _column_from_payload(child, index)
+        for child in nested_raw
+        if isinstance(child, dict)
+    )
+    alias_value = raw.get("alias")
+    alias = str(alias_value).strip() if alias_value is not None else None
+    expression_value = raw.get("expression")
+    expression = str(expression_value).strip() if expression_value is not None else None
+    column = SnowflakeColumn(
+        source_name=str(name),
+        snowflake_type=str(type_name),
+        nullable=nullable,
+        fields=nested_fields,
+        alias=alias or None,
+        expression=expression or None,
+    )
+    return enrich_column_fields(column)
 
 
 def _normalize_infer_schema_type(type_name: str) -> str:

@@ -118,12 +118,16 @@ format.
 
 Limits:
 
-- Schema evolution remains additive-only (same conservative rule as BigQuery).
+- Top-level schema evolution remains additive-only. Nested `OBJECT` /
+  `ARRAY(OBJECT)` fields also support append, reorder, and Iceberg type
+  widening via `SET DATA TYPE` before COPY; missing nested keys are kept with
+  a warning (never dropped).
 - Files under a load must share a compatible Parquet schema when relying on
   `INFER_SCHEMA`.
 - Nested / structured type spellings depend on live `INFER_SCHEMA` output and
   are normalized where needed. Declared `type` values are passed through to
   Iceberg DDL after light normalization.
+- Structured `MAP(...)` is not supported yet (TODO in schema mapping).
 
 ## Load semantics and FORCE
 

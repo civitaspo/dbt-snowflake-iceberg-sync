@@ -30,7 +30,8 @@ def test_iceberg_sync_dbt_run_orchestrates_snowflake_work_in_dbt(
     assert any(sql.startswith("call ") for sql in normalized_statements)
     assert any("system$wait" in sql for sql in normalized_statements)
     assert any("create iceberg table if not exists" in sql for sql in normalized_statements)
-    assert any(sql.startswith("describe table") for sql in normalized_statements)
+    # New tables skip evolve_schema; schema comes from CREATE IF NOT EXISTS.
+    assert not any('"action": "evolve_schema"' in call["sql"] for call in executed_sql)
     assert not any(sql.startswith("drop iceberg table") for sql in normalized_statements)
     assert not any(sql.startswith("execute immediate ") for sql in normalized_statements)
     assert any("begin; delete from" in sql for sql in normalized_statements)
@@ -119,25 +120,35 @@ def test_iceberg_sync_dbt_run_skips_when_export_is_skipped(
     assert not any("create or replace view" in sql for sql in normalized_statements)
 
 
-def test_iceberg_sync_dbt_run_adds_columns_with_alter_iceberg_table(
+def test_iceberg_sync_dbt_run_evolves_schema_via_procedure_action(
     tmp_path: Path,
     monkeypatch,
 ):
     run_result, executed_sql = _run_dbt_iceberg_sync_model(
         tmp_path,
         monkeypatch,
-        [_successful_export_result(include_customer=True)],
+        [
+            _successful_export_result(include_customer=True),
+            {
+                "status": "success",
+                "altered_schema": True,
+                "added_column_count": 1,
+                "altered_column_count": 0,
+                "warnings": [],
+            },
+        ],
+        internal_table_exists=True,
     )
-
-    normalized_statements = [_normalize_sql(call["sql"]) for call in executed_sql]
 
     assert run_result.success
-    assert any(
-        sql.startswith('alter iceberg table "test_database"."test_schema"."__model"')
-        and 'add column "customername" varchar' in sql
-        for sql in normalized_statements
+    evolve_calls = [
+        call["sql"] for call in executed_sql if '"action": "evolve_schema"' in call["sql"]
+    ]
+    assert evolve_calls
+    assert "CustomerName" in evolve_calls[0]
+    assert not any(
+        _normalize_sql(call["sql"]).startswith("alter ") for call in executed_sql
     )
-    assert not any(sql.startswith("alter table ") for sql in normalized_statements)
 
 
 def test_iceberg_sync_dbt_run_rejects_invalid_outer_retry_number(
@@ -164,6 +175,7 @@ def _run_dbt_iceberg_sync_model(
     *,
     model_config_extra: str = "",
     config_style: str = "legacy",
+    internal_table_exists: bool = False,
 ):
     repo_root = Path(__file__).resolve().parents[2]
     project_dir = tmp_path / "project"
@@ -303,7 +315,7 @@ def _run_dbt_iceberg_sync_model(
             result = procedure_queue.pop(0)
             return response, agate.Table([[json.dumps(result)]], ["RESULT"])
         if normalized.startswith("show objects"):
-            return response, _show_objects_table()
+            return response, _show_objects_table(include_internal=internal_table_exists)
         if normalized.startswith("show terse schemas"):
             return response, agate.Table([["TEST_SCHEMA"]], ["name"])
         return response, empty_table()
@@ -331,9 +343,12 @@ def _run_dbt_iceberg_sync_model(
     return run_result, executed_sql
 
 
-def _show_objects_table() -> agate.Table:
+def _show_objects_table(*, include_internal: bool = False) -> agate.Table:
+    rows = [["TEST_DATABASE", "TEST_SCHEMA", "UNRELATED", "TABLE", "N", "N"]]
+    if include_internal:
+        rows.append(["TEST_DATABASE", "TEST_SCHEMA", "__MODEL", "BASE TABLE", "N", "Y"])
     return agate.Table(
-        [["TEST_DATABASE", "TEST_SCHEMA", "UNRELATED", "TABLE", "N", "N"]],
+        rows,
         ["database_name", "schema_name", "name", "kind", "is_dynamic", "is_iceberg"],
     )
 

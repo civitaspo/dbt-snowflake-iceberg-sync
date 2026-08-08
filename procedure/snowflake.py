@@ -13,6 +13,7 @@ from .errors import ConfigError, SnowflakeExecutionError
 from .schema import SnowflakeColumn, ViewColumn, columns_from_snowflake_describe
 from .sql import (
     alter_table_add_columns_sql,
+    alter_table_set_column_data_type_sql,
     copy_into_sql,
     create_iceberg_table_sql,
     create_or_alter_run_log_table_sql,
@@ -95,6 +96,12 @@ class SnowflakeClient:
     def add_columns(self, relation: RelationConfig, columns: list[SnowflakeColumn]) -> None:
         for statement in alter_table_add_columns_sql(relation, columns):
             self.execute(statement)
+
+    def set_column_data_types(
+        self, relation: RelationConfig, columns: list[SnowflakeColumn]
+    ) -> None:
+        for column in columns:
+            self.execute(alter_table_set_column_data_type_sql(relation, column))
 
     def create_or_replace_view(
         self,

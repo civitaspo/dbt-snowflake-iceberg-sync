@@ -83,6 +83,86 @@ def test_dbt_extract_smoke(tmp_path: Path):
         _cleanup(context, [model_name])
 
 
+def test_dbt_select_nested_object_field_add(tmp_path: Path):
+    """BigQuery STRUCT field add evolves Snowflake OBJECT before COPY."""
+
+    context = _integration_context(tmp_path, "nested_add")
+    staging_dataset_id = _required_env("DBT_SNOWFLAKE_ICEBERG_SYNC_BIGQUERY_STAGING_DATASET_ID")
+    model_name = f"iceberg_sync_nested_add_{context.run_id}"
+    export_prefix = _export_prefix(context, model_name)
+    table_id = f"nested_add_{context.run_id}"
+    v1_sql = (
+        "SELECT STRUCT('id-1' AS id, 'desc-1' AS description) AS consumption_model"
+    )
+    v2_sql = (
+        "SELECT STRUCT("
+        "'id-1' AS id, "
+        "'desc-1' AS description, "
+        "'sub-1' AS applied_subscription_instance_id"
+        ") AS consumption_model"
+    )
+    _write_project(
+        context,
+        {
+            model_name: _select_model_sql(
+                context,
+                model_name=model_name,
+                model_sql=v1_sql,
+                predicates=[],
+                predicate_type="none",
+                table_id=table_id,
+                staging_dataset_id=staging_dataset_id,
+                base_location=export_prefix,
+                export_prefix=export_prefix,
+                staging_table_reuse=False,
+                force_rebuild_staging_table=True,
+            )
+        },
+    )
+    try:
+        _run_dbt(context, "deps")
+        _run_dbt(context, "run", "--select", model_name)
+        _write_project(
+            context,
+            {
+                model_name: _select_model_sql(
+                    context,
+                    model_name=model_name,
+                    model_sql=v2_sql,
+                    predicates=[],
+                    predicate_type="none",
+                    table_id=table_id,
+                    staging_dataset_id=staging_dataset_id,
+                    base_location=export_prefix,
+                    export_prefix=export_prefix,
+                    staging_table_reuse=False,
+                    force_rebuild_staging_table=True,
+                )
+            },
+        )
+        _run_dbt(context, "run", "--select", model_name)
+        _assert_models(
+            context,
+            [
+                _assertion(
+                    context,
+                    model_name,
+                    expected_rows=1,
+                    expected_modes=["full_refresh", "full_refresh"],
+                    require_staging_table=True,
+                    expected_column_types=[
+                        {
+                            "name": "CONSUMPTION_MODEL",
+                            "type_contains": "APPLIED_SUBSCRIPTION_INSTANCE_ID",
+                        }
+                    ],
+                )
+            ],
+        )
+    finally:
+        _cleanup(context, [model_name])
+
+
 def test_dbt_install_with_relative_handler_local_path(tmp_path: Path):
     """Relative handler_local_path must absolute-ize before PUT (Fusion + core)."""
     context = _integration_context(tmp_path, "relpath")
@@ -1473,7 +1553,17 @@ def _assertion_macros() -> str:
               {% endfor %}
               {% for expected in model.get('expected_column_types') %}
                 {% set actual_type = actual_column_types.get(expected['name'] | lower) %}
-                {% if actual_type != (expected['type'] | upper) %}
+                {% if expected.get('type_contains') is not none %}
+                  {% set needle = expected['type_contains'] | upper %}
+                  {% if actual_type is none or needle not in actual_type %}
+                    {% set message %}
+                      {{ model['internal_relation'] }} expected column
+                      {{ expected['name'] }} type containing {{ expected['type_contains'] }},
+                      got {{ actual_type }}
+                    {% endset %}
+                    {{ exceptions.raise_compiler_error(message) }}
+                  {% endif %}
+                {% elif actual_type != (expected['type'] | upper) %}
                   {% set message %}
                     {{ model['internal_relation'] }} expected column
                     {{ expected['name'] }} type {{ expected['type'] }},
@@ -1663,15 +1753,27 @@ def _dbt_executable() -> str:
 
 def _profile_yaml(*, database: str, schema: str) -> str:
     optional_lines = []
-    for env_name, profile_name in (
-        ("SNOWFLAKE_ROLE", "role"),
-        ("SNOWFLAKE_WAREHOUSE", "warehouse"),
-        ("SNOWFLAKE_PASSWORD", "password"),
-        ("SNOWFLAKE_PRIVATE_KEY_PATH", "private_key_path"),
+    password = os.environ.get("SNOWFLAKE_PASSWORD") or None
+    private_key_path = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH") or None
+    authenticator = os.environ.get("SNOWFLAKE_AUTHENTICATOR") or None
+    if authenticator is None and not password and not private_key_path:
+        authenticator = "externalbrowser"
+
+    for profile_name, value in (
+        ("role", os.environ.get("SNOWFLAKE_ROLE") or None),
+        ("warehouse", os.environ.get("SNOWFLAKE_WAREHOUSE") or None),
+        ("authenticator", authenticator),
     ):
-        value = os.environ.get(env_name)
         if value:
             optional_lines.append(f"      {profile_name}: {value}")
+    if password:
+        optional_lines.append(
+            "      password: \"{{ env_var('SNOWFLAKE_PASSWORD') }}\""
+        )
+    if private_key_path:
+        optional_lines.append(
+            "      private_key_path: \"{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}\""
+        )
 
     return (
         textwrap.dedent(
@@ -1683,7 +1785,6 @@ def _profile_yaml(*, database: str, schema: str) -> str:
               type: snowflake
               account: {_required_env("SNOWFLAKE_ACCOUNT")}
               user: {_required_env("SNOWFLAKE_USER")}
-              authenticator: {os.environ.get("SNOWFLAKE_AUTHENTICATOR", "externalbrowser")}
               database: {database}
               schema: {schema}
               threads: 1

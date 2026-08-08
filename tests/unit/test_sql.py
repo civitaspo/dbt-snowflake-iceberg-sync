@@ -4,6 +4,7 @@ from procedure.config import parse_config
 from procedure.schema import SnowflakeColumn, ViewColumn
 from procedure.sql import (
     alter_table_add_columns_sql,
+    alter_table_set_column_data_type_sql,
     copy_into_sql,
     create_iceberg_table_sql,
     create_or_alter_run_log_table_sql,
@@ -108,6 +109,26 @@ def test_add_columns_uses_alter_iceberg_table(base_payload):
         'ALTER ICEBERG TABLE "ANALYTICS"."PUBLIC"."__ORDERS" ADD COLUMN "CustomerName" VARCHAR'
     ]
     assert not statements[0].startswith("ALTER TABLE ")
+
+
+def test_set_column_data_type_uses_alter_iceberg_table(base_payload):
+    config = parse_config(base_payload)
+
+    sql = alter_table_set_column_data_type_sql(
+        config.internal_relation,
+        SnowflakeColumn(
+            "consumption_model",
+            'OBJECT("id" VARCHAR, "description" VARCHAR, '
+            '"applied_subscription_instance_id" VARCHAR)',
+        ),
+    )
+
+    assert sql == (
+        'ALTER ICEBERG TABLE "ANALYTICS"."PUBLIC"."__ORDERS" '
+        'ALTER COLUMN "consumption_model" SET DATA TYPE '
+        'OBJECT("id" VARCHAR, "description" VARCHAR, '
+        '"applied_subscription_instance_id" VARCHAR)'
+    )
 
 
 def test_create_view_preserves_source_case_and_aliases_lower_snake(base_payload):

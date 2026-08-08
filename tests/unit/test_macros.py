@@ -212,6 +212,16 @@ def test_type_normalization_accepts_snowflake_structured_type_canonicalization()
     assert _render_normalized_snowflake_type(existing) == _render_normalized_snowflake_type(desired)
 
 
+def test_validate_or_add_columns_macro_calls_evolve_schema_action():
+    macro_path = Path(__file__).resolve().parents[2] / "macros/iceberg_sync/orchestration.sql"
+    macro_source = macro_path.read_text(encoding="utf-8")
+
+    assert "action': 'evolve_schema'" in macro_source or 'action": "evolve_schema"' in macro_source
+    assert "iceberg_sync_evolve_schema" in macro_source
+    assert "exceptions.warn" in macro_source
+    assert "ALTER ICEBERG TABLE {{ internal_relation }} ADD COLUMN" not in macro_source
+
+
 def test_deployment_config_honors_explicit_procedure_overrides():
     config = _render_deployment_config(
         {

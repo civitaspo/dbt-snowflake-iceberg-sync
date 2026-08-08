@@ -5,8 +5,11 @@ import pytest
 from procedure.errors import SchemaError
 from procedure.schema import (
     SnowflakeColumn,
+    enrich_column_fields,
     map_bigquery_schema,
     map_declared_columns,
+    parse_structured_fields,
+    plan_schema_evolution,
     validate_schema_compatibility,
     view_columns,
 )
@@ -297,11 +300,11 @@ def test_schema_compatibility_rejects_reordered_columns():
         validate_schema_compatibility(existing, desired)
 
 
-def test_schema_compatibility_rejects_nested_field_removal():
+def test_schema_evolution_keeps_missing_nested_fields_with_warning():
     existing = [
         SnowflakeColumn(
             "payload",
-            "OBJECT",
+            'OBJECT("a" VARCHAR, "b" VARCHAR)',
             fields=(
                 SnowflakeColumn("a", "VARCHAR"),
                 SnowflakeColumn("b", "VARCHAR"),
@@ -311,20 +314,49 @@ def test_schema_compatibility_rejects_nested_field_removal():
     desired = [
         SnowflakeColumn(
             "payload",
-            "OBJECT",
+            'OBJECT("a" VARCHAR)',
             fields=(SnowflakeColumn("a", "VARCHAR"),),
         )
     ]
 
-    with pytest.raises(SchemaError, match="nested fields were removed"):
-        validate_schema_compatibility(existing, desired)
+    plan = plan_schema_evolution(existing, desired)
+    assert plan.alter_columns == ()
+    assert any("keeping nested field payload.b" in warning for warning in plan.warnings)
 
 
-def test_schema_compatibility_rejects_nested_field_reorder():
+def test_schema_evolution_keep_missing_ignores_describe_case_and_varchar_length():
+    """DESCRIBE often uppercases unquoted nested names and expands VARCHAR(n)."""
+
+    existing = [
+        enrich_column_fields(
+            SnowflakeColumn(
+                "PAYLOAD",
+                "OBJECT(A VARCHAR(134217728), B VARCHAR(134217728))",
+            )
+        )
+    ]
+    desired = [
+        SnowflakeColumn(
+            "payload",
+            'OBJECT("a" VARCHAR)',
+            fields=(SnowflakeColumn("a", "VARCHAR"),),
+        )
+    ]
+
+    plan = plan_schema_evolution(existing, desired)
+    assert plan.alter_columns == ()
+    assert any(
+        "keeping nested field" in warning
+        and warning.upper().endswith(".B ABSENT FROM SOURCE SCHEMA")
+        for warning in plan.warnings
+    )
+
+
+def test_schema_evolution_allows_nested_field_reorder():
     existing = [
         SnowflakeColumn(
             "payload",
-            "OBJECT",
+            'OBJECT("a" VARCHAR, "b" VARCHAR)',
             fields=(
                 SnowflakeColumn("a", "VARCHAR"),
                 SnowflakeColumn("b", "VARCHAR"),
@@ -334,7 +366,7 @@ def test_schema_compatibility_rejects_nested_field_reorder():
     desired = [
         SnowflakeColumn(
             "payload",
-            "OBJECT",
+            'OBJECT("b" VARCHAR, "a" VARCHAR)',
             fields=(
                 SnowflakeColumn("b", "VARCHAR"),
                 SnowflakeColumn("a", "VARCHAR"),
@@ -342,8 +374,112 @@ def test_schema_compatibility_rejects_nested_field_reorder():
         )
     ]
 
-    with pytest.raises(SchemaError, match="nested field order changed"):
-        validate_schema_compatibility(existing, desired)
+    plan = plan_schema_evolution(existing, desired)
+    assert len(plan.alter_columns) == 1
+    assert plan.alter_columns[0].snowflake_type == 'OBJECT("b" VARCHAR, "a" VARCHAR)'
+
+
+def test_parse_structured_fields_from_describe_spelling():
+    fields = parse_structured_fields(
+        "OBJECT(ID VARCHAR(134217728), DESCRIPTION VARCHAR(134217728))"
+    )
+    assert [field.source_name for field in fields] == ["ID", "DESCRIPTION"]
+    assert fields[0].snowflake_type == "VARCHAR(134217728)"
+
+
+def test_schema_evolution_allows_nested_field_add_like_consumption_model():
+    existing = [
+        SnowflakeColumn(
+            "consumption_model",
+            "OBJECT(ID VARCHAR(134217728), DESCRIPTION VARCHAR(134217728))",
+        )
+    ]
+    desired = [
+        SnowflakeColumn(
+            "consumption_model",
+            'OBJECT("id" VARCHAR, "description" VARCHAR, '
+            '"applied_subscription_instance_id" VARCHAR)',
+            fields=(
+                SnowflakeColumn("id", "VARCHAR"),
+                SnowflakeColumn("description", "VARCHAR"),
+                SnowflakeColumn("applied_subscription_instance_id", "VARCHAR"),
+            ),
+        )
+    ]
+
+    plan = plan_schema_evolution(existing, desired)
+    assert len(plan.alter_columns) == 1
+    altered = plan.alter_columns[0]
+    assert '"applied_subscription_instance_id" VARCHAR' in altered.snowflake_type
+    assert '"id" VARCHAR' in altered.snowflake_type
+
+
+def test_schema_evolution_allows_nested_type_widen():
+    existing = [
+        SnowflakeColumn(
+            "payload",
+            'OBJECT("count" INTEGER)',
+            fields=(SnowflakeColumn("count", "INTEGER"),),
+        )
+    ]
+    desired = [
+        SnowflakeColumn(
+            "payload",
+            'OBJECT("count" BIGINT)',
+            fields=(SnowflakeColumn("count", "BIGINT"),),
+        )
+    ]
+
+    plan = plan_schema_evolution(existing, desired)
+    assert len(plan.alter_columns) == 1
+    assert '"count" BIGINT' in plan.alter_columns[0].snowflake_type
+
+
+def test_schema_evolution_keeps_old_and_adds_different_nested_name():
+    existing = [
+        SnowflakeColumn(
+            "payload",
+            'OBJECT("old_name" VARCHAR)',
+            fields=(SnowflakeColumn("old_name", "VARCHAR"),),
+        )
+    ]
+    desired = [
+        SnowflakeColumn(
+            "payload",
+            'OBJECT("new_name" VARCHAR)',
+            fields=(SnowflakeColumn("new_name", "VARCHAR"),),
+        )
+    ]
+
+    plan = plan_schema_evolution(existing, desired)
+    assert len(plan.alter_columns) == 1
+    assert '"new_name" VARCHAR' in plan.alter_columns[0].snowflake_type
+    assert '"old_name" VARCHAR' in plan.alter_columns[0].snowflake_type
+    assert any("old_name" in warning for warning in plan.warnings)
+
+
+def test_schema_evolution_allows_array_object_nested_add():
+    existing = [
+        SnowflakeColumn(
+            "items",
+            'ARRAY(OBJECT("sku" VARCHAR))',
+        )
+    ]
+    desired = [
+        SnowflakeColumn(
+            "items",
+            'ARRAY(OBJECT("sku" VARCHAR, "qty" BIGINT))',
+            fields=(
+                SnowflakeColumn("sku", "VARCHAR"),
+                SnowflakeColumn("qty", "BIGINT"),
+            ),
+        )
+    ]
+
+    plan = plan_schema_evolution(existing, desired)
+    assert len(plan.alter_columns) == 1
+    assert plan.alter_columns[0].snowflake_type.startswith("ARRAY(OBJECT(")
+    assert '"qty" BIGINT' in plan.alter_columns[0].snowflake_type
 
 
 def test_map_parquet_infer_schema_orders_and_normalizes_types():
@@ -369,3 +505,39 @@ def test_map_parquet_infer_schema_rejects_unsupported_types():
         map_parquet_infer_schema(
             [{"COLUMN_NAME": "geo", "TYPE": "GEOGRAPHY", "NULLABLE": True, "ORDER_ID": 1}]
         )
+
+
+def test_parse_structured_fields_preserves_nested_not_null():
+    fields = parse_structured_fields('OBJECT("id" VARCHAR NOT NULL, "name" VARCHAR)')
+    assert fields[0].nullable is False
+    assert fields[1].nullable is True
+
+
+def test_schema_evolution_preserves_nested_not_null_when_adding_field():
+    existing = [
+        enrich_column_fields(
+            SnowflakeColumn("payload", 'OBJECT("id" VARCHAR NOT NULL)')
+        )
+    ]
+    desired = [
+        SnowflakeColumn(
+            "payload",
+            'OBJECT("id" VARCHAR, "label" VARCHAR)',
+            fields=(
+                SnowflakeColumn("id", "VARCHAR"),
+                SnowflakeColumn("label", "VARCHAR"),
+            ),
+        )
+    ]
+
+    plan = plan_schema_evolution(existing, desired)
+    assert len(plan.alter_columns) == 1
+    assert plan.alter_columns[0].fields[0].nullable is False
+    assert "NOT NULL" in plan.alter_columns[0].snowflake_type
+
+
+def test_parse_structured_fields_supports_escaped_quotes_in_field_names():
+    fields = parse_structured_fields('OBJECT("a""b" VARCHAR)')
+    assert len(fields) == 1
+    assert fields[0].source_name == 'a"b'
+    assert fields[0].snowflake_type == "VARCHAR"

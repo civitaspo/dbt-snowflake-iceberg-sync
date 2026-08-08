@@ -15,6 +15,15 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
+def _nested_field(name: str, snowflake_type: str) -> dict[str, Any]:
+    return {
+        "source_name": name,
+        "snowflake_type": snowflake_type,
+        "nullable": True,
+        "fields": [],
+    }
+
+
 @dataclass(frozen=True)
 class S3IntegrationContext:
     run_id: str
@@ -250,6 +259,264 @@ def test_s3_parquet_rejects_incremental_path_without_predicate(tmp_path: Path):
         assert "incremental_predicate" in combined
     finally:
         _cleanup(context, [model_name], location_prefix)
+
+
+def test_s3_nested_object_schema_evolution_matrix(tmp_path: Path):
+    """Exercise nested OBJECT evolution against Snowflake-managed Iceberg tables."""
+
+    context = _s3_context(tmp_path, "s3_nested")
+    location_prefix = f"iceberg_sync_s3/{context.run_id}/nested_evolution"
+    _write_s3_project(context, {})
+    cases = [
+        {
+            "name": "nested_add",
+            "initial_ddl": (
+                '"payload" OBJECT("alpha" VARCHAR, "beta" BIGINT)'
+            ),
+            "desired_columns": [
+                {
+                    "source_name": "payload",
+                    "snowflake_type": (
+                        'OBJECT("alpha" VARCHAR, "beta" BIGINT, "gamma" VARCHAR)'
+                    ),
+                    "nullable": True,
+                    "fields": [
+                        _nested_field("alpha", "VARCHAR"),
+                        _nested_field("beta", "BIGINT"),
+                        _nested_field("gamma", "VARCHAR"),
+                    ],
+                }
+            ],
+            "expect_success": True,
+            "expect_type_fragment": "GAMMA",
+            "expect_warning_substring": None,
+            "expect_altered": True,
+        },
+        {
+            "name": "nested_reorder",
+            "initial_ddl": (
+                '"payload" OBJECT("alpha" VARCHAR, "beta" BIGINT)'
+            ),
+            "desired_columns": [
+                {
+                    "source_name": "payload",
+                    "snowflake_type": (
+                        'OBJECT("beta" BIGINT, "alpha" VARCHAR)'
+                    ),
+                    "nullable": True,
+                    "fields": [
+                        _nested_field("beta", "BIGINT"),
+                        _nested_field("alpha", "VARCHAR"),
+                    ],
+                }
+            ],
+            "expect_success": True,
+            # DESCRIBE spells BIGINT as NUMBER(19,0); order proves reorder ran.
+            "expect_type_fragment": "BETA NUMBER(19,0), ALPHA VARCHAR",
+            "expect_warning_substring": None,
+            "expect_altered": True,
+        },
+        {
+            "name": "nested_widen",
+            "initial_ddl": '"payload" OBJECT("item_count" INTEGER)',
+            "desired_columns": [
+                {
+                    "source_name": "payload",
+                    "snowflake_type": 'OBJECT("item_count" BIGINT)',
+                    "nullable": True,
+                    "fields": [
+                        _nested_field("item_count", "BIGINT"),
+                    ],
+                }
+            ],
+            "expect_success": True,
+            "expect_type_fragment": "ITEM_COUNT NUMBER(19,0)",
+            "expect_warning_substring": None,
+            "expect_altered": True,
+        },
+        {
+            "name": "keep_missing_warn",
+            "initial_ddl": (
+                '"payload" OBJECT("alpha" VARCHAR, "legacy_note" VARCHAR)'
+            ),
+            "desired_columns": [
+                {
+                    "source_name": "payload",
+                    "snowflake_type": 'OBJECT("alpha" VARCHAR)',
+                    "nullable": True,
+                    "fields": [
+                        _nested_field("alpha", "VARCHAR"),
+                    ],
+                }
+            ],
+            "expect_success": True,
+            "expect_type_fragment": "LEGACY_NOTE",
+            # DESCRIBE keeps unquoted nested identifiers uppercase.
+            "expect_warning_substring": (
+                "keeping nested field payload.LEGACY_NOTE"
+            ),
+            "expect_altered": False,
+        },
+        {
+            "name": "deep_nest_add",
+            "initial_ddl": (
+                '"payload" OBJECT("outer" OBJECT("inner_a" VARCHAR))'
+            ),
+            "desired_columns": [
+                {
+                    "source_name": "payload",
+                    "snowflake_type": (
+                        'OBJECT("outer" OBJECT("inner_a" VARCHAR, "inner_b" VARCHAR))'
+                    ),
+                    "nullable": True,
+                    "fields": [
+                        {
+                            "source_name": "outer",
+                            "snowflake_type": (
+                                'OBJECT("inner_a" VARCHAR, "inner_b" VARCHAR)'
+                            ),
+                            "nullable": True,
+                            "fields": [
+                                _nested_field("inner_a", "VARCHAR"),
+                                _nested_field("inner_b", "VARCHAR"),
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "expect_success": True,
+            "expect_type_fragment": "INNER_B",
+            "expect_warning_substring": None,
+            "expect_altered": True,
+        },
+        {
+            "name": "array_object_add",
+            "initial_ddl": '"items" ARRAY(OBJECT("sku" VARCHAR))',
+            "desired_columns": [
+                {
+                    "source_name": "items",
+                    "snowflake_type": 'ARRAY(OBJECT("sku" VARCHAR, "qty" BIGINT))',
+                    "nullable": True,
+                    "fields": [
+                        _nested_field("sku", "VARCHAR"),
+                        _nested_field("qty", "BIGINT"),
+                    ],
+                }
+            ],
+            "expect_success": True,
+            "expect_type_fragment": "QTY",
+            "expect_warning_substring": None,
+            "expect_altered": True,
+        },
+        {
+            "name": "incompatible_type",
+            "initial_ddl": '"payload" OBJECT("alpha" VARCHAR)',
+            "desired_columns": [
+                {
+                    "source_name": "payload",
+                    "snowflake_type": 'OBJECT("alpha" BOOLEAN)',
+                    "nullable": True,
+                    "fields": [
+                        _nested_field("alpha", "BOOLEAN"),
+                    ],
+                }
+            ],
+            "expect_success": False,
+            "expect_type_fragment": None,
+            "expect_warning_substring": None,
+            "expect_altered": False,
+        },
+        {
+            "name": "combined_add_reorder_widen",
+            "initial_ddl": (
+                '"payload" OBJECT("alpha" INTEGER, "beta" VARCHAR)'
+            ),
+            "desired_columns": [
+                {
+                    "source_name": "payload",
+                    "snowflake_type": (
+                        'OBJECT("beta" VARCHAR, "alpha" BIGINT, "gamma" VARCHAR)'
+                    ),
+                    "nullable": True,
+                    "fields": [
+                        _nested_field("beta", "VARCHAR"),
+                        _nested_field("alpha", "BIGINT"),
+                        _nested_field("gamma", "VARCHAR"),
+                    ],
+                }
+            ],
+            "expect_success": True,
+            "expect_type_fragment": "GAMMA",
+            "expect_warning_substring": None,
+            "expect_altered": True,
+        },
+    ]
+    try:
+        _run_dbt(context, "deps")
+        _run_dbt(
+            context,
+            "run-operation",
+            "install_iceberg_sync_procedure",
+        )
+        for case in cases:
+            case_table = _quoted_relation(
+                context.snowflake_database,
+                context.snowflake_schema,
+                f"__ICEBERG_SYNC_NESTED_{case['name'].upper()}_{context.run_id.upper()}",
+            )
+            result = _run_dbt(
+                context,
+                "run-operation",
+                "run_nested_schema_evolution_case",
+                "--args",
+                json.dumps(
+                    {
+                        "procedure_relation": context.procedure_relation,
+                        "table_relation": case_table,
+                        "external_volume": context.external_volume,
+                        "base_location": f"{location_prefix}/{case['name']}",
+                        "initial_ddl": case["initial_ddl"],
+                        "desired_columns": case["desired_columns"],
+                        "expect_success": case["expect_success"],
+                        "expect_type_fragment": case["expect_type_fragment"],
+                        "expect_warning_substring": case["expect_warning_substring"],
+                        "expect_altered": case["expect_altered"],
+                    }
+                ),
+                check=False,
+            )
+            if result.returncode != 0:
+                raise AssertionError(
+                    f"nested evolution case {case['name']} failed:\n"
+                    f"{result.stdout}\n{result.stderr}"
+                )
+    finally:
+        _run_dbt(
+            context,
+            "run-operation",
+            "cleanup_nested_schema_evolution_tables",
+            "--args",
+            json.dumps(
+                {
+                    "table_relations": [
+                        _quoted_relation(
+                            context.snowflake_database,
+                            context.snowflake_schema,
+                            f"__ICEBERG_SYNC_NESTED_{case['name'].upper()}_{context.run_id.upper()}",
+                        )
+                        for case in cases
+                    ],
+                    "procedure_relation": context.procedure_relation,
+                    "run_log_relation": context.run_log_relation,
+                    "handler_stage": context.handler_stage,
+                    "drop_handler_stage": context.handler_stage_from_env is None,
+                    "parquet_file_format": context.parquet_file_format,
+                    "stage_fqn": context.s3_stage,
+                    "stage_prefix": location_prefix,
+                }
+            ),
+            check=False,
+        )
 
 
 def _s3_context(tmp_path: Path, prefix: str) -> S3IntegrationContext:
@@ -653,6 +920,123 @@ def _helper_macros() -> str:
           {% endif %}
         {% endmacro %}
 
+        {% macro run_nested_schema_evolution_case(
+          procedure_relation,
+          table_relation,
+          external_volume,
+          base_location,
+          initial_ddl,
+          desired_columns,
+          expect_success,
+          expect_type_fragment,
+          expect_warning_substring,
+          expect_altered
+        ) %}
+          {% call statement('drop_nested_case_table', auto_begin=False) %}
+            DROP ICEBERG TABLE IF EXISTS {{ table_relation }}
+          {% endcall %}
+          {% call statement('create_nested_case_table', auto_begin=False) %}
+            CREATE ICEBERG TABLE {{ table_relation }} (
+              {{ initial_ddl }}
+            )
+            EXTERNAL_VOLUME = '{{ external_volume }}'
+            CATALOG = 'SNOWFLAKE'
+            BASE_LOCATION = '{{ base_location }}'
+            ICEBERG_VERSION = 3
+          {% endcall %}
+          {% set relation_parts = table_relation.replace('"', '').split('.') %}
+          {% set action_payload = {
+            'action': 'evolve_schema',
+            'internal_relation': {
+              'database': relation_parts[0],
+              'schema': relation_parts[1],
+              'identifier': relation_parts[2]
+            },
+            'columns': desired_columns
+          } %}
+          {% set payload_literal =
+            dbt_snowflake_iceberg_sync.iceberg_sync_json_sql_literal(action_payload)
+          %}
+          {% set call_sql %}
+            CALL {{ procedure_relation }}(PARSE_JSON({{ payload_literal }}))
+          {% endset %}
+          {% set result_table = run_query(call_sql) %}
+          {% set raw = result_table.columns[0].values()[0] %}
+          {% set evolve_result = fromjson(raw) if raw is string else raw %}
+          {% if not expect_success %}
+            {% set error_message = evolve_result.get('error_message', '') | string %}
+            {% if evolve_result.get('status') == 'success' %}
+              {{ exceptions.raise_compiler_error(
+                'expected evolve_schema to reject incompatible nested type change'
+              ) }}
+            {% endif %}
+            {% if 'incompatible type change' not in error_message %}
+              {{ exceptions.raise_compiler_error(
+                'expected incompatible type change error, found ' ~ evolve_result
+              ) }}
+            {% endif %}
+            {{ return('') }}
+          {% endif %}
+          {% if evolve_result.get('status') != 'success' %}
+            {{ exceptions.raise_compiler_error(
+              'evolve_schema failed: ' ~ evolve_result
+            ) }}
+          {% endif %}
+          {% if evolve_result.get('altered_schema') != expect_altered %}
+            {{ exceptions.raise_compiler_error(
+              'expected altered_schema=' ~ expect_altered ~
+              ', found ' ~ evolve_result.get('altered_schema')
+            ) }}
+          {% endif %}
+          {% if expect_warning_substring is not none %}
+            {% set warnings = evolve_result.get('warnings', []) | join(' | ') %}
+            {% if expect_warning_substring not in warnings %}
+              {{ exceptions.raise_compiler_error(
+                'expected warning containing ' ~ expect_warning_substring ~
+                ', found ' ~ warnings
+              ) }}
+            {% endif %}
+          {% endif %}
+          {% if expect_type_fragment is not none %}
+            {% set describe = run_query('DESCRIBE TABLE ' ~ table_relation) %}
+            {% set types = describe.columns[1].values() | list %}
+            {% set joined = types | join(' || ') | upper %}
+            {% if expect_type_fragment | upper not in joined %}
+              {{ exceptions.raise_compiler_error(
+                'expected type fragment ' ~ expect_type_fragment ~
+                ' in ' ~ joined
+              ) }}
+            {% endif %}
+          {% endif %}
+        {% endmacro %}
+
+        {% macro cleanup_nested_schema_evolution_tables(
+          table_relations,
+          procedure_relation,
+          run_log_relation,
+          handler_stage,
+          drop_handler_stage,
+          parquet_file_format,
+          stage_fqn,
+          stage_prefix
+        ) %}
+          {% for table_relation in table_relations %}
+            {% call statement('drop_nested_table_' ~ loop.index, auto_begin=False) %}
+              DROP ICEBERG TABLE IF EXISTS {{ table_relation }}
+            {% endcall %}
+          {% endfor %}
+          {{ cleanup_s3_parquet_integration(
+            [],
+            procedure_relation,
+            run_log_relation,
+            handler_stage,
+            drop_handler_stage,
+            parquet_file_format,
+            stage_fqn,
+            stage_prefix
+          ) }}
+        {% endmacro %}
+
         {% macro cleanup_s3_parquet_integration(
           objects,
           procedure_relation,
@@ -694,24 +1078,48 @@ def _helper_macros() -> str:
 
 
 def _profile_yaml(*, database: str, schema: str) -> str:
-    return textwrap.dedent(
-        f"""
+    optional_lines = []
+    password = os.environ.get("SNOWFLAKE_PASSWORD") or None
+    private_key_path = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH") or None
+    authenticator = os.environ.get("SNOWFLAKE_AUTHENTICATOR") or None
+    if authenticator is None and not password and not private_key_path:
+        authenticator = "externalbrowser"
+
+    for profile_name, value in (
+        ("role", os.environ.get("SNOWFLAKE_ROLE") or None),
+        ("warehouse", os.environ.get("SNOWFLAKE_WAREHOUSE") or None),
+        ("authenticator", authenticator),
+    ):
+        if value:
+            optional_lines.append(f"      {profile_name}: {value}")
+    if password:
+        optional_lines.append(
+            "      password: \"{{ env_var('SNOWFLAKE_PASSWORD') }}\""
+        )
+    if private_key_path:
+        optional_lines.append(
+            "      private_key_path: \"{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH') }}\""
+        )
+
+    return (
+        textwrap.dedent(
+            f"""
         iceberg_sync_integration:
           target: integration
           outputs:
             integration:
               type: snowflake
-              account: "{{{{ env_var('SNOWFLAKE_ACCOUNT') }}}}"
-              user: "{{{{ env_var('SNOWFLAKE_USER') }}}}"
-              password: "{{{{ env_var('SNOWFLAKE_PASSWORD') }}}}"
-              role: "{{{{ env_var('SNOWFLAKE_ROLE') }}}}"
-              warehouse: "{{{{ env_var('SNOWFLAKE_WAREHOUSE') }}}}"
+              account: {_required_env("SNOWFLAKE_ACCOUNT")}
+              user: {_required_env("SNOWFLAKE_USER")}
               database: {database}
               schema: {schema}
               threads: 4
               client_session_keep_alive: False
         """
-    ).lstrip()
+        ).lstrip()
+        + "\n".join(optional_lines)
+        + "\n"
+    )
 
 
 def _dbt_executable() -> str:
