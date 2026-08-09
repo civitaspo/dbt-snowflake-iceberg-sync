@@ -23,12 +23,16 @@ jobs:
     if: |
       (github.event_name == 'pull_request' &&
        github.event.pull_request.merged == true &&
-       github.event.pull_request.head.ref == 'release/next') ||
+       github.event.pull_request.head.ref == 'release/next' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
       github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     timeout-minutes: 10
+    env:
+      SECUREFIX_CLIENT_APP_ID: ${{ vars.SECUREFIX_CLIENT_APP_ID }}
+      SECUREFIX_SERVER_REPOSITORY: ${{ vars.SECUREFIX_SERVER_REPOSITORY }}
 
     steps:
       - name: Resolve merge commit
@@ -74,6 +78,28 @@ jobs:
           test "$(git rev-parse HEAD)" = "$MERGE_SHA"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
+      - name: Require Securefix release configuration
+        env:
+          SECUREFIX_CLIENT_PRIVATE_KEY: ${{ secrets.SECUREFIX_CLIENT_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          missing=0
+          if [ -z "${SECUREFIX_CLIENT_APP_ID}" ]; then
+            echo "SECUREFIX_CLIENT_APP_ID is not configured." >&2
+            missing=1
+          fi
+          if [ -z "${SECUREFIX_SERVER_REPOSITORY}" ]; then
+            echo "SECUREFIX_SERVER_REPOSITORY is not configured." >&2
+            missing=1
+          fi
+          if [ -z "${SECUREFIX_CLIENT_PRIVATE_KEY}" ]; then
+            echo "SECUREFIX_CLIENT_PRIVATE_KEY is not configured." >&2
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
       - name: Create annotated tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -104,21 +130,20 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ vars.SECUREFIX_CLIENT_APP_ID }}
+          app-id: ${{ env.SECUREFIX_CLIENT_APP_ID }}
           private-key: ${{ secrets.SECUREFIX_CLIENT_PRIVATE_KEY }}
-          owner: civitaspo
-          repositories: securefix-server
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ env.SECUREFIX_SERVER_REPOSITORY }}
           permission-issues: write
 
       - name: Request server-side release
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          SERVER_REPOSITORY: ${{ vars.SECUREFIX_SERVER_REPOSITORY }}
+          SERVER_REPOSITORY: ${{ env.SECUREFIX_SERVER_REPOSITORY }}
           TAG: ${{ steps.release.outputs.tag }}
           MERGE_SHA: ${{ steps.target.outputs.merge_sha }}
         run: |
           set -euo pipefail
-          test -n "$SERVER_REPOSITORY"
           # SECUREFIX_SERVER_REPOSITORY is the repo name only (securefix-action input format).
           # Include the tagged merge commit SHA when it fits GitHub's 100-char label
           # description limit. Release Tag on pull_request.closed uses

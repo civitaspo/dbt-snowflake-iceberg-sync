@@ -5,11 +5,11 @@ This repository uses a tagpr-equivalent release flow built on CSM actions and [g
 ## Overview
 
 1. Commits land on `main` via squash-merged pull requests.
-2. The **Release PR** workflow runs git-cliff to bump the version and regenerate `CHANGELOG.md`, updates `dbt_project.yml` / `pyproject.toml`, then asks `civitaspo/securefix-server` to open or update `release/next`.
+2. The **Release PR** workflow runs git-cliff to bump the version and regenerate `CHANGELOG.md`, updates `dbt_project.yml` / `pyproject.toml`, then asks the configured Securefix server (`SECUREFIX_SERVER_REPOSITORY`) to open or update `release/next`.
 3. The **Release PR Sync** workflow updates the open `release/next` pull request title and body from `.release-version` (securefix creates the PR once and does not refresh metadata on later pushes).
 4. A human squash-merges `chore(release): vX.Y.Z`.
 5. The **Release Tag** workflow creates an annotated tag `vX.Y.Z` and requests a server-side release.
-6. The securefix-server **Release dbt Snowflake Iceberg Sync** workflow checks out the tag and publishes the GitHub Release.
+6. The Securefix server release workflow for this package checks out the tag and publishes the GitHub Release.
 
 ## Repository release protections
 
@@ -39,10 +39,10 @@ git-cliff regenerates the full changelog from git history. **Do not edit `CHANGE
 
 ## Server request format
 
-The Release Tag workflow creates a label on `civitaspo/securefix-server` whose description is:
+The Release Tag workflow creates a label on the configured Securefix server repository whose description is:
 
 ```text
-civitaspo/dbt-snowflake-iceberg-sync/<run_id>/vX.Y.Z/<merge-commit-sha>
+<owner>/<this-repo>/<run_id>/vX.Y.Z/<merge-commit-sha>
 ```
 
 If that string would exceed GitHub's 100-character label description limit, the merge commit SHA is omitted and the server resolves it from the merged `release/next` pull request.

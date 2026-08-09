@@ -32,7 +32,12 @@ jobs:
           persist-credentials: false
 
       - name: Forbid CHANGELOG edits outside release/next
-        if: github.event_name == 'pull_request' && github.head_ref != 'release/next'
+        if: |
+          github.event_name == 'pull_request' &&
+          !(
+            github.head_ref == 'release/next' &&
+            github.event.pull_request.head.repo.full_name == github.repository
+          )
         run: |
           set -euo pipefail
           base="${{ github.event.pull_request.base.sha }}"

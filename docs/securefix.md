@@ -2,11 +2,11 @@
 
 This repository uses [`csm-actions/securefix-action`](https://github.com/csm-actions/securefix-action) and related CSM actions so pull request workflows can request signed commits, approvals, and releases without holding strong credentials.
 
-The shared server repository is [`civitaspo/securefix-server`](https://github.com/civitaspo/securefix-server).
+The Securefix server repository name is configured with `SECUREFIX_SERVER_REPOSITORY` (repository name only, not `owner/repo`).
 
 ## GitHub Apps
 
-Install both apps on this repository and on `civitaspo/securefix-server`:
+Install both apps on this repository and on the configured Securefix server repository:
 
 - Client app: `issues: write` (creates request labels on the server repo)
 - Server app: `contents: write`, `actions: read`, `pull_requests: write`, and `workflows: write`
@@ -15,9 +15,12 @@ Install both apps on this repository and on `civitaspo/securefix-server`:
 
 - Variable `SECUREFIX_CLIENT_APP_ID`
 - Secret `SECUREFIX_CLIENT_PRIVATE_KEY`
-- Variable `SECUREFIX_SERVER_REPOSITORY` (value: `securefix-server` — repository name only; `securefix-action` expects this format)
+- Variable `SECUREFIX_SERVER_REPOSITORY` (server repository name only; `securefix-action` expects this format)
+- Variable `SECUREFIX_APPROVE_ACTORS` (JSON array of GitHub logins that may auto-request approval on `pull_request_target`)
+- Variable `SECUREFIX_APPROVE_COMMENT_USER` (login allowed to trigger approval with a `/approve` comment)
+- Variable `SECUREFIX_ALLOWED_COMMITTERS` (newline-separated committers accepted by the client approve action; keep in sync with the server approve workflow)
 
-Strong secrets (GPG keys, machine-user PAT, server app private key) live only in `civitaspo/securefix-server`.
+Strong secrets (GPG keys, machine-user PAT, server app private key) live only in the configured Securefix server repository. Workflows fail clearly when required client configuration is missing.
 
 ## Flows
 
@@ -27,13 +30,13 @@ The `Lint` workflow runs fixers (`pinact`, `disable-checkout-persist-credentials
 
 ### Auto-approval
 
-The `Approve Request` workflow asks the server to approve pull requests authored by `civitaspo`, `renovate[bot]`, `dependabot[bot]`, or `civitaspo-securefix-server[bot]` (and on `/approve` comments from `civitaspo`). Both the client and server actions validate that all commits are signed and that committers are in `allowed_committers` (defaults are only Renovate/Dependabot; this repository also passes `civitaspo`, `cursoragent`, and `civitaspo-securefix-server[bot]`). When client validation passes, it creates a label on `securefix-server`; the server then approves with the machine-user PAT (`civitaspo-bot`).
+The `Approve Request` workflow asks the server to approve pull requests authored by logins listed in `SECUREFIX_APPROVE_ACTORS` (and on `/approve` comments from `SECUREFIX_APPROVE_COMMENT_USER`). Both the client and server actions validate that all commits are signed and that committers are in `SECUREFIX_ALLOWED_COMMITTERS` (action defaults are only Renovate/Dependabot). When client validation passes, it creates a label on the Securefix server repository; the server then approves with the machine-user PAT.
 
 ## Dependency updates
 
 - **Version updates:** [Renovate](https://docs.renovatebot.com/) (`renovate.json5`) owns GitHub Actions and mise tooling. Non-major updates automerge when checks pass.
 - **Dependabot version updates:** Not configured. There is no `.github/dependabot.yml`.
-- **Dependabot security updates:** May remain enabled via the GitHub repository security settings. Those PRs are eligible for Approve Request because `dependabot[bot]` is listed in the workflow `if:` and in `allowed_committers`.
+- **Dependabot security updates:** May remain enabled via the GitHub repository security settings. Those PRs are eligible for Approve Request when `dependabot[bot]` is listed in `SECUREFIX_APPROVE_ACTORS` and `SECUREFIX_ALLOWED_COMMITTERS`.
 
 ### Release
 

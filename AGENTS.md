@@ -9,7 +9,10 @@
 - Do not edit `CHANGELOG.md` on feature PRs; the Release PR owns it via git-cliff.
 - Do not add organization-specific identifiers, account names, schemas, stages, or secrets.
 - Keep credential material out of dbt model config, compiled SQL, logs, and tests.
-- Strong credentials live only in `civitaspo/securefix-server`.
+- Keep Securefix deployment identities (approve actors, allowed committers, server
+  repository name) in required repository variables/secrets — not hardcoded in
+  workflows. Strong credentials live only in the configured Securefix server
+  repository.
 - Integration tests must stay opt-in and controlled by environment variables.
 - Prefer small, reviewable changes and mocked unit tests for default CI.
 
