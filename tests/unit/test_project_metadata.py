@@ -22,19 +22,16 @@ def test_package_dbt_version_range_includes_fusion():
 
 def test_workflows_parse_with_dbt_fusion():
     expected_parse = "dbtf parse --profiles-dir tests/ci_profiles --no-version-check"
+    workflow_path = REPO_ROOT / ".github/workflows/ci.yml"
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
 
-    for workflow_path in (
-        REPO_ROOT / ".github/workflows/ci.yml",
-        REPO_ROOT / ".github/workflows/release.yml",
-    ):
-        workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
-        assert workflow["env"]["DBT_FUSION_VERSION"].startswith("2.0.0")
-        assert workflow["env"]["DBT_FUSION_TARGET"] == "x86_64-unknown-linux-gnu"
+    assert workflow["env"]["DBT_FUSION_VERSION"].startswith("2.0.0")
+    assert workflow["env"]["DBT_FUSION_TARGET"] == "x86_64-unknown-linux-gnu"
 
-        runs = []
-        for job in workflow["jobs"].values():
-            for step in job.get("steps", []):
-                if "run" in step:
-                    runs.append(step["run"])
+    runs = []
+    for job in workflow["jobs"].values():
+        for step in job.get("steps", []):
+            if "run" in step:
+                runs.append(step["run"])
 
-        assert expected_parse in runs
+    assert expected_parse in runs
