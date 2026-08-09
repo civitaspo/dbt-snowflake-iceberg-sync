@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Maintenance
 
+- Bump cryptography from 48.0.0 to 50.0.0 (#54)
 - remove Integration Approval workflow (#59)
 - bump securefix-server reusables for job summary links (#60)
 - use securefix-server release workflow reusables (#57)
