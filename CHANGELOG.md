@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Maintenance
 
+- bump msgpack from 1.1.2 to 1.2.1 (#28)
 - bump pyasn1 from 0.6.3 to 0.6.4 (#53)
 - Bump cryptography from 48.0.0 to 50.0.0 (#54)
 - remove Integration Approval workflow (#59)
