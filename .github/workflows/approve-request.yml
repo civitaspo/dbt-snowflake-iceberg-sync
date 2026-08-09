@@ -19,64 +19,6 @@ concurrency:
 
 jobs:
   approve:
-    name: approve
-    if: |
-      (
-        github.event_name == 'pull_request_target' &&
-        vars.SECUREFIX_APPROVE_ACTORS != '' &&
-        contains(fromJSON(vars.SECUREFIX_APPROVE_ACTORS), github.actor)
-      ) || (
-        github.event_name == 'issue_comment' &&
-        github.event.issue.pull_request &&
-        github.event.comment.body == '/approve' &&
-        vars.SECUREFIX_APPROVE_COMMENT_USER != '' &&
-        github.event.comment.user.login == vars.SECUREFIX_APPROVE_COMMENT_USER
-      )
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    timeout-minutes: 10
-    env:
-      SECUREFIX_CLIENT_APP_ID: ${{ vars.SECUREFIX_CLIENT_APP_ID }}
-      SECUREFIX_SERVER_REPOSITORY: ${{ vars.SECUREFIX_SERVER_REPOSITORY }}
-      SECUREFIX_ALLOWED_COMMITTERS: ${{ vars.SECUREFIX_ALLOWED_COMMITTERS }}
-
-    steps:
-      - name: Require Securefix approval configuration
-        env:
-          SECUREFIX_CLIENT_PRIVATE_KEY: ${{ secrets.SECUREFIX_CLIENT_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          missing=0
-          if [ -z "${SECUREFIX_CLIENT_APP_ID}" ]; then
-            echo "SECUREFIX_CLIENT_APP_ID is not configured." >&2
-            missing=1
-          fi
-          if [ -z "${SECUREFIX_SERVER_REPOSITORY}" ]; then
-            echo "SECUREFIX_SERVER_REPOSITORY is not configured." >&2
-            missing=1
-          fi
-          if [ -z "${SECUREFIX_ALLOWED_COMMITTERS}" ]; then
-            echo "SECUREFIX_ALLOWED_COMMITTERS is not configured." >&2
-            missing=1
-          fi
-          if [ -z "${SECUREFIX_CLIENT_PRIVATE_KEY}" ]; then
-            echo "SECUREFIX_CLIENT_PRIVATE_KEY is not configured." >&2
-            missing=1
-          fi
-          if [ "$missing" -ne 0 ]; then
-            exit 1
-          fi
-
-      - name: Request pull request approval
-        uses: csm-actions/approve-pr-action@452271472f121d6d2f8e7a0761488d2fcc29b715 # v0.2.0
-        with:
-          app_id: ${{ env.SECUREFIX_CLIENT_APP_ID }}
-          app_private_key: ${{ secrets.SECUREFIX_CLIENT_PRIVATE_KEY }}
-          server_repository_name: ${{ env.SECUREFIX_SERVER_REPOSITORY }}
-          pull_request_number: ${{ github.event.pull_request.number || github.event.issue.number }}
-          # Client validates before creating the server label. Defaults are only
-          # Renovate/Dependabot; trusted committers must be supplied via
-          # SECUREFIX_ALLOWED_COMMITTERS and kept in sync with the server approve workflow.
-          allowed_committers: ${{ env.SECUREFIX_ALLOWED_COMMITTERS }}
+    uses: civitaspo/securefix-server/.github/workflows/reusable-approve-request.yml@fbfe1e36ba343b0225dfe5681791799f75b02b96
+    secrets:
+      SECUREFIX_CLIENT_PRIVATE_KEY: ${{ secrets.SECUREFIX_CLIENT_PRIVATE_KEY }}
