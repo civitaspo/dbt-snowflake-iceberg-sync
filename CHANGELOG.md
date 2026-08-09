@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Maintenance
 
+- remove Integration Approval workflow (#59)
 - bump securefix-server reusables for job summary links (#60)
 - use securefix-server release workflow reusables (#57)
 - add auto-approve and CSM release workflows (#56)
