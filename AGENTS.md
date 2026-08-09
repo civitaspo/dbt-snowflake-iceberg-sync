@@ -1,8 +1,18 @@
 # Agent Notes
 
 - Keep repository text, comments, tests, and documentation in English.
+- Use Conventional Commits for pull request titles (`feat`, `fix`, `docs`,
+  `refactor`, `test`, `ci`, `build`, `chore`, `perf`, `revert`; use `!` for
+  breaking changes).
+- Never push directly to `main`. Open a pull request and squash-merge after
+  required checks pass. Sign commits.
+- Do not edit `CHANGELOG.md` on feature PRs; the Release PR owns it via git-cliff.
 - Do not add organization-specific identifiers, account names, schemas, stages, or secrets.
 - Keep credential material out of dbt model config, compiled SQL, logs, and tests.
+- Keep Securefix deployment identities (approve actors, allowed committers, server
+  repository name) in required repository variables/secrets — not hardcoded in
+  workflows. Strong credentials live only in the configured Securefix server
+  repository.
 - Integration tests must stay opt-in and controlled by environment variables.
 - Prefer small, reviewable changes and mocked unit tests for default CI.
 
@@ -15,7 +25,10 @@ mise install --locked
 ```
 
 - Use `uv run` consistently for Python, dbt, lint, and test commands.
-- Keep `uv`, ShellCheck, ghalint, pinact, and disable-checkout-persist-credentials managed by mise.
+- Keep `uv`, ShellCheck, git-cliff, ghalint, pinact, and
+  disable-checkout-persist-credentials managed by mise.
+- Before opening a pull request, run `mise run lint` plus the verification
+  commands below.
 - Do not hide CI workflows behind mise tasks; keep the failing command visible in the GitHub Actions step.
 
 ## GitHub Actions
@@ -25,9 +38,12 @@ mise install --locked
 - Keep workflow permissions least-privilege and job names descriptive.
 - Run workflow linting with ghalint, pinact, and disable-checkout-persist-credentials.
 - Use Securefix for automated workflow security fixes when configured.
+- Approvals for trusted authors are requested through `csm-actions/approve-pr-action`.
 - Do not provide hidden defaults for required repository variables in workflows; fail clearly when required configuration is missing.
 - Keep live integration CI approval-only. Do not pass Snowflake, BigQuery, GCS,
   fixture values, or credentials through GitHub Actions secrets.
+
+See [docs/securefix.md](docs/securefix.md) and [docs/releasing.md](docs/releasing.md).
 
 ## Verification
 
