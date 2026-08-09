@@ -1,354 +1,237 @@
 # Changelog
 
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
 ## Unreleased
 
-### Fixed
+## [0.6.0] - 2026-08-09
 
-- Nested `OBJECT` / `ARRAY(OBJECT)` schema growth no longer fails as an
-  incompatible type change. Additive nested keys, nested reorders, and Iceberg
-  type widening are applied with
-  `ALTER ICEBERG TABLE ... ALTER COLUMN ... SET DATA TYPE` before
-  `ADD_FILES_COPY` (for example GCP Billing `consumption_model` gaining
-  `applied_subscription_instance_id`). Nested keys missing from the current
-  source schema are kept with a warning rather than dropped.
-
-### Added
 
-- Procedure action `evolve_schema` plans and applies top-level `ADD COLUMN` and
-  nested structured-type evolution for the dbt materialization path.
-
-## 0.5.6 - 2026-07-19
-
-### Fixed
-
-- BigQuery `TIMESTAMP` now maps to Snowflake `TIMESTAMP_NTZ(6)` instead of
-  `TIMESTAMP_LTZ(6)`. BigQuery EXTRACT to Parquet writes `TIMESTAMP` fields with
-  `isAdjustedToUTC = false`, which Snowflake's vectorized Parquet scanner /
-  Iceberg `ADD_FILES_COPY` only accepts for `TIMESTAMP_NTZ`. This fixes COPY
-  failures such as `Parquet file timestamp column has wrong UTC adjustment`
-  (for example GCP Cloud Billing `usage_start_time` / `usage_end_time` /
-  `export_time`).
-
-  **Migration note:** Recreate or full-refresh Iceberg tables that previously
-  loaded BigQuery `TIMESTAMP` as `TIMESTAMP_LTZ(6)`. Additive schema evolution
-  rejects the LTZ→NTZ type change. Downstream models that assumed session-TZ
-  `TIMESTAMP_LTZ` semantics should treat values as UTC wall-clock or use
-  `CONVERT_TIMEZONE`. The `select` + `DATETIME()` workaround remains valid but
-  is no longer required for TIMESTAMP-only UTC-adjustment failures.
-
-### Changed
+### Documentation
 
-- Documented BigQuery `TIMESTAMP` / `DATETIME` → `TIMESTAMP_NTZ(6)` Parquet UTC
-  adjustment behavior in the README schema mapping section.
+- point releasing guide at shared client-releases spec (#58)
 
-## 0.5.5 - 2026-07-18
 
-### Added
+### Features
 
-- Optional `bigquery_job_project_id` so BigQuery jobs can run in a different
-  project from `google_cloud_project_id`. Source table identity stays on the
-  source project; jobs and `select` staging tables use the job project
-  (defaulting to the source project when omitted).
+- evolve nested OBJECT schema before ADD_FILES_COPY (#55)
 
-## 0.5.4 - 2026-07-19
-
-### Fixed
 
-- S3 Parquet `LIST` under hive-style `incremental_paths` now uses a trailing
-  slash and skips files outside the requested path suffix. Listing
-  `year=YYYY/month=1` without a slash previously also returned `month=10/11/12`,
-  and those siblings were incorrectly joined onto the month=1 stage location
-  (for example `.../month=1/year=YYYY/month=12/...`).
-
-## 0.5.3 - 2026-07-18
+### Maintenance
 
-### Fixed
+- bump securefix-server reusables for job summary links (#60)
+- use securefix-server release workflow reusables (#57)
+- add auto-approve and CSM release workflows (#56)
 
-- `INFER_SCHEMA` `FILE_FORMAT` is rendered as a string literal naming the format
-  object (for example `'DB.SCHEMA.FMT'`), matching Snowflake's parameter type.
-  Deployment still stores a quoted identifier FQN for `CREATE FILE FORMAT`.
-  The 0.5.1 change that embedded the bare quoted identifier caused
-  `invalid value ... for property 'FILE_FORMAT'` when `s3_parquet` inferred
-  schema without declared `columns`.
+## [0.5.6] - 2026-07-19
 
-## 0.5.2 - 2026-07-18
-
-### Added
-
-- `s3_parquet_load_mode` (`add_files_copy` default, or `full_ingest`) so
-  non-Iceberg-compatible Parquet (for example AWS CUR `TIMESTAMP_MILLIS`) can be
-  rewritten into Iceberg-compatible files during COPY. With `full_ingest`,
-  optional `columns[].expression` values are applied in the COPY `SELECT` list
-  (Parquet fields via `$1:"ColName"`) instead of only on the target view.
-
-## 0.5.1 - 2026-07-17
-
-### Added
-
-- New `source_type: s3_parquet` loads pre-existing Iceberg-compatible Parquet
-  files from an S3-backed Snowflake stage into a Snowflake-managed Iceberg
-  table. Schema comes from `INFER_SCHEMA(KIND => 'ICEBERG')` by default, or from
-  optional shared `columns` declarations under `meta.iceberg_sync` (with view
-  `alias` / `expression` support for casts). Access uses the user-managed
-  Storage Integration on the stage; the package does not handle AWS credentials.
-  See `docs/design/s3_parquet_source.md`.
-- Shared `meta.iceberg_sync.columns` overrides source schema inference for every
-  source type (BigQuery and S3 Parquet).
-- Installer creates a named Parquet file format
-  (`vars.iceberg_sync.parquet_file_format`) used by S3 schema inference.
-- Opt-in S3 integration scenarios gated by
-  `DBT_SNOWFLAKE_ICEBERG_SYNC_S3_PARQUET_STAGE`.
 
-### Fixed
+### Bug Fixes
 
-- `INFER_SCHEMA` `FILE_FORMAT` now uses the deployment file-format identifier
-  directly instead of wrapping a quoted FQN in a string literal.
-- S3 `s3_parquet_file_pattern` filtering now drives COPY `FILES` lists instead of
-  also applying Snowflake `PATTERN`, so planning and load use one matcher.
-- Procedure-side BigQuery validation now requires
-  `google_cloud_service_account_secret_fqdn` for
-  `service_account_credentials_json`, matching dbt compile-time checks.
-- Clarified the S3 incremental validation error when default
-  `s3_parquet_incremental_paths=['']` is paired with `incremental_predicate`.
+- map BigQuery TIMESTAMP → TIMESTAMP_NTZ for Parquet extract (v0.5.6) (#52)
 
-### Changed
+## [0.5.5] - 2026-07-19
 
-- Google Cloud service-account secret deployment vars are optional at procedure
-  install time so S3-only projects can install the handler without GCP secrets.
-  BigQuery models still require the secret when
-  `google_cloud_auth_method='service_account_credentials_json'`.
-- Stage resolution and procedure destination URI checks are source-aware
-  (`gcs://` for BigQuery, `s3://` family for `s3_parquet`).
-- Re-install the Snowflake procedure after upgrading so the new S3 adapter
-  module and Parquet file format are uploaded.
 
-## 0.4.6 - 2026-07-09
+### Features
 
-### Fixed
+- separate BigQuery job project (`bigquery_job_project_id`) — v0.5.5 (#50)
 
-- Absolute-ize relative `vars.iceberg_sync.handler_local_path` values before
-  Snowflake `PUT file://...` so dbt Fusion (ADBC) and dbt Core both succeed with
-  the common `dbt_packages/.../procedure` path. Relative paths prefer
-  `DBT_PROJECT_DIR` when set, then fall back to the process working directory.
-  Absolute paths are left unchanged.
-
-## 0.4.5 - 2026-07-09
+## [0.5.4] - 2026-07-18
 
-### Fixed
 
-- Read unsupported `partition_by` and `cluster_by` model options from
-  `meta.iceberg_sync` as well as legacy top-level config, so dbt Fusion projects
-  reject non-empty values consistently instead of silently ignoring them.
+### Bug Fixes
 
-## 0.4.4 - 2026-07-05
+- avoid hive month=1 LIST prefix collision (#47)
 
-### Added
 
-- Added `google_cloud_workload_identity_federation_by_dbt_target` for
-  per-target workload identity federation settings keyed by `target.name`.
-- Added `iceberg_sync_workload_identity_federation_deployment_var` to resolve
-  workload identity federation fields with precedence:
-  top-level override vars, by-dbt-target map, `default` entry, then flat
-  `vars.iceberg_sync` keys.
-- Added clearer compiler errors that list available by-dbt-target keys when
-  workload identity federation settings are missing.
+### Maintenance
 
-### Changed
+- sync uv.lock for v0.5.4 release (#48)
 
-- Renamed `google_cloud_auth_method=service_account_key` to
-  `service_account_credentials_json`.
-- Documented by-dbt-target workload identity federation configuration and
-  resolution order in the README.
+## [0.5.3] - 2026-07-18
 
-## 0.4.0 - 2026-07-05
 
-### Added
+### Bug Fixes
 
-- Added Snowflake outbound Workload Identity Federation auth with
-  `google_cloud_auth_method=workload_identity_federation`.
-- Added deployment config for
-  `google_cloud_workload_identity_federation_secret_fqdn`,
-  `google_cloud_workload_identity_federation_audience`, and optional
-  `google_cloud_service_account_impersonation`.
-- Added top-level dbt override vars such as
-  `iceberg_sync_google_cloud_auth_method` and
-  `iceberg_sync_google_cloud_workload_identity_federation_*` for per-target
-  auth settings.
-- Added opt-in integration tests for workload identity federation auth and
-  transfer smoke coverage.
+- INFER_SCHEMA FILE_FORMAT string literal (v0.5.3) (#46)
 
-### Changed
+## [0.5.2] - 2026-07-18
 
-- Omitted the procedure `SECRETS = (...)` clause when workload identity
-  federation auth is selected.
-- Documented workload identity federation setup, integration environment
-  variables, and the writable BigQuery staging dataset used by the transfer
-  smoke test.
 
-## 0.3.3 - 2026-06-24
+### Features
 
-### Fixed
+- s3_parquet full_ingest load mode with COPY expressions (#45)
 
-- Used `ALTER ICEBERG TABLE` for additive internal Iceberg table schema changes.
+## [0.5.1] - 2026-07-17
 
-## 0.3.2 - 2026-06-18
 
-### Added
+### Maintenance
 
-- Added `bigquery_extract_skip_missing_tables` for extract exports that should
-  succeed without loading data when planned BigQuery source tables are missing.
+- prepare v0.5.1 release (#44)
 
-### Fixed
 
-- Restricted missing BigQuery extract skips to table-not-found API errors so
-  unrelated BigQuery 404 responses still fail.
+### Miscellaneous
 
-## 0.3.1 - 2026-06-18
+- Add s3_parquet source type for staged Parquet loads (#43)
 
-### Fixed
+## [0.4.6] - 2026-07-09
 
-- Normalized Snowflake `DESCRIBE TABLE` canonical structured type strings in the
-  dbt-side schema compatibility check so BigQuery `RECORD`/`STRUCT` columns,
-  including Google Analytics `event_params`, do not fail false incompatible type
-  change checks.
-- Kept Python-side structured type normalization from rewriting nested field
-  identifiers that contain `STRING` or `TEXT`.
 
-## 0.3.0 - 2026-06-17
+### Bug Fixes
 
-### Changed
+- absolute-ize relative handler_local_path for Fusion PUT (#42)
 
-- Moved Snowflake relation state checks, Iceberg table DDL, additive schema
-  changes, load transaction SQL, target view creation, BigQuery export polling,
-  and success run-log writes to the dbt materialization side.
-- Split the package-managed procedure path so dbt can start and poll BigQuery
-  exports while keeping Google API calls inside Snowflake external access.
-- Removed the dbt-side `EXECUTE IMMEDIATE 'DECLARE ...'` load retry block. The
-  materialization now issues plain `BEGIN`, `DELETE`, `COPY INTO`, and `COMMIT`
-  SQL in the dbt-controlled load path and leaves failed Snowflake load retries
-  to the dbt job/orchestrator layer.
-- Documented that uncaught Snowflake statement failures in the dbt-side path
-  cannot run Jinja-side rollback, retry, or cleanup SQL.
-- Avoided dbt-side failure cleanup that could drop an internal Iceberg table
-  when ownership cannot be proven under concurrent initial runs.
+## [0.4.5] - 2026-07-09
 
-## 0.2.3 - 2026-06-09
 
-### Added
+### Bug Fixes
 
-- Added configurable BigQuery Parquet export compression with `ZSTD` as the
-  default and support for `NONE`, `SNAPPY`, `GZIP`, and `ZSTD`.
+- read partition_by and cluster_by from meta.iceberg_sync (#40)
 
-## 0.2.2 - 2026-06-09
 
-### Changed
+### Documentation
 
-- Switched package-managed run-log table setup to `CREATE OR ALTER TABLE`
-  instead of separate create and alter statements.
-- Disabled dbt's outer transaction wrapper for the materialization procedure
-  call so run-log writes remain standalone procedure statements.
+- remove skipped v0.4.1-v0.4.3 changelog entries (#39)
 
-## 0.2.1 - 2026-06-09
 
-### Changed
+### Maintenance
 
-- Made shared run-log writes best-effort by default with retry for Snowflake
-  lock-contention failures, while keeping strict behavior available through
-  `iceberg_sync_run_log_fail_on_error`.
-- Moved run-log table setup to install-time deployment instead of each
-  materialization run.
-- Added materialization-level retry around the outer stored procedure call for
-  stable transient Snowflake error messages.
-- Hardened load transaction cleanup so rollback failures do not mask the
-  original load error.
+- prepare v0.4.5 release (#41)
 
-## 0.2.0 - 2026-06-09
+## [0.4.4] - 2026-07-05
 
-### Added
 
-- Added dbt Fusion package compatibility metadata and CI parse coverage with a
-  pinned Fusion CLI.
-- Added Fusion-backed release validation and opt-in integration test support via
-  `DBT_SNOWFLAKE_ICEBERG_SYNC_DBT_EXECUTABLE`.
+### Features
 
-### Changed
+- add workload identity federation by-dbt-target map (v0.4.1) (#36)
 
-- Read materialization options from `meta.iceberg_sync` first so package-specific
-  model configs are accepted by dbt Fusion.
-- Kept legacy top-level materialization config keys readable for existing dbt
-  Core projects.
-- Documented the Fusion-safe model config shape and absolute
-  `handler_local_path` guidance for Snowflake procedure uploads.
 
-## 0.1.4 - 2026-06-09
+### Maintenance
 
-### Added
+- prepare v0.4.4 release (#38)
+- prepare v0.4.2 release (#37)
 
-- Added configurable retry handling for retryable Snowflake load transaction
-  failures.
-- Added failed-initial-run cleanup for newly created internal Iceberg tables.
-- Persisted retry and cleanup metadata in procedure results and run logs.
+## [0.4.0] - 2026-07-05
 
-### Changed
 
-- Moved exposed target view creation into the Snowflake procedure after a
-  successful load commit.
-- Treated missing internal Iceberg tables or exposed target views as full
-  refresh runs.
-- Narrowed Snowflake retry classification to messages containing
-  `SQL execution internal error` or `incident`.
+### Features
 
-## 0.1.3 - 2026-06-08
+- add workload identity federation auth (#34)
 
-### Changed
 
-- Added first-class BigQuery `DATETIME` schema support, mapping it to Snowflake
-  `TIMESTAMP_NTZ(6)`.
-- Kept `TIME`, `GEOGRAPHY`, `JSON`, `BIGNUMERIC`, and `BIGDECIMAL`
-  unsupported.
-- Added unit and opt-in integration coverage for `DATETIME` extract behavior.
+### Miscellaneous
 
-## 0.1.2 - 2026-06-08
+- Prepare v0.4.0 release (#35)
 
-### Changed
+## [0.3.3] - 2026-06-24
 
-- Defaulted package-managed Snowflake procedure and helper objects to the active
-  dbt target database and schema unless explicitly configured.
-- Rendered procedure references as quoted Snowflake fully qualified names while
-  avoiding unsupported dbt relation types.
-- Used `CREATE OR ALTER PROCEDURE` for procedure deployment.
-- Quoted the Google Cloud service account secret fully qualified name and
-  normalized external access integration identifiers.
-- Enabled mise caching in GitHub Actions workflows to reduce repeated tool
-  downloads.
 
-## 0.1.1 - 2026-06-08
+### Miscellaneous
 
-### Changed
+- Prepare v0.3.3 release
+- Use ALTER ICEBERG TABLE for schema changes
 
-- Documented materialization option requirements by common, Iceberg table, and
-  BigQuery source option groups.
-- Normalized package-managed Snowflake object identifiers to uppercase for
-  unquoted-identifier compatibility.
-- Preserved BigQuery and Parquet source column case for
-  `MATCH_BY_COLUMN_NAME = CASE_SENSITIVE` loads.
+## [0.3.2] - 2026-06-18
 
-## 0.1.0 - 2026-06-07
 
-### Added
+### Miscellaneous
 
-- Initial `iceberg_sync` dbt materialization for loading BigQuery exports into
-  Snowflake-managed Iceberg tables.
-- Snowflake Python procedure installer and runtime for BigQuery extract and
-  query-export workflows.
-- Support for non-partitioned, partition-decorator, table-suffix, and query
-  predicate export plans.
-- Incremental `delete+copy` loading with separate source export predicates and
-  Snowflake delete predicates.
-- BigQuery staging table reuse and forced rebuild controls for query exports.
-- BigQuery-to-Snowflake schema mapping, additive schema evolution, view alias
-  generation, and run-log recording.
-- Validation guardrails for unsupported materialization settings, unsafe stage
-  locations, and credential-like model configuration.
-- Opt-in live integration test coverage, default mocked unit tests, pinned CI,
-  workflow linting, release workflow, and GitHub Sponsors funding metadata.
+- Document v0.3.2 BigQuery 404 handling
+- Prepare v0.3.2 release
+- Skip missing BigQuery extract tables
+
+## [0.3.1] - 2026-06-18
+
+
+### Miscellaneous
+
+- Prepare v0.3.1 release
+- Fix structured Snowflake type normalization
+
+## [0.3.0] - 2026-06-17
+
+
+### Miscellaneous
+
+- Prepare v0.3.0 release
+- Move Iceberg sync orchestration to dbt
+
+## [0.2.3] - 2026-06-09
+
+
+### Miscellaneous
+
+- Prepare v0.2.3 release
+- Support BigQuery Parquet export compression
+
+## [0.2.2] - 2026-06-09
+
+
+### Miscellaneous
+
+- Simplify run-log setup and avoid dbt transaction wrapper
+
+## [0.2.1] - 2026-06-09
+
+
+### Miscellaneous
+
+- Harden iceberg_sync concurrency retry
+
+## [0.2.0] - 2026-06-09
+
+
+### Miscellaneous
+
+- Prepare v0.2.0 release
+- Support dbt Fusion
+- Fix iceberg_sync main statement execution (#13)
+
+## [0.1.4] - 2026-06-08
+
+
+### Miscellaneous
+
+- Prepare v0.1.4 release
+- Add procedure retry and cleanup handling
+
+## [0.1.3] - 2026-06-08
+
+
+### Miscellaneous
+
+- Prepare v0.1.3 release
+- Support BigQuery DATETIME schema mapping
+
+## [0.1.2] - 2026-06-08
+
+
+### Miscellaneous
+
+- Prepare v0.1.2 release
+- Default deployment objects to dbt target
+
+## [0.1.1] - 2026-06-08
+
+
+### Miscellaneous
+
+- Prepare v0.1.1 release
+- Normalize Snowflake object identifiers
+- Document materialization options (#4)
+
+## [0.1.0] - 2026-06-06
+
+
+### Miscellaneous
+
+- Update changelog for v0.1.0
+- Add GitHub Sponsors funding config
+- Implement Snowflake Iceberg sync materialization
+- Initial commit
+
+
