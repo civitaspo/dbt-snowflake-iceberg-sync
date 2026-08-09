@@ -859,18 +859,6 @@ test prefixes. The tests use caller-provided BigQuery fixture tables and do not
 create or delete those fixture tables. Cleanup is best-effort and must not delete
 user-specified non-test resources.
 
-### Integration CI Approval
-
-Pull request CI includes an approval-only `Integration Approval` check. It does
-not run live integration tests and does not receive Snowflake, BigQuery, GCS, or
-fixture credentials.
-
-The check passes when the current PR head has a fresh approving review from an
-`OWNER`, `MEMBER`, or `COLLABORATOR`, excluding the PR author. New commits require
-a new approval. The check is bypassed when the PR author is a repository owner.
-Run live integration tests outside GitHub with company-managed credentials after
-that approval.
-
 ## Security Notes
 
 - No credential material belongs in dbt model config.
