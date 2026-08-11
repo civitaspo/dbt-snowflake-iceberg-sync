@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.6.2] - 2026-08-11
+
+
+### Maintenance
+
+- harden reusable workflow calls for status-check (#65)
+
 ## [0.6.1] - 2026-08-11
 
 
