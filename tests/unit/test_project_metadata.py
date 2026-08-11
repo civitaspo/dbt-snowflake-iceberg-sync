@@ -22,7 +22,7 @@ def test_package_dbt_version_range_includes_fusion():
 
 def test_workflows_parse_with_dbt_fusion():
     expected_parse = "dbtf parse --profiles-dir tests/ci_profiles --no-version-check"
-    workflow_path = REPO_ROOT / ".github/workflows/ci.yml"
+    workflow_path = REPO_ROOT / ".github/workflows/wc-fusion-parse.yml"
     workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
 
     assert workflow["env"]["DBT_FUSION_VERSION"].startswith("2.0.0")
