@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Respect model full_refresh override (#68)
 
+
+### Maintenance
+
+- bump snowflake-connector-python from 4.6.0 to 4.7.1 (#67)
+
 ## [0.6.2] - 2026-08-11
 
 
