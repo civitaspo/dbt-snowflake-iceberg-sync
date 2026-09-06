@@ -1,6 +1,6 @@
 {% materialization iceberg_sync, adapter='snowflake' %}
   {%- set payload = dbt_snowflake_iceberg_sync.iceberg_sync_collect_config(
-    sql, this, model, flags.FULL_REFRESH
+    sql, this, model, should_full_refresh()
   ) -%}
   {%- set target_relation = dbt_snowflake_iceberg_sync.iceberg_sync_relation_from_payload(
     payload['target_relation'], 'view'
