@@ -461,8 +461,9 @@ and quoted in internal table DDL and exposed view SQL.
 | `iceberg_sync_run_log_fail_on_error` | No | `false` | Fail the model when writing the shared run log table fails. The default keeps run-log writes best-effort for high-concurrency runs. |
 
 The effective mode becomes full refresh when dbt is invoked with
-`--full-refresh`, when `materialization_strategy='full_refresh'`, or when the
-internal Iceberg table or exposed target view does not yet exist.
+`--full-refresh` (unless the model sets dbt's `full_refresh=false`), when
+`materialization_strategy='full_refresh'`, or when the internal Iceberg table
+or exposed target view does not yet exist.
 
 The materialization orchestrates Snowflake work from dbt. BigQuery REST API
 calls still run through the package-managed Snowflake procedure because they
@@ -589,7 +590,7 @@ file format optional for S3 models.
 
 The effective mode is full refresh when:
 
-- dbt runs with `--full-refresh`;
+- dbt runs with `--full-refresh` and the model does not set `full_refresh=false`;
 - `materialization_strategy='full_refresh'`;
 - the internal Iceberg table or exposed target view does not exist.
 

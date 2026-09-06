@@ -68,6 +68,37 @@ def test_iceberg_sync_dbt_run_orchestrates_with_meta_iceberg_sync_config(
     assert any("create or replace view" in sql for sql in normalized_statements)
 
 
+def test_iceberg_sync_model_full_refresh_false_overrides_cli_full_refresh(
+    tmp_path: Path,
+    monkeypatch,
+):
+    run_result, executed_sql = _run_dbt_iceberg_sync_model(
+        tmp_path,
+        monkeypatch,
+        [
+            {"status": "running", "export_state": {"phase": "extract"}},
+            _successful_export_result(),
+            {
+                "status": "success",
+                "altered_schema": False,
+                "added_column_count": 0,
+                "altered_column_count": 0,
+                "warnings": [],
+            },
+        ],
+        model_config_extra="full_refresh=false",
+        internal_table_exists=True,
+        target_view_exists=True,
+        run_full_refresh=True,
+    )
+
+    assert run_result.success
+    assert any(
+        '"effective_mode": "incremental"' in call["sql"]
+        for call in executed_sql
+    )
+
+
 def test_iceberg_sync_dbt_run_surfaces_procedure_failure(
     tmp_path: Path,
     monkeypatch,
@@ -176,6 +207,8 @@ def _run_dbt_iceberg_sync_model(
     model_config_extra: str = "",
     config_style: str = "legacy",
     internal_table_exists: bool = False,
+    target_view_exists: bool = False,
+    run_full_refresh: bool = False,
 ):
     repo_root = Path(__file__).resolve().parents[2]
     project_dir = tmp_path / "project"
@@ -315,7 +348,10 @@ def _run_dbt_iceberg_sync_model(
             result = procedure_queue.pop(0)
             return response, agate.Table([[json.dumps(result)]], ["RESULT"])
         if normalized.startswith("show objects"):
-            return response, _show_objects_table(include_internal=internal_table_exists)
+            return response, _show_objects_table(
+                include_internal=internal_table_exists,
+                include_target_view=target_view_exists,
+            )
         if normalized.startswith("show terse schemas"):
             return response, agate.Table([["TEST_SCHEMA"]], ["name"])
         return response, empty_table()
@@ -329,24 +365,31 @@ def _run_dbt_iceberg_sync_model(
     )
     assert deps_result.success
 
-    run_result = runner.invoke(
-        [
-            "run",
-            "--project-dir",
-            str(project_dir),
-            "--profiles-dir",
-            str(profiles_dir),
-            "--no-version-check",
-        ]
-    )
+    run_args = [
+        "run",
+        "--project-dir",
+        str(project_dir),
+        "--profiles-dir",
+        str(profiles_dir),
+        "--no-version-check",
+    ]
+    if run_full_refresh:
+        run_args.append("--full-refresh")
+    run_result = runner.invoke(run_args)
 
     return run_result, executed_sql
 
 
-def _show_objects_table(*, include_internal: bool = False) -> agate.Table:
+def _show_objects_table(
+    *,
+    include_internal: bool = False,
+    include_target_view: bool = False,
+) -> agate.Table:
     rows = [["TEST_DATABASE", "TEST_SCHEMA", "UNRELATED", "TABLE", "N", "N"]]
     if include_internal:
         rows.append(["TEST_DATABASE", "TEST_SCHEMA", "__MODEL", "BASE TABLE", "N", "Y"])
+    if include_target_view:
+        rows.append(["TEST_DATABASE", "TEST_SCHEMA", "MODEL", "VIEW", "N", "N"])
     return agate.Table(
         rows,
         ["database_name", "schema_name", "name", "kind", "is_dynamic", "is_iceberg"],
