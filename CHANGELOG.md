@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Maintenance
 
+- update csm-actions/securefix-action action to v0.6.3 (#73)
 - update civitaspo/securefix-server action to v0.1.2 (#72)
 
 ## [0.6.3] - 2026-09-07
