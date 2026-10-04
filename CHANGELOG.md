@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-## [0.6.3] - 2026-09-06
+## [0.6.4] - 2026-10-04
+
+
+### Maintenance
+
+- update civitaspo/securefix-server action to v0.1.2 (#72)
+
+## [0.6.3] - 2026-09-07
 
 
 ### Bug Fixes
