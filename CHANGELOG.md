@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Maintenance
 
+- update jdx/mise-action action to v4.3.0 (#81)
+- update dependency jdx/mise to v2026.10.2 (#80)
 - update dependency aqua:orhun/git-cliff to v2.14.2 (#78)
 - update dependency aqua:suzuki-shunsuke/pinact to v4.1.1 (#79)
 - update actions/checkout action to v4.4.0 (#76)
