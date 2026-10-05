@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Maintenance
 
+- update dependency aqua:orhun/git-cliff to v2.14.2 (#78)
 - update dependency aqua:suzuki-shunsuke/pinact to v4.1.1 (#79)
 - update actions/checkout action to v4.4.0 (#76)
 - update csm-actions/securefix-action action to v0.6.3 (#73)
