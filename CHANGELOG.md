@@ -7,11 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-## [0.6.4] - 2026-10-04
+## [0.6.4] - 2026-10-05
 
 
 ### Maintenance
 
+- update dependency aqua:suzuki-shunsuke/pinact to v4.1.1 (#79)
 - update actions/checkout action to v4.4.0 (#76)
 - update csm-actions/securefix-action action to v0.6.3 (#73)
 - update civitaspo/securefix-server action to v0.1.2 (#72)
