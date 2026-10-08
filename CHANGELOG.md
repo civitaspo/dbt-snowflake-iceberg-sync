@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-## [0.6.3] - 2026-09-06
+## [0.6.4] - 2026-10-08
+
+
+### Bug Fixes
+
+- update dependency dbt-core to >=1.12,<1.13 (#82)
+
+
+### Maintenance
+
+- route human merge requests through Securefix (#89)
+- update dependency jdx/mise to v2026.10.4 (#90)
+- update dependency jdx/mise to v2026.10.3 (#84)
+- update dependency aqua:astral-sh/uv to v0.12.23 (#77)
+- update jdx/mise-action action to v4.3.0 (#81)
+- update dependency jdx/mise to v2026.10.2 (#80)
+- update dependency aqua:orhun/git-cliff to v2.14.2 (#78)
+- update dependency aqua:suzuki-shunsuke/pinact to v4.1.1 (#79)
+- update actions/checkout action to v4.4.0 (#76)
+- update csm-actions/securefix-action action to v0.6.3 (#73)
+- update civitaspo/securefix-server action to v0.1.2 (#72)
+
+## [0.6.3] - 2026-09-07
 
 
 ### Bug Fixes
