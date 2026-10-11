@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-## [0.6.4] - 2026-10-08
+## [0.6.4] - 2026-10-11
 
 
 ### Bug Fixes
@@ -17,6 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Maintenance
 
+- update Securefix caller workflows to v0.2.8 (#106)
+- update dependency aqua:astral-sh/uv to v0.13.0 (#92)
+- update dependency jdx/mise to v2026.10.7 (#93)
+- update Securefix caller workflows to v0.2.7 (#105)
+- update Securefix caller workflows to v0.2.6 (#104)
+- update Securefix caller workflows (#103)
+- update Securefix caller workflows (#102)
+- update Securefix caller workflows (#101)
+- update Securefix caller workflows (#100)
+- update Securefix caller workflows (#99)
+- update Securefix caller workflows (#98)
+- update Securefix caller workflows (#95)
 - route human merge requests through Securefix (#89)
 - update dependency jdx/mise to v2026.10.4 (#90)
 - update dependency jdx/mise to v2026.10.3 (#84)
@@ -29,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - update csm-actions/securefix-action action to v0.6.3 (#73)
 - update civitaspo/securefix-server action to v0.1.2 (#72)
 
-## [0.6.3] - 2026-09-07
+## [0.6.3] - 2026-09-06
 
 
 ### Bug Fixes
