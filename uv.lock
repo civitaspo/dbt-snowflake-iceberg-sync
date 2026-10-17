@@ -468,7 +468,7 @@ wheels = [
 
 [[package]]
 name = "dbt-snowflake"
-version = "1.10.7"
+version = "1.12.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agate" },
@@ -476,11 +476,12 @@ dependencies = [
     { name = "dbt-adapters" },
     { name = "dbt-common" },
     { name = "dbt-core" },
+    { name = "pyopenssl" },
     { name = "snowflake-connector-python", extra = ["secure-local-storage"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b2/94/f7a11547cbed06a03e96140695afe8bf6050b4b9de93eac3fe07627591a3/dbt_snowflake-1.10.7.tar.gz", hash = "sha256:a2f93308f49dd970e69d125a94d331c568f2333c3a288df35ecb13976339cf86", size = 120895, upload-time = "2026-01-09T18:11:05.791Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f6/33/d88be399549a0504150de9dfa18eebdbe2049095211476dc81f9ea6347ea/dbt_snowflake-1.12.3.tar.gz", hash = "sha256:f13a4e7a43bf7279805a9c4280c4ae0573b91e7d3ec1fd031a5c51cb7430df4a", size = 208024, upload-time = "2026-10-14T06:24:55.674Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/26/d8/9b4020c0655c0adb13257139ada8641cdd1b24e2437b7034701bc511b52c/dbt_snowflake-1.10.7-py3-none-any.whl", hash = "sha256:8db98340273d9f5ac6b87903cbf6a2dce8370424cd71e453b51310300e5b1a2c", size = 71457, upload-time = "2026-01-09T18:11:04.441Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/a4/dbd5dd04aa51a87e0a5524b72b58ebdccf5af8a5e0311cbb17dbdf1a6014/dbt_snowflake-1.12.3-py3-none-any.whl", hash = "sha256:865fcdf102b28c0b144096e94b307035556b20484671f719488607acf284f97d", size = 101446, upload-time = "2026-10-14T06:24:53.874Z" },
 ]
 
 [[package]]
@@ -516,7 +517,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "dbt-core", marker = "extra == 'integration'", specifier = ">=1.12,<1.13" },
-    { name = "dbt-snowflake", marker = "extra == 'integration'", specifier = ">=1.10,<1.11" },
+    { name = "dbt-snowflake", marker = "extra == 'integration'", specifier = ">=1.12,<1.13" },
     { name = "google-auth", marker = "extra == 'dev'", specifier = ">=2.29" },
     { name = "google-auth", marker = "extra == 'integration'", specifier = ">=2.29" },
     { name = "packaging", marker = "extra == 'dev'", specifier = ">=24" },
@@ -529,7 +530,7 @@ provides-extras = ["dev", "integration"]
 [package.metadata.requires-dev]
 dev = [
     { name = "dbt-core", specifier = ">=1.12,<1.13" },
-    { name = "dbt-snowflake", specifier = ">=1.10,<1.11" },
+    { name = "dbt-snowflake", specifier = ">=1.12,<1.13" },
     { name = "google-auth", specifier = ">=2.29" },
     { name = "packaging", specifier = ">=24" },
     { name = "pytest", specifier = ">=8" },
