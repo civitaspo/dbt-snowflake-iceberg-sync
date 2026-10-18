@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+- request merges through Securefix comments (#126)
 - update dependency dbt-core to >=1.12,<1.13 (#82)
 
 
