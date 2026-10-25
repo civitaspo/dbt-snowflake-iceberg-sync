@@ -9,10 +9,9 @@
 - Do not edit `CHANGELOG.md` on feature PRs; the Release PR owns it via git-cliff.
 - Do not add organization-specific identifiers, account names, schemas, stages, or secrets.
 - Keep credential material out of dbt model config, compiled SQL, logs, and tests.
-- Keep Securefix deployment identities (approve actors, allowed committers, server
-  repository name) in required repository variables/secrets — not hardcoded in
-  workflows. Strong credentials live only in the configured Securefix server
-  repository.
+- Keep deployment identities in required repository variables and secrets.
+  Server and Approver App keys live only in the server repository's `csm-ci`
+  environment; this client holds only the Client App key.
 - Integration tests must stay opt-in and controlled by environment variables.
 - Prefer small, reviewable changes and mocked unit tests for default CI.
 
@@ -37,8 +36,9 @@ mise install --locked
 - Use `persist-credentials: false` with `actions/checkout` unless a workflow explicitly needs push credentials.
 - Keep workflow permissions least-privilege and job names descriptive.
 - Run workflow linting with ghalint, pinact, and disable-checkout-persist-credentials.
-- Use Securefix for automated workflow security fixes when configured.
-- Approvals for trusted authors are requested through `csm-actions/approve-pr-action`.
+- Use `actions/client/securefix` for automated workflow security fixes.
+- Use the managed csm-ci callers for approval, policy checks, and merge requests.
+  Read [docs/securefix.md](docs/securefix.md) before changing these flows.
 - Do not provide hidden defaults for required repository variables in workflows; fail clearly when required configuration is missing.
 - Do not pass Snowflake, BigQuery, GCS, fixture values, or credentials through
   GitHub Actions secrets.

@@ -20,12 +20,12 @@
   },
   "packageRules": [
     {
-      "description": "Automerge securefix-server reusable workflow pin bumps",
+      "description": "Automerge csm-ci-actions workflow and action pin bumps",
       "matchManagers": [
         "github-actions"
       ],
       "matchPackagePatterns": [
-        "^civitaspo/securefix-server"
+        "^civitaspo/csm-ci-actions"
       ],
       "automerge": true
     },
