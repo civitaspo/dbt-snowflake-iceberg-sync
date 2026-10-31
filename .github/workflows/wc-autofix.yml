@@ -67,7 +67,7 @@ jobs:
         run: ghalint run
 
       - name: Request workflow security fixes
-        uses: civitaspo/csm-ci-actions/actions/client/securefix@85d8fc79ef0ca89ec4cc073d142dab75ebe09a66
+        uses: civitaspo/csm-ci-actions/actions/client/securefix@4eec63156502010e1d11aa0e5b7ff31a64788d3e # v0.6.0
         with:
           client-id: ${{ vars.CSM_CI_CLIENT_APP_CLIENT_ID }}
           private-key: ${{ secrets.CSM_CI_CLIENT_APP_PRIVATE_KEY }}
