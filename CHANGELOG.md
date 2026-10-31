@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.6.5] - 2026-10-31
+
+
+### Bug Fixes
+
+- accept trusted Renovate merge requests
+
+
+### Maintenance
+
+- update securefix action to v0.6.0 (#149)
+- update csm-ci-actions to v0.6.0 (#148)
+- sync managed files (#145)
+- sync managed files
+- sync managed files
+
 ## [0.6.4] - 2026-10-25
 
 
@@ -66,6 +82,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - update actions/checkout action to v4.4.0 (#76)
 - update csm-actions/securefix-action action to v0.6.3 (#73)
 - update civitaspo/securefix-server action to v0.1.2 (#72)
+
+
+### Miscellaneous
+
+- chore(release): v0.6.4
 
 ## [0.6.3] - 2026-09-07
 
