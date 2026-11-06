@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.6.7] - 2026-11-06
+
+
+### Bug Fixes
+
+- update dependency dbt-snowflake to >=1.12,<1.13 (#83)
+
+
+### Maintenance
+
+- update jdx/mise-action action to v5.2.7 (#159)
+- update dependency jdx/mise to v2026.11.3 (#158)
+- update dependency jdx/mise to v2026.11.2 (#124)
+- update jdx/mise-action action to v5 (#88)
+- update amannn/action-semantic-pull-request action to v6.1.2 (#157)
+- update actions/checkout action to v7 (#85)
+- support dbt-snowflake 1.12 function listing (#156)
+- update dependency aqua:astral-sh/uv to v0.13.7 (#131)
+- migrate Renovate config (#74)
+- update actions/setup-python action to v7 (#86)
+- update dependency aqua:suzuki-shunsuke/pinact to v5 (#87)
+- lock file maintenance (#134)
+- sync managed files (#147)
+
 ## [0.6.6] - 2026-11-06
 
 
