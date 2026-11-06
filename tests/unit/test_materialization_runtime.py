@@ -352,6 +352,10 @@ def _run_dbt_iceberg_sync_model(
                 include_internal=internal_table_exists,
                 include_target_view=target_view_exists,
             )
+        if normalized.startswith("show user functions"):
+            return response, agate.Table(
+                [], ["catalog_name", "schema_name", "name", "is_builtin"]
+            )
         if normalized.startswith("show terse schemas"):
             return response, agate.Table([["TEST_SCHEMA"]], ["name"])
         return response, empty_table()
