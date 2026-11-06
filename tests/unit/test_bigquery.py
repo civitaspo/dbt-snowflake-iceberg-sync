@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -1111,6 +1112,78 @@ def test_rest_client_accepts_injected_google_credentials():
 
     assert client.credentials is credentials
     assert client.requests is requests_session
+
+
+def test_rest_client_retries_rate_limited_job_insert(monkeypatch):
+    credentials = SimpleNamespace(valid=True, token="token", refresh=lambda request: None)
+    limited = Mock(status_code=403, text='{"error":{"errors":[{"reason":"rateLimitExceeded"}]}}')
+    limited.json.return_value = json.loads(limited.text)
+    success = Mock(status_code=200, text='{"jobReference":{"jobId":"job"}}')
+    success.json.return_value = json.loads(success.text)
+    session = Mock()
+    session.request.side_effect = [limited, limited, success]
+    sleep = Mock()
+    monkeypatch.setattr("procedure.sources.bigquery.time.sleep", sleep)
+    monkeypatch.setattr("procedure.sources.bigquery.random.uniform", lambda a, b: 0.5)
+
+    result = BigQueryRestClient(credentials, session).insert_extract_job(
+        "project",
+        location="US",
+        source_table={},
+        destination_uris=["gs://bucket/*"],
+        compression="SNAPPY",
+    )
+
+    assert result["jobReference"]["jobId"] == "job"
+    assert session.request.call_count == 3
+    assert sleep.call_args_list == [((1.5,),), ((2.5,),)]
+    assert session.request.call_args_list[0] == session.request.call_args_list[1]
+
+
+@pytest.mark.parametrize("reason", ["accessDenied", "quotaExceeded", None])
+def test_rest_client_does_not_retry_other_errors(monkeypatch, reason):
+    credentials = SimpleNamespace(valid=True, token="token", refresh=lambda request: None)
+    response = Mock(status_code=403, text="error")
+    response.json.return_value = {"error": {"errors": [{"reason": reason}]}}
+    session = Mock()
+    session.request.return_value = response
+    sleep = Mock()
+    monkeypatch.setattr("procedure.sources.bigquery.time.sleep", sleep)
+
+    with pytest.raises(SourceError, match="BigQuery API error 403"):
+        BigQueryRestClient(credentials, session).get_table("project", "dataset", "table")
+    assert session.request.call_count == 1
+    sleep.assert_not_called()
+
+
+def test_rest_client_stops_retrying_rate_limits(monkeypatch):
+    credentials = SimpleNamespace(valid=True, token="token", refresh=lambda request: None)
+    response = Mock(status_code=403, text="rate limited")
+    response.json.return_value = {"error": {"errors": [{"reason": "rateLimitExceeded"}]}}
+    session = Mock()
+    session.request.return_value = response
+    sleep = Mock()
+    monkeypatch.setattr("procedure.sources.bigquery.time.sleep", sleep)
+
+    with pytest.raises(SourceError, match="BigQuery API error 403: rate limited"):
+        BigQueryRestClient(credentials, session).get_table("project", "dataset", "table")
+    assert session.request.call_count == 5
+    assert sleep.call_count == 4
+
+
+def test_rest_client_does_not_retry_malformed_error(monkeypatch):
+    credentials = SimpleNamespace(valid=True, token="token", refresh=lambda request: None)
+    response = Mock(status_code=403, text="not json")
+    response.json.side_effect = ValueError("invalid JSON")
+    session = Mock()
+    session.request.return_value = response
+    sleep = Mock()
+    monkeypatch.setattr("procedure.sources.bigquery.time.sleep", sleep)
+
+    with pytest.raises(SourceError, match="BigQuery API error 403: not json"):
+        BigQueryRestClient(credentials, session).get_table("project", "dataset", "table")
+    assert session.request.call_count == 1
+    sleep.assert_not_called()
 
 
 def test_extract_export_raises_when_no_tables_match(payload_factory):

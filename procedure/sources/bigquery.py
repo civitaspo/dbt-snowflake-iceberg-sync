@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -746,18 +747,32 @@ class BigQueryRestClient:
         headers["Accept"] = "application/json"
         if "json" in kwargs:
             headers["Content-Type"] = "application/json"
-        response = self.requests.request(
-            method,
-            "https://bigquery.googleapis.com/bigquery/v2" + path,
-            headers=headers,
-            **kwargs,
-        )
+        for attempt in range(5):
+            response = self.requests.request(
+                method,
+                "https://bigquery.googleapis.com/bigquery/v2" + path,
+                headers=headers,
+                **kwargs,
+            )
+            if attempt == 4 or not _is_rate_limited(response):
+                break
+            time.sleep(2**attempt + random.uniform(0, 1))
         if response.status_code >= 400:
             raise SourceError(
                 f"BigQuery API error {response.status_code}: {response.text}",
                 status_code=response.status_code,
             )
         return response.json() if response.text else {}
+
+
+def _is_rate_limited(response: Any) -> bool:
+    if response.status_code != 403:
+        return False
+    try:
+        errors = response.json().get("error", {}).get("errors", [])
+        return any(error.get("reason") == "rateLimitExceeded" for error in errors)
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 
 def _coerce_google_credentials(credentials: Any) -> Any:

@@ -633,6 +633,10 @@ long-running Snowflake Scripting block.
 The BigQuery export wait is controlled by dbt through `start_export` and
 `poll_export` procedure actions. These actions keep Google API calls inside
 Snowflake external access, while dbt controls the poll cadence.
+BigQuery API requests rejected with `403 rateLimitExceeded` are retried up to
+four times with exponential backoff and random jitter. Other errors are raised
+without an automatic retry; in particular, an ambiguous job submission is not
+resubmitted automatically.
 
 The dbt materialization creates or replaces the exposed dbt view after a
 successful load commit. Because dbt/Jinja cannot catch failed Snowflake
