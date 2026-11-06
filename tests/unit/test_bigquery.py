@@ -1164,11 +1164,15 @@ def test_rest_client_stops_retrying_rate_limits(monkeypatch):
     session.request.return_value = response
     sleep = Mock()
     monkeypatch.setattr("procedure.sources.bigquery.time.sleep", sleep)
+    monkeypatch.setattr("procedure.sources.bigquery.random.uniform", lambda a, b: 0.5)
 
     with pytest.raises(SourceError, match="BigQuery API error 403: rate limited"):
         BigQueryRestClient(credentials, session).get_table("project", "dataset", "table")
-    assert session.request.call_count == 5
-    assert sleep.call_count == 4
+    assert session.request.call_count == 101
+    delays = [call.args[0] for call in sleep.call_args_list]
+    assert delays[:4] == [1.5, 2.5, 4.5, 5.5]
+    assert delays[4:] == [5.5] * 96
+    assert sum(delays) == 542
 
 
 def test_rest_client_refreshes_expired_credentials_before_retry(monkeypatch):

@@ -744,7 +744,7 @@ class BigQueryRestClient:
         headers["Accept"] = "application/json"
         if "json" in kwargs:
             headers["Content-Type"] = "application/json"
-        for attempt in range(5):
+        for attempt in range(101):
             if not self.credentials.valid:
                 self.credentials.refresh(self.auth_request)
             headers["Authorization"] = f"Bearer {self.credentials.token}"
@@ -754,9 +754,9 @@ class BigQueryRestClient:
                 headers=headers,
                 **kwargs,
             )
-            if attempt == 4 or not _is_rate_limited(response):
+            if attempt == 100 or not _is_rate_limited(response):
                 break
-            time.sleep(2**attempt + random.uniform(0, 1))
+            time.sleep(min(2**attempt, 5) + random.uniform(0, 1))
         if response.status_code >= 400:
             raise SourceError(
                 f"BigQuery API error {response.status_code}: {response.text}",
