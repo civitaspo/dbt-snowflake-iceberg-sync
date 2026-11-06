@@ -740,14 +740,14 @@ class BigQueryRestClient:
             time.sleep(2)
 
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        if not self.credentials.valid:
-            self.credentials.refresh(self.auth_request)
         headers = kwargs.pop("headers", {})
-        headers["Authorization"] = f"Bearer {self.credentials.token}"
         headers["Accept"] = "application/json"
         if "json" in kwargs:
             headers["Content-Type"] = "application/json"
         for attempt in range(5):
+            if not self.credentials.valid:
+                self.credentials.refresh(self.auth_request)
+            headers["Authorization"] = f"Bearer {self.credentials.token}"
             response = self.requests.request(
                 method,
                 "https://bigquery.googleapis.com/bigquery/v2" + path,
@@ -769,7 +769,8 @@ def _is_rate_limited(response: Any) -> bool:
     if response.status_code != 403:
         return False
     try:
-        errors = response.json().get("error", {}).get("errors", [])
+        payload = response.json()
+        errors = payload.get("error", payload).get("errors", [])
         return any(error.get("reason") == "rateLimitExceeded" for error in errors)
     except (ValueError, AttributeError, TypeError):
         return False
