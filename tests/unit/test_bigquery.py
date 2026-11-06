@@ -1171,6 +1171,36 @@ def test_rest_client_stops_retrying_rate_limits(monkeypatch):
     assert sleep.call_count == 4
 
 
+def test_rest_client_refreshes_expired_credentials_before_retry(monkeypatch):
+    credentials = SimpleNamespace(valid=True, token="old")
+
+    def refresh(request):
+        credentials.valid = True
+        credentials.token = "new"
+
+    credentials.refresh = Mock(side_effect=refresh)
+    limited = Mock(status_code=403, text="rate limited")
+    limited.json.return_value = {"errors": [{"reason": "rateLimitExceeded"}]}
+    success = Mock(status_code=200, text="{}")
+    success.json.return_value = {}
+    session = Mock()
+    tokens = []
+
+    def request(method, url, headers, **kwargs):
+        tokens.append(headers["Authorization"])
+        return limited if len(tokens) == 1 else success
+
+    session.request.side_effect = request
+    monkeypatch.setattr(
+        "procedure.sources.bigquery.time.sleep", lambda delay: setattr(credentials, "valid", False)
+    )
+
+    BigQueryRestClient(credentials, session).get_table("project", "dataset", "table")
+
+    assert tokens == ["Bearer old", "Bearer new"]
+    credentials.refresh.assert_called_once()
+
+
 def test_rest_client_does_not_retry_malformed_error(monkeypatch):
     credentials = SimpleNamespace(valid=True, token="token", refresh=lambda request: None)
     response = Mock(status_code=403, text="not json")
