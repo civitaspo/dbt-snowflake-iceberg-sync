@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-## [0.6.7] - 2026-11-06
+## [0.6.8] - 2026-11-14
+
+
+### Maintenance
+
+- update dependency jdx/mise to v2026.11.8 (#170)
+- update dependency aqua:astral-sh/uv to v0.13.8 (#168)
+- update jdx/mise-action action to v5.2.8 (#169)
+- update dependency jdx/mise to v2026.11.7 (#167)
+- update dependency jdx/mise to v2026.11.6 (#166)
+- update civitaspo/csm-ci-actions action to v0.7.0 (#164)
+- update dependency jdx/mise to v2026.11.5 (#163)
+- lock file maintenance (#162)
+- update dependency jdx/mise to v2026.11.4 (#160)
+
+## [0.6.7] - 2026-11-07
 
 
 ### Bug Fixes
