@@ -12,7 +12,7 @@ workflows:
     '.github/workflows/push.yml': []
     '.github/workflows/wc-autofix.yml':
         - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
-        - 'civitaspo/csm-ci-actions@ade91284ea6a0f95aec6186588541cfbc5704482'
+        - 'civitaspo/csm-ci-actions@e0791d2e097fccb8e2fa58bb35ec305e336cc3c5'
         - 'jdx/mise-action@924e7c586e33d7d4bae9c14e26c5d22e2beb6e78'
     '.github/workflows/wc-fusion-parse.yml':
         - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
@@ -53,9 +53,9 @@ dependencies:
         commit: 'sha1-c5e23b7e584519ee15caa684cf60d056aa9f035f'
         owner_id: 4038316
         repo_id: 220418983
-    'civitaspo/csm-ci-actions@ade91284ea6a0f95aec6186588541cfbc5704482':
-        ref: 'v0.9.0'
-        commit: 'sha1-ade91284ea6a0f95aec6186588541cfbc5704482'
+    'civitaspo/csm-ci-actions@e0791d2e097fccb8e2fa58bb35ec305e336cc3c5':
+        ref: 'v0.10.0'
+        commit: 'sha1-e0791d2e097fccb8e2fa58bb35ec305e336cc3c5'
         owner_id: 4525500
         repo_id: 1432388303
         uses:
