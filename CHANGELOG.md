@@ -7,7 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-## [0.6.7] - 2026-11-06
+## [0.6.8] - 2026-11-25
+
+
+### Maintenance
+
+- update civitaspo/csm-ci-actions action to v0.11.0 (#191)
+- sync managed files (#190)
+- update dependency aqua:astral-sh/uv to v0.13.10 (#189)
+- update amannn/action-semantic-pull-request action to v6.1.4 (#188)
+- update dependency jdx/mise to v2026.11.14 (#187)
+- sync managed files (#186)
+- update dependency jdx/mise to v2026.11.13 (#185)
+- update civitaspo/csm-ci-actions action to v0.10.0 (#184)
+- update jdx/mise-action action to v5.3.0 (#183)
+- update dependency jdx/mise to v2026.11.12 (#182)
+- update amannn/action-semantic-pull-request action to v6.1.3 (#180)
+- update dependency jdx/mise to v2026.11.11 (#181)
+- update jdx/mise-action action to v5.2.10 (#179)
+- update dependency jdx/mise to v2026.11.10 (#178)
+- update dependency aqua:astral-sh/uv to v0.13.9 (#177)
+- update dependency jdx/mise to v2026.11.9 (#175)
+- update jdx/mise-action action to v5.2.9 (#173)
+- lock file maintenance (#174)
+- update civitaspo/csm-ci-actions action to v0.9.0 (#172)
+- sync managed files (#165)
+- update civitaspo/csm-ci-actions action to v0.8.0 (#171)
+- update dependency jdx/mise to v2026.11.8 (#170)
+- update dependency aqua:astral-sh/uv to v0.13.8 (#168)
+- update jdx/mise-action action to v5.2.8 (#169)
+- update dependency jdx/mise to v2026.11.7 (#167)
+- update dependency jdx/mise to v2026.11.6 (#166)
+- update civitaspo/csm-ci-actions action to v0.7.0 (#164)
+- update dependency jdx/mise to v2026.11.5 (#163)
+- lock file maintenance (#162)
+- update dependency jdx/mise to v2026.11.4 (#160)
+
+## [0.6.7] - 2026-11-07
 
 
 ### Bug Fixes
